@@ -1,0 +1,53 @@
+# Verification & Validation Plan (VVP)
+
+**Document ID:** VVP-GSGS-001  
+**Project:** `gosmart-dicom-py-graph-server`  
+**Regulatory Standard Alignment:** IEC 62304 Clause 5.5 – 5.7, FDA 21 CFR 820.30(f)(g), FDA Software Validation Guidance  
+
+---
+
+## 1. Scope & Strategy
+
+This document defines the software verification and validation activities for the **GoSmart DICOM Graph Server & VNA (`gosmart-dicom-py-graph-server`)**.
+
+The verification strategy encompasses:
+1. **Unit Verification**: Automated testing of isolated modules (Pydantic models, DICOM parsing, structlog formatting, Neo4j query builders).
+2. **Subsystem Integration Verification**: Testing interactions between subsystems (Pykka actor messaging, Neo4j schema constraint creation, MCP tool execution).
+3. **System Verification**: End-to-end testing of DIMSE transactions (C-STORE, C-FIND, C-GET, C-MOVE, C-ECHO), REST APIs, CLI commands, and log rotation schedules.
+4. **Resilience & Degradation Verification**: Verifying that the system gracefully handles Neo4j offline conditions without crashing.
+
+---
+
+## 2. Test Execution Environment & Tooling
+
+- **Test Framework**: `pytest` 9.1.1 with `anyio` plugin for asynchronous test coroutines.
+- **Python Runtime**: Python 3.14.5.
+- **Package & Environment Manager**: Astral `uv` 0.9.x.
+- **HTTP Client**: `httpx` and `fastapi.testclient.TestClient`.
+- **DICOM Testing Engine**: `pydicom` 3.0.2 and `pynetdicom` 3.0.4.
+
+---
+
+## 3. Verification Protocol Matrix
+
+| Test Case ID | Test Category | Target Subsystem / Requirement | Verification Procedure & Acceptance Criteria | Automated Test Reference |
+| :--- | :--- | :--- | :--- | :--- |
+| **TC-DCM-001** | Unit | `DicomService` / `REQ-FUN-003`, `019` | Synthesize mock DICOM dataset using `create_mock_dicom()`. Verify that mandatory Type 1 tags (PatientID, StudyInstanceUID, SeriesInstanceUID, SOPInstanceUID) are populated and parse into `DicomHierarchy`. | `tests/test_api.py::test_dicom_parsing` |
+| **TC-ACT-001** | Integration | `DicomIngestionActor` / `REQ-FUN-008` | Start `DicomIngestionActor`. Dispatch synchronous `PING` message via `ask()`. Verify actor responds with status `PONG` and processed count 0. | `tests/test_actor.py::test_actor_lifecycle_and_messaging` |
+| **TC-ACT-002** | Integration | `DicomIngestionActor` / `REQ-FUN-008` | Send unknown message type to `DicomIngestionActor`. Verify actor catches error, remains alive, and returns error dictionary. Stop actor and verify termination. | `tests/test_actor.py::test_actor_lifecycle_and_messaging` |
+| **TC-API-001** | System | Root Endpoint / `REQ-FUN-009`, `018` | Send HTTP GET to `/`. Verify HTTP 200 response containing `version`, `storage_root`, and `db_connection` matching `GOSMART_GS_*` settings. | `tests/test_api.py::test_root_endpoint` |
+| **TC-API-002** | System | Health Endpoint / `REQ-FUN-020` | Send HTTP GET to `/api/v1/health`. Verify HTTP 200 response with overall status `HEALTHY` or `DEGRADED`, and individual service status for `neo4j` and `pykka_actor`. | `tests/test_api.py::test_health_endpoint` |
+| **TC-LOG-001** | Unit | `structlog` Logging / `REQ-FUN-014`, `016` | Initialize logging with `setup_logging()`. Bind contextvars (`request_id`, `session_user`). Emit log with nested JSON dictionary. Verify log file contains parseable JSON line with all attributes. | `tests/test_logging.py::test_structlog_json_values_and_context` |
+| **TC-LOG-002** | System | Log Auto-Rotation / `REQ-FUN-015` | Configure `TimedRotatingFileHandler` with `LOG_ROTATION_DAYS=7` and `LOG_BACKUP_COUNT=8`. Verify handler properties: `when="D"`, interval equals 7 days, and backup count equals 8. | `tests/test_logging.py::test_logging_setup_and_7_day_rotation` |
+| **TC-MCP-001** | System | MCP Tool Discovery / `REQ-FUN-011`, `012` | Call `mcp.list_tools()`. Verify that all 7 required tools (`health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `execute_cypher`, `echo_scu`) are registered. | `tests/test_mcp.py::test_mcp_list_tools` |
+| **TC-MCP-002** | System | MCP Mock Tool Execution / `REQ-FUN-011` | Invoke `mcp.call_tool("generate_mock_dicom", ...)`. Verify that tool executes, saves DICOM file, returns `CallToolResult` with `is_error=False`, and handles offline Neo4j gracefully. | `tests/test_mcp.py::test_mcp_generate_mock_tool` |
+| **TC-CLI-001** | System | Headless CLI / `REQ-FUN-013` | Invoke `uv run gosmart-gs --help` and `uv run gosmart-gs health`. Verify zero exit code and formatted status table output. | Manual & CI execution. |
+
+---
+
+## 4. Acceptance & Release Criteria
+
+A software build is eligible for clearance and release only when:
+1. **100% Test Pass Rate**: All automated test cases in the test suite pass with zero errors.
+2. **Zero Unmitigated Critical Hazards**: All hazards identified in `gsgs_020_hazard_analysis_risk_management.md` have verified design controls.
+3. **100% Traceability**: Every requirement in `gsgs_000_software_requirements_spec.md` traces to a verified test case in `gsgs_040_traceability_matrix.md`.
