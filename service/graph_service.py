@@ -1,5 +1,6 @@
 import logging
 from typing import Any, Dict, List, Optional
+
 from db.neo4j import Neo4jClient, neo4j_client
 from model.dicom import DicomHierarchy
 
@@ -109,7 +110,11 @@ class GraphService:
             return records[0]
         return {}
 
-    async def execute_custom_query(self, query: str, parameters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    async def execute_custom_query(
+        self,
+        query: str,
+        parameters: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
         """Execute an arbitrary read or write Cypher query."""
         return await self.client.execute_query(query, parameters or {})
 

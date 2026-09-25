@@ -1,4 +1,3 @@
-import pytest
 from actor.dicom_actor import DicomIngestionActor
 
 

@@ -1,11 +1,13 @@
 import logging
+import sys
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-import sys
-from typing import Any, Dict, Optional
+from typing import Any, Optional
+
 import structlog
 from structlog.contextvars import bind_contextvars, clear_contextvars, merge_contextvars, unbind_contextvars
 from structlog.stdlib import BoundLogger, LoggerFactory, ProcessorFormatter
+
 from core.config import Settings, get_settings
 
 
@@ -67,7 +69,6 @@ def setup_logging(settings: Optional[Settings] = None) -> None:
             ],
         )
     console_handler.setFormatter(console_formatter)
-
 
     handlers = [console_handler]
 

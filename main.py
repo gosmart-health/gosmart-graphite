@@ -2,15 +2,16 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-import uvicorn
+
 from actor.dicom_actor import get_dicom_actor, stop_dicom_actor
 from api.v1.router import api_v1_router
 from core.config import get_settings
 from core.logging import bind_log_context, clear_log_context, get_logger, setup_logging
 from db.neo4j import neo4j_client
-from service.mcp_service import mcp
 
 logger = get_logger("gosmart_gs.server")
 
@@ -20,7 +21,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan for managing background services and DB drivers."""
     setup_logging()
     settings = get_settings()
-    logger.info("server_starting", app_name=settings.APP_NAME, version=settings.APP_VERSION, log_rotation_days=settings.LOG_ROTATION_DAYS)
+    logger.info(
+        "server_starting",
+        app_name=settings.APP_NAME,
+        version=settings.APP_VERSION,
+        log_rotation_days=settings.LOG_ROTATION_DAYS,
+    )
     logger.info("storage_configured", storage_root=settings.STORAGE_ROOT_URI)
     logger.info("db_configured", db_connection=settings.DB_CONNECTION_URI)
 
@@ -90,9 +96,11 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-
     # Mount API routes
     app.include_router(api_v1_router, prefix=settings.API_V1_PREFIX)
+    from api.v1.endpoints.dicomweb import router as dicomweb_router
+
+    app.include_router(dicomweb_router)
 
     @app.get("/", tags=["Root"])
     async def root():

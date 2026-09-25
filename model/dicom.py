@@ -1,4 +1,5 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -36,6 +37,7 @@ class InstanceModel(BaseModel):
 
 class DicomHierarchy(BaseModel):
     """Composite DICOM hierarchy representing Patient -> Study -> Series -> Instance."""
+
     patient: PatientModel
     study: StudyModel
     series: SeriesModel

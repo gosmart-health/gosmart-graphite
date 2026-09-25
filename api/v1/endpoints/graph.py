@@ -1,5 +1,5 @@
-from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
+
 from model.graph import CypherQueryRequest
 from service.graph_service import graph_service
 

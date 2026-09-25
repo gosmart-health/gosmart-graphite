@@ -1,12 +1,9 @@
-import logging
-from typing import Any, Dict, Generator, List, Optional, Tuple
-from pydicom.dataset import Dataset
+from typing import Any, Dict, Optional
+
 from pynetdicom import (
     AE,
-    AllStoragePresentationContexts,
     StoragePresentationContexts,
     VerificationPresentationContexts,
-    evt,
 )
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
@@ -16,11 +13,10 @@ from pynetdicom.sop_class import (
     StudyRootQueryRetrieveInformationModelFind,
     StudyRootQueryRetrieveInformationModelGet,
     StudyRootQueryRetrieveInformationModelMove,
-    Verification,
 )
+
 from core.config import Settings, get_settings
 from core.logging import get_logger
-from service.dicom_service import dicom_service
 
 logger = get_logger("gosmart_gs.dicom_net")
 
@@ -79,22 +75,29 @@ class PyNetDicomService:
 
         return self._ae
 
-    def echo_scu(self, host: str, port: int, calling_aet: Optional[str] = None, called_aet: Optional[str] = None) -> Dict[str, Any]:
+    def echo_scu(
+        self,
+        host: str,
+        port: int,
+        calling_aet: Optional[str] = None,
+        called_aet: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Send C-ECHO verification request to a remote DICOM SCP."""
         ae = self.get_ae()
         source_aet = calling_aet or self.settings.DICOM_AE_TITLE
         target_aet = called_aet or "ANY_SCP"
 
-        assoc = ae.associate(host, port, ae_title=target_aet)
+        assoc = ae.associate(host, port, ae_title=target_aet, calling_aet=source_aet)
         if assoc.is_established:
             status = assoc.send_c_echo()
             assoc.release()
             is_success = bool(status and status.Status == 0x0000)
             logger.info("c_echo_scu_completed", target_aet=target_aet, host=host, port=port, success=is_success)
+            msg = "Association established and C-ECHO verified" if is_success else "C-ECHO returned non-zero status"
             return {
                 "success": is_success,
                 "status_code": hex(status.Status) if status else "None",
-                "message": "Association established and C-ECHO verified" if is_success else "C-ECHO returned non-zero status",
+                "message": msg,
             }
         else:
             logger.warning("c_echo_scu_rejected", target_aet=target_aet, host=host, port=port)

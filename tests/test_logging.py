@@ -1,9 +1,9 @@
 import json
 import logging
+import tempfile
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-import tempfile
-import pytest
+
 from core.config import Settings
 from core.logging import bind_log_context, clear_log_context, get_logger, setup_logging
 

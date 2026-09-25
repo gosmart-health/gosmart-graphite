@@ -1,13 +1,13 @@
 import io
 import logging
-import os
-import shutil
 import uuid
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Union
+
 import pydicom
 from pydicom.dataset import Dataset, FileDataset, FileMetaDataset
 from pydicom.uid import ExplicitVRLittleEndian, SecondaryCaptureImageStorage, generate_uid
+
 from core.config import Settings, get_settings
 from model.dicom import DicomHierarchy, InstanceModel, PatientModel, SeriesModel, StudyModel
 
@@ -30,7 +30,12 @@ class DicomService:
         local_path.mkdir(parents=True, exist_ok=True)
         return local_path
 
-    def parse_dataset(self, ds: Dataset, storage_uri: Optional[str] = None, file_size: Optional[int] = None) -> DicomHierarchy:
+    def parse_dataset(
+        self,
+        ds: Dataset,
+        storage_uri: Optional[str] = None,
+        file_size: Optional[int] = None,
+    ) -> DicomHierarchy:
         """Extract structured Pydantic hierarchy from a pydicom Dataset."""
         # Patient Level
         patient_id = str(getattr(ds, "PatientID", "UNKNOWN_PATIENT"))
@@ -67,7 +72,7 @@ class DicomService:
         if hasattr(ds, "SeriesNumber") and ds.SeriesNumber is not None:
             try:
                 series_number = int(ds.SeriesNumber)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
         series_description = str(getattr(ds, "SeriesDescription", "")) if hasattr(ds, "SeriesDescription") else None
         body_part_examined = str(getattr(ds, "BodyPartExamined", "")) if hasattr(ds, "BodyPartExamined") else None
@@ -87,7 +92,7 @@ class DicomService:
         if hasattr(ds, "InstanceNumber") and ds.InstanceNumber is not None:
             try:
                 instance_number = int(ds.InstanceNumber)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
         transfer_syntax = getattr(ds.file_meta, "TransferSyntaxUID", None) if hasattr(ds, "file_meta") else None
 

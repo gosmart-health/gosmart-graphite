@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Optional
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     LOG_ROTATION_DAYS: int = Field(default=7, description="Auto-rotate log files every N days (default: 7)")
     LOG_BACKUP_COUNT: int = Field(default=8, description="Number of rotated 7-day backup files to keep")
     LOG_TO_FILE: bool = Field(default=True, description="Enable rotating file logging")
-
 
     # Graph Database (Neo4j)
     DB_CONNECTION_URI: str = Field(

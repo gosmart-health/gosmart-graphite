@@ -1,4 +1,5 @@
 import pytest
+
 from service.mcp_service import mcp
 
 
@@ -24,5 +25,3 @@ async def test_mcp_generate_mock_tool():
     assert res is not None
     assert not res.is_error
     assert len(res.content) >= 1
-
-

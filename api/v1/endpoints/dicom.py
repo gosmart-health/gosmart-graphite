@@ -1,9 +1,11 @@
 import io
 from typing import Optional
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+
 from actor.dicom_actor import get_dicom_actor
-from model.dicom import DicomHierarchy, DicomIngestResponse
+from model.dicom import DicomIngestResponse
 from service.dicom_service import dicom_service
 from service.graph_service import graph_service
 from service.pynetdicom_service import pynetdicom_service
@@ -43,10 +45,12 @@ async def upload_dicom_file(
 
         if async_actor:
             actor = get_dicom_actor()
-            actor.tell({
-                "type": "INGEST_FILE",
-                "file_path": storage_uri.replace("file://", ""),
-            })
+            actor.tell(
+                {
+                    "type": "INGEST_FILE",
+                    "file_path": storage_uri.replace("file://", ""),
+                }
+            )
             return DicomIngestResponse(
                 success=True,
                 message="Dispatched DICOM file to Pykka background actor for ingestion",
@@ -79,11 +83,13 @@ async def generate_and_ingest_mock(req: MockDicomRequest) -> DicomIngestResponse
     """Generate a realistic mock DICOM instance and ingest it into the Neo4j graph."""
     if req.async_actor:
         actor = get_dicom_actor()
-        res = actor.ask({
-            "type": "INGEST_MOCK",
-            "patient_id": req.patient_id,
-            "modality": req.modality,
-        })
+        res = actor.ask(
+            {
+                "type": "INGEST_MOCK",
+                "patient_id": req.patient_id,
+                "modality": req.modality,
+            }
+        )
         return DicomIngestResponse(
             success=res.get("success", False),
             message="Mock DICOM generated and processed by Pykka actor",

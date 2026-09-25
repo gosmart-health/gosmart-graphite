@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+
 from api.v1.endpoints.dicom import router as dicom_router
 from api.v1.endpoints.graph import router as graph_router
 from api.v1.endpoints.health import router as health_router

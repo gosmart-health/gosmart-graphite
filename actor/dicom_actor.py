@@ -1,5 +1,7 @@
 from typing import Any, Dict, Optional
+
 import pykka
+
 from core.logging import get_logger
 from service.dicom_service import dicom_service
 from service.graph_service import graph_service
@@ -98,7 +100,6 @@ class DicomIngestionActor(pykka.ThreadingActor):
         else:
             logger.warning("actor_unrecognized_message", msg_type=msg_type)
             return {"error": f"Unknown message type: {msg_type}"}
-
 
 
 # Global Actor Reference management

@@ -1,6 +1,8 @@
 import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional
+
 from neo4j import AsyncDriver, AsyncGraphDatabase, Driver, GraphDatabase
+
 from core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -56,11 +58,20 @@ class Neo4jClient:
         constraints = [
             "CREATE CONSTRAINT patient_id_unique IF NOT EXISTS FOR (p:Patient) REQUIRE p.patient_id IS UNIQUE",
             "CREATE CONSTRAINT study_uid_unique IF NOT EXISTS FOR (s:Study) REQUIRE s.study_instance_uid IS UNIQUE",
-            "CREATE CONSTRAINT series_uid_unique IF NOT EXISTS FOR (se:Series) REQUIRE se.series_instance_uid IS UNIQUE",
-            "CREATE CONSTRAINT instance_uid_unique IF NOT EXISTS FOR (i:Instance) REQUIRE i.sop_instance_uid IS UNIQUE",
+            (
+                "CREATE CONSTRAINT series_uid_unique IF NOT EXISTS "
+                "FOR (se:Series) REQUIRE se.series_instance_uid IS UNIQUE"
+            ),
+            (
+                "CREATE CONSTRAINT instance_uid_unique IF NOT EXISTS "
+                "FOR (i:Instance) REQUIRE i.sop_instance_uid IS UNIQUE"
+            ),
         ]
         if not await self.verify_connectivity():
-            logger.warning("Skipping schema constraint creation: Neo4j not reachable at %s", self.settings.DB_CONNECTION_URI)
+            logger.warning(
+                "Skipping schema constraint creation: Neo4j not reachable at %s",
+                self.settings.DB_CONNECTION_URI,
+            )
             return
 
         async with self._async_driver.session(database=self.settings.DB_DATABASE) as session:

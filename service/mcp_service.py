@@ -1,6 +1,8 @@
 import json
 from typing import Any, Dict, List, Optional
+
 from mcp.server.mcpserver import MCPServer
+
 from core.config import get_settings
 from core.logging import get_logger
 from db.neo4j import neo4j_client
@@ -88,6 +90,7 @@ async def ingest_dicom_file(file_path: str, use_actor: bool = True) -> Dict[str,
     """Parse and ingest a local DICOM file into the knowledge graph and storage root."""
     if use_actor:
         from actor.dicom_actor import get_dicom_actor
+
         actor = get_dicom_actor()
         res = actor.ask({"type": "INGEST_FILE", "file_path": file_path})
         logger.info("mcp_file_ingested_via_actor", file_path=file_path, result=res)
@@ -138,7 +141,12 @@ async def execute_cypher(query: str, parameters_json: Optional[str] = None) -> L
 
 
 @mcp.tool()
-def echo_scu(host: str = "127.0.0.1", port: int = 11112, calling_aet: Optional[str] = None, called_aet: Optional[str] = None) -> Dict[str, Any]:
+def echo_scu(
+    host: str = "127.0.0.1",
+    port: int = 11112,
+    calling_aet: Optional[str] = None,
+    called_aet: Optional[str] = None,
+) -> Dict[str, Any]:
     """Test network connectivity to a DICOM SCP using C-ECHO (pynetdicom)."""
     res = pynetdicom_service.echo_scu(
         host=host,

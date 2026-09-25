@@ -2,11 +2,13 @@ import asyncio
 import json
 from pathlib import Path
 from typing import Optional
+
+import typer
+import uvicorn
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-import typer
-import uvicorn
+
 from actor.dicom_actor import get_dicom_actor, stop_dicom_actor
 from core.config import get_settings
 from core.logging import get_logger, setup_logging
@@ -36,15 +38,17 @@ def start(
     bind_host = host or settings.HOST
     bind_port = port or settings.PORT
 
-    console.print(Panel(
-        f"[bold green]Starting GoSmart DICOM Graph Server[/bold green]\n"
-        f"• HTTP & OpenAPI: [cyan]http://{bind_host}:{bind_port}/docs[/cyan]\n"
-        f"• MCP SSE Endpoint: [cyan]http://{bind_host}:{bind_port}/mcp/sse[/cyan]\n"
-        f"• Storage Root: [yellow]{settings.STORAGE_ROOT_URI}[/yellow]\n"
-        f"• Neo4j Connection: [magenta]{settings.DB_CONNECTION_URI}[/magenta]\n"
-        f"• Log Auto-Rotation: [blue]{settings.LOG_ROTATION_DAYS} days (Retain {settings.LOG_BACKUP_COUNT})[/blue]",
-        title="GoSmart DICOM Graph Server",
-    ))
+    console.print(
+        Panel(
+            f"[bold green]Starting GoSmart DICOM Graph Server[/bold green]\n"
+            f"• HTTP & OpenAPI: [cyan]http://{bind_host}:{bind_port}/docs[/cyan]\n"
+            f"• MCP SSE Endpoint: [cyan]http://{bind_host}:{bind_port}/mcp/sse[/cyan]\n"
+            f"• Storage Root: [yellow]{settings.STORAGE_ROOT_URI}[/yellow]\n"
+            f"• Neo4j Connection: [magenta]{settings.DB_CONNECTION_URI}[/magenta]\n"
+            f"• Log Auto-Rotation: [blue]{settings.LOG_ROTATION_DAYS} days (Retain {settings.LOG_BACKUP_COUNT})[/blue]",
+            title="GoSmart DICOM Graph Server",
+        )
+    )
 
     uvicorn.run("main:app", host=bind_host, port=bind_port, reload=reload)
 
@@ -185,6 +189,7 @@ def patients(
 ):
     """List patients indexed in the Neo4j knowledge graph."""
     setup_logging()
+
     async def _run():
         res = await graph_service.list_patients(limit=limit)
         await neo4j_client.close()
@@ -219,6 +224,7 @@ def query(
 ):
     """Run an arbitrary Cypher query against Neo4j and display results."""
     setup_logging()
+
     async def _run():
         res = await graph_service.execute_custom_query(cypher)
         await neo4j_client.close()
