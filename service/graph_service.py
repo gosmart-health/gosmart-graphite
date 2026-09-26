@@ -53,9 +53,13 @@ class GraphService:
 
     def __init__(self, client: Optional[Neo4jClient] = None) -> None:
         self.client = client or neo4j_client
+        self._constraints_initialized: bool = False
 
     async def save_hierarchy(self, hierarchy: DicomHierarchy) -> Dict[str, Any]:
         """Save a DICOM hierarchy asynchronously into Neo4j."""
+        if not self._constraints_initialized:
+            await self.init_schema_constraints()
+
         params = {
             "patient": hierarchy.patient.model_dump(),
             "study": hierarchy.study.model_dump(),
@@ -118,8 +122,11 @@ class GraphService:
         """Execute an arbitrary read or write Cypher query."""
         return await self.client.execute_query(query, parameters or {})
 
-    async def init_schema_constraints(self) -> None:
+    async def init_schema_constraints(self, force: bool = False) -> None:
         """Create standard DICOM graph schema constraints & indexes in Neo4j."""
+        if self._constraints_initialized and not force:
+            return
+
         constraints = [
             "CREATE CONSTRAINT patient_id_unique IF NOT EXISTS FOR (p:Patient) REQUIRE p.patient_id IS UNIQUE",
             "CREATE CONSTRAINT study_uid_unique IF NOT EXISTS FOR (s:Study) REQUIRE s.study_instance_uid IS UNIQUE",
@@ -145,6 +152,8 @@ class GraphService:
                 logger.debug("Applied constraint: %s", constraint)
             except Exception as e:
                 logger.warning("Failed to apply constraint '%s': %s", constraint, e)
+
+        self._constraints_initialized = True
 
 
 graph_service = GraphService()
