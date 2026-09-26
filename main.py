@@ -12,6 +12,7 @@ from api.v1.router import api_v1_router
 from core.config import get_settings
 from core.logging import bind_log_context, clear_log_context, get_logger, setup_logging
 from db.neo4j import neo4j_client
+from service.graph_service import graph_service
 
 logger = get_logger("gosmart_gs.server")
 
@@ -33,7 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize Neo4j Driver & Constraints
     try:
         await neo4j_client.connect()
-        await neo4j_client.init_schema_constraints()
+        await graph_service.init_schema_constraints()
     except Exception as e:
         logger.warning("neo4j_init_notice", error=str(e))
 

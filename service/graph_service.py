@@ -118,5 +118,33 @@ class GraphService:
         """Execute an arbitrary read or write Cypher query."""
         return await self.client.execute_query(query, parameters or {})
 
+    async def init_schema_constraints(self) -> None:
+        """Create standard DICOM graph schema constraints & indexes in Neo4j."""
+        constraints = [
+            "CREATE CONSTRAINT patient_id_unique IF NOT EXISTS FOR (p:Patient) REQUIRE p.patient_id IS UNIQUE",
+            "CREATE CONSTRAINT study_uid_unique IF NOT EXISTS FOR (s:Study) REQUIRE s.study_instance_uid IS UNIQUE",
+            (
+                "CREATE CONSTRAINT series_uid_unique IF NOT EXISTS "
+                "FOR (se:Series) REQUIRE se.series_instance_uid IS UNIQUE"
+            ),
+            (
+                "CREATE CONSTRAINT instance_uid_unique IF NOT EXISTS "
+                "FOR (i:Instance) REQUIRE i.sop_instance_uid IS UNIQUE"
+            ),
+        ]
+        if not await self.client.verify_connectivity():
+            logger.warning(
+                "Skipping schema constraint creation: Neo4j not reachable at %s",
+                self.client.settings.DB_CONNECTION_URI,
+            )
+            return
+
+        for constraint in constraints:
+            try:
+                await self.client.execute_query(constraint)
+                logger.debug("Applied constraint: %s", constraint)
+            except Exception as e:
+                logger.warning("Failed to apply constraint '%s': %s", constraint, e)
+
 
 graph_service = GraphService()
