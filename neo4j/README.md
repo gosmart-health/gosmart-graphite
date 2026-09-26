@@ -23,6 +23,12 @@ This directory contains Docker Compose file to get your Neo4j Graph Database run
 Be sure that your firewall inbound settings are open if you are sharing this instance with other computers in your development 
 environment.
 
+## Starting
+
+```shell
+docker compose up -d
+```
+
 ## Cloud Server Alternative
 
 Neo4j Aura offers a free tier called AuraDB Free, which allows users to create a graph database without any costs or credit card requirements. This free tier supports up to 200,000 nodes and 400,000 relationships.

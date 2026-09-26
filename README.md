@@ -52,6 +52,9 @@ gosmart-dicom-py-graph-server/
 ├── tests/                  # Test suite
 │   ├── test_actor.py
 │   └── test_api.py
+├── neo4j/                  # Local Neo4j Database (via Docker) Setup
+│   ├── docker-compose.yaml
+│   └── README.md           # Instructions
 ├── .env.example            # Environment variables template
 ├── .env                    # Local environment configuration
 ├── main.py                 # Application factory & Uvicorn runner
@@ -91,7 +94,7 @@ The environment is already managed using `uv` with Python 3.14:
 uv sync
 ```
 
-### 2. Run the Server
+### 2. Run the Servers
 
 ```bash
 uv run python main.py
