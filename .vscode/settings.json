@@ -1,0 +1,22 @@
+{
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+        // Prevents VS Code from saving mid-generation and triggering a rollback
+    "files.autoSave": "off", 
+    
+    // Disables formatters from modifying the temporary diff buffer
+    "editor.formatOnSave": false,
+    
+    // Optional: Keeps formatters active normally, but explicitly disables them for the language you code in most (e.g., Python)
+    "[python]": {
+        "editor.formatOnSave": false
+    },
+    "cSpell.words": [
+        "dicom",
+        "gosmart",
+        "pykka"
+    ]
+}
