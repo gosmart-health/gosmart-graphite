@@ -165,6 +165,10 @@ erDiagram
         string transfer_syntax_uid
         string storage_uri
         int file_size_bytes
+        string Source
+        string SourceIdentity
+        string Destination
+        string DestinationIdentity
         datetime created_at
     }
 

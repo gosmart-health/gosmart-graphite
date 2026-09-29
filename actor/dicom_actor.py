@@ -34,8 +34,18 @@ class DicomIngestionActor(pykka.ThreadingActor):
             file_path = message.get("file_path")
             test_id = message.get("test_id")
             acted_by = message.get("acted_by", "actor")
+            source = message.get("source")
+            source_identity = message.get("source_identity")
+            destination = message.get("destination")
+            destination_identity = message.get("destination_identity")
             try:
-                hierarchy = dicom_service.parse_file(file_path)
+                hierarchy = dicom_service.parse_file(
+                    file_path,
+                    source=source,
+                    source_identity=source_identity,
+                    destination=destination,
+                    destination_identity=destination_identity,
+                )
                 hierarchy.test_id = test_id
                 hierarchy.acted_by = acted_by
                 result = None
@@ -72,13 +82,22 @@ class DicomIngestionActor(pykka.ThreadingActor):
             modality = message.get("modality", "MR")
             test_id = message.get("test_id")
             acted_by = message.get("acted_by", "actor")
+            source = message.get("source", "file:mock")
+            source_identity = message.get("source_identity", f"user:{acted_by}")
+            destination_identity = message.get("destination_identity", "service:mock")
             try:
                 ds = dicom_service.create_mock_dicom(patient_id=patient_id, modality=modality)
-                hierarchy = dicom_service.parse_dataset(ds)
+                hierarchy = dicom_service.parse_dataset(
+                    ds,
+                    source=source,
+                    source_identity=source_identity,
+                    destination_identity=destination_identity,
+                )
                 hierarchy.test_id = test_id
                 hierarchy.acted_by = acted_by
                 saved_uri = dicom_service.save_raw_dicom(ds, hierarchy.instance.sop_instance_uid)
                 hierarchy.instance.storage_uri = saved_uri
+                hierarchy.instance.destination = f"file:{saved_uri}"
                 result = None
                 try:
                     result = graph_service.save_hierarchy_sync(hierarchy)

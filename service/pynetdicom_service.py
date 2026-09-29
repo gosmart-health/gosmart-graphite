@@ -150,9 +150,24 @@ class PyNetDicomService:
             logger.error("c_store_blackbox_save_failed", storage_uri=storage_uri, error=str(e), exc_info=True)
             return 0xA700  # Out of Resources
 
-        # 4. Parse clinical hierarchy
+        # 4. Parse clinical hierarchy & attach stream provenance
+        assoc = getattr(event, "assoc", None)
+        requestor = getattr(assoc, "requestor", None)
+        client_ip = getattr(requestor, "address", "unknown")
+        calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
+
+        acceptor = getattr(assoc, "acceptor", None)
+        server_ip = getattr(acceptor, "address", getattr(self.settings, "DICOM_SCP_HOST", "0.0.0.0"))
+        server_port = getattr(acceptor, "port", getattr(self.settings, "DICOM_SCP_PORT", 11112))
+        called_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS"))
+
         try:
             hierarchy = dicom_service.parse_dataset(dataset, storage_uri=storage_uri)
+            hierarchy.instance.source = f"dimse:{client_ip}"
+            hierarchy.instance.source_identity = f"ae:{calling_aet}"
+            hierarchy.instance.destination = f"dimse:{server_ip}:{server_port}"
+            hierarchy.instance.destination_identity = f"ae:{called_aet}"
+            hierarchy.acted_by = f"ae:{calling_aet}"
         except Exception as e:
             logger.error(
                 "c_store_parse_failed",

@@ -64,9 +64,29 @@ async def stow_store_instances(request: Request):
 
     file_path = dicom_service.save_raw_dicom(ds, sop_uid)
 
+    client_host = request.client.host if request.client else "unknown"
+    user_id = request.headers.get("X-User-ID") or "anonymous"
+    server_host = request.url.hostname or "127.0.0.1"
+    server_port = request.url.port or 8000
+
+    source = f"stow:{client_host}"
+    source_identity = f"user:{user_id}"
+    destination = f"stow:{server_host}:{server_port}"
+    destination_identity = "service:dicomweb"
+
     actor = get_dicom_actor()
     if actor.is_alive():
-        actor.tell({"type": "INGEST_FILE", "file_path": str(file_path)})
+        actor.tell(
+            {
+                "type": "INGEST_FILE",
+                "file_path": str(file_path),
+                "source": source,
+                "source_identity": source_identity,
+                "destination": destination,
+                "destination_identity": destination_identity,
+                "acted_by": f"user:{user_id}",
+            }
+        )
 
     stow_response = {
         "00081199": {

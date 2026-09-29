@@ -205,6 +205,24 @@ class InstanceNode(AuditableNode):
     storage_uri: Optional[str] = Field(None, description="URI where the raw DICOM file is persisted")
     file_size_bytes: Optional[int] = Field(None, description="File size in bytes")
 
+    # Instance-level stream provenance
+    Source: Optional[str] = Field(
+        default=None,
+        description="Ingestion stream source: dimse:<ip>, stow:<ip>, file:<path>",
+    )
+    SourceIdentity: Optional[str] = Field(
+        default=None,
+        description="Identity of stream sender: ae:<AE_title> or user:<user_id>",
+    )
+    Destination: Optional[str] = Field(
+        default=None,
+        description="Local destination endpoint: dimse:<ip>:<port>, stow:<host>:<port>, file:<uri>",
+    )
+    DestinationIdentity: Optional[str] = Field(
+        default=None,
+        description="Identity of receiving entity: ae:<called_aet> or service:<name>",
+    )
+
     def get_identity_subset(self) -> Dict[str, Any]:
         return {"entity": self.__label__, "sop_instance_uid": self.sop_instance_uid}
 

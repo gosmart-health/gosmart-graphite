@@ -44,6 +44,16 @@ class InstanceModel(BaseModel):
     transfer_syntax_uid: Optional[str] = Field(None, description="Transfer Syntax UID (0002,0010)")
     storage_uri: Optional[str] = Field(None, description="URI where the raw DICOM file is persisted")
     file_size_bytes: Optional[int] = Field(None, description="File size in bytes")
+    source: Optional[str] = Field(None, description="Ingestion stream source: dimse:<ip>, stow:<ip>, file:<path>")
+    source_identity: Optional[str] = Field(
+        None, description="Identity of stream sender: ae:<AE_title> or user:<user_id>"
+    )
+    destination: Optional[str] = Field(
+        None, description="Local destination endpoint: dimse:<ip>:<port>, stow:<host>:<port>, file:<uri>"
+    )
+    destination_identity: Optional[str] = Field(
+        None, description="Identity of receiving entity: ae:<called_aet> or service:<name>"
+    )
 
 
 class DicomHierarchy(BaseModel):
@@ -105,6 +115,10 @@ class DicomHierarchy(BaseModel):
             transfer_syntax_uid=self.instance.transfer_syntax_uid,
             storage_uri=self.instance.storage_uri,
             file_size_bytes=self.instance.file_size_bytes,
+            Source=self.instance.source,
+            SourceIdentity=self.instance.source_identity,
+            Destination=self.instance.destination,
+            DestinationIdentity=self.instance.destination_identity,
             test_id=self.test_id,
             ActedBy=self.acted_by,
             ExpiresAt=self.expires_at,

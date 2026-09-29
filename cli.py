@@ -130,9 +130,16 @@ def mock(
             modality=modality,
             study_description=desc,
         )
-        hierarchy = dicom_service.parse_dataset(ds)
-        saved_uri = dicom_service.save_raw_dicom(ds, hierarchy.instance.sop_instance_uid)
-        hierarchy.instance.storage_uri = saved_uri
+        saved_uri = dicom_service.save_raw_dicom(ds, str(ds.SOPInstanceUID))
+        hierarchy = dicom_service.parse_dataset(
+            ds,
+            storage_uri=saved_uri,
+            source="file:mock",
+            source_identity="user:cli",
+            destination=f"file:{saved_uri}",
+            destination_identity="service:local_storage",
+        )
+        hierarchy.acted_by = "user:cli"
 
         result = None
         try:
@@ -166,15 +173,33 @@ def ingest(
 
     if use_actor:
         actor = get_dicom_actor()
-        res = actor.ask({"type": "INGEST_FILE", "file_path": str(path)})
+        res = actor.ask(
+            {
+                "type": "INGEST_FILE",
+                "file_path": str(path),
+                "source": f"file:{path}",
+                "source_identity": "user:cli",
+                "destination": f"file:{path}",
+                "destination_identity": "service:local_storage",
+                "acted_by": "user:cli",
+            }
+        )
         stop_dicom_actor()
         console.print(f"[green]Actor Ingestion Result:[/green] {res}")
         return
 
     async def _run():
-        hierarchy = dicom_service.parse_file(str(path))
+        hierarchy = dicom_service.parse_file(
+            str(path),
+            source=f"file:{path}",
+            source_identity="user:cli",
+            destination=f"file:{path}",
+            destination_identity="service:local_storage",
+        )
+        hierarchy.acted_by = "user:cli"
         saved_uri = dicom_service.save_raw_dicom(path.read_bytes(), hierarchy.instance.sop_instance_uid)
         hierarchy.instance.storage_uri = saved_uri
+        hierarchy.instance.destination = f"file:{saved_uri}"
         res = None
         try:
             res = await graph_service.save_hierarchy(hierarchy)

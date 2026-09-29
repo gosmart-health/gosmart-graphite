@@ -35,6 +35,10 @@ class DicomService:
         ds: Dataset,
         storage_uri: Optional[str] = None,
         file_size: Optional[int] = None,
+        source: Optional[str] = None,
+        source_identity: Optional[str] = None,
+        destination: Optional[str] = None,
+        destination_identity: Optional[str] = None,
     ) -> DicomHierarchy:
         """Extract structured Pydantic hierarchy from a pydicom Dataset."""
         # Patient Level
@@ -103,6 +107,10 @@ class DicomService:
             transfer_syntax_uid=str(transfer_syntax) if transfer_syntax else None,
             storage_uri=storage_uri,
             file_size_bytes=file_size,
+            source=source,
+            source_identity=source_identity,
+            destination=destination,
+            destination_identity=destination_identity,
         )
 
         return DicomHierarchy(
@@ -112,7 +120,14 @@ class DicomService:
             instance=instance,
         )
 
-    def parse_file(self, file_path_or_buffer: Union[str, Path, io.BytesIO]) -> DicomHierarchy:
+    def parse_file(
+        self,
+        file_path_or_buffer: Union[str, Path, io.BytesIO],
+        source: Optional[str] = None,
+        source_identity: Optional[str] = None,
+        destination: Optional[str] = None,
+        destination_identity: Optional[str] = None,
+    ) -> DicomHierarchy:
         """Read and parse a DICOM dataset from file or binary buffer."""
         file_size = None
         if isinstance(file_path_or_buffer, (str, Path)):
@@ -120,14 +135,31 @@ class DicomService:
             if p.exists():
                 file_size = p.stat().st_size
             ds = pydicom.dcmread(str(p), force=True)
-            storage_uri = f"file://{p.resolve()}"
+            resolved_path = str(p.resolve())
+            storage_uri = f"file://{resolved_path}"
+            if not source:
+                source = f"file:{resolved_path}"
+            if not source_identity:
+                source_identity = "user:local"
+            if not destination:
+                destination = f"file:{resolved_path}"
+            if not destination_identity:
+                destination_identity = "service:local_storage"
         else:
             content = file_path_or_buffer.getvalue()
             file_size = len(content)
             ds = pydicom.dcmread(file_path_or_buffer, force=True)
             storage_uri = None
 
-        return self.parse_dataset(ds, storage_uri=storage_uri, file_size=file_size)
+        return self.parse_dataset(
+            ds,
+            storage_uri=storage_uri,
+            file_size=file_size,
+            source=source,
+            source_identity=source_identity,
+            destination=destination,
+            destination_identity=destination_identity,
+        )
 
     def save_raw_dicom(self, content_or_dataset: Union[bytes, Dataset], sop_instance_uid: str) -> str:
         """Persist a raw DICOM object into the configured storage URI."""

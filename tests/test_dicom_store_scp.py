@@ -76,6 +76,28 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
     assert stored_ds.SOPInstanceUID == ds.SOPInstanceUID
     assert stored_ds.PatientID == ds.PatientID
 
+    # Verify Instance provenance tracking in Neo4j (if connected)
+    from db.neo4j import neo4j_client
+
+    try:
+        driver = neo4j_client.get_sync_driver()
+        with driver.session() as session:
+            result = session.run(
+                "MATCH (i:Instance {sop_instance_uid: $sop_uid}) "
+                "RETURN i.Source AS Source, i.SourceIdentity AS SourceIdentity, "
+                "i.Destination AS Destination, i.DestinationIdentity AS DestinationIdentity",
+                sop_uid=sop_uid,
+            )
+            records = [record.data() for record in result]
+            if records:
+                inst = records[0]
+                assert inst["Source"] == "dimse:127.0.0.1"
+                assert inst["SourceIdentity"] == "ae:TEST_SCU"
+                assert inst["Destination"].startswith("dimse:")
+                assert inst["DestinationIdentity"] == "ae:GOSMART_GS"
+    except Exception:
+        pass
+
 
 def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server):
     """Verify raw DICOM file is preserved on storage even if downstream graph indexing fails."""

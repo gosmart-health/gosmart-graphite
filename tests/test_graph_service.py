@@ -76,11 +76,15 @@ def test_relation_negation_helpers():
 
 
 def test_hierarchy_to_nodes_and_relations():
-    """Verify DicomHierarchy conversion to AuditableNode and AuditableRelation objects."""
+    """Verify DicomHierarchy conversion to AuditableNode and AuditableRelation objects with instance provenance."""
     ds = dicom_service.create_mock_dicom(patient_id="MOCK_TEST_1")
     hierarchy = dicom_service.parse_dataset(ds)
     hierarchy.test_id = "test_session_1"
     hierarchy.acted_by = "test_runner"
+    hierarchy.instance.source = "dimse:10.200.0.123"
+    hierarchy.instance.source_identity = "ae:MICRODICOM"
+    hierarchy.instance.destination = "dimse:0.0.0.0:11112"
+    hierarchy.instance.destination_identity = "ae:GOSMART_GS"
 
     p, s, se, i = hierarchy.to_nodes()
     assert isinstance(p, PatientNode)
@@ -89,6 +93,20 @@ def test_hierarchy_to_nodes_and_relations():
     assert isinstance(i, InstanceNode)
     assert p.test_id == "test_session_1"
     assert p.ActedBy == "test_runner"
+
+    # Instance-level provenance assertions
+    assert i.Source == "dimse:10.200.0.123"
+    assert i.SourceIdentity == "ae:MICRODICOM"
+    assert i.Destination == "dimse:0.0.0.0:11112"
+    assert i.DestinationIdentity == "ae:GOSMART_GS"
+
+    # Verify provenance fields are strictly on Instance level
+    assert not hasattr(p, "Source")
+    assert not hasattr(s, "Source")
+    assert not hasattr(se, "Source")
+    assert not hasattr(p, "Destination")
+    assert not hasattr(s, "Destination")
+    assert not hasattr(se, "Destination")
 
     r_ps, r_se, r_ei = hierarchy.to_relations(p, s, se, i)
     assert isinstance(r_ps, HasStudyRelation)
@@ -178,6 +196,36 @@ async def test_dicom_mr_ingestion_and_hierarchy_traversal():
     assert result["modality"] == "MR"
     assert result["instance_count"] == 10
     assert set(result["instance_uids"]) == parsed_sop_uids
+
+    # 4b. Verify Instance-level stream provenance tracking in Neo4j
+    instance_provenance_query = """
+    MATCH (i:Instance {test_id: $test_id})
+    RETURN i.Source AS Source,
+           i.SourceIdentity AS SourceIdentity,
+           i.Destination AS Destination,
+           i.DestinationIdentity AS DestinationIdentity
+    """
+    inst_records = await graph_service.execute_custom_query(instance_provenance_query, {"test_id": TEST_ID})
+    assert len(inst_records) == 10
+    for rec in inst_records:
+        assert rec["Source"].startswith("file:")
+        assert rec["SourceIdentity"] == "user:local"
+        assert rec["Destination"].startswith("file:")
+        assert rec["DestinationIdentity"] == "service:local_storage"
+
+    # Verify that Patient, Study, Series do NOT have Source or Destination properties in graph
+    non_instance_query = """
+    MATCH (p:Patient {id: $patient_id})-[:HAS_STUDY]->(s:Study)-[:HAS_SERIES]->(se:Series)
+    RETURN p.Source AS p_source, p.Destination AS p_dest,
+           s.Source AS s_source, s.Destination AS s_dest,
+           se.Source AS se_source, se.Destination AS se_dest
+    """
+    non_inst_records = await graph_service.execute_custom_query(non_instance_query, {"patient_id": patient_node_id})
+    assert len(non_inst_records) == 1
+    ni = non_inst_records[0]
+    assert ni["p_source"] is None and ni["p_dest"] is None
+    assert ni["s_source"] is None and ni["s_dest"] is None
+    assert ni["se_source"] is None and ni["se_dest"] is None
 
     # 5. Verify query filtering: default list_patients excludes test_id
     default_patients = await graph_service.list_patients(include_tests=False)

@@ -70,3 +70,38 @@ def test_dicomweb_stow_rs(client):
     assert "00081199" in data
     assert len(data["00081199"]["Value"]) == 1
     assert data["00081199"]["Value"][0]["00081155"]["Value"][0] == ds.SOPInstanceUID
+
+
+def test_dicomweb_stow_rs_provenance(client):
+    """Verify STOW-RS captures client IP, user ID scaffolding, and service identity."""
+    from unittest.mock import MagicMock, patch
+
+    ds = dicom_service.create_mock_dicom(
+        patient_id="STOW-PROV-001",
+        modality="MR",
+    )
+    buffer = io.BytesIO()
+    ds.save_as(buffer, enforce_file_format=True)
+    dicom_bytes = buffer.getvalue()
+
+    mock_actor = MagicMock()
+    mock_actor.is_alive.return_value = True
+
+    with patch("api.v1.endpoints.dicomweb.get_dicom_actor", return_value=mock_actor):
+        response = client.post(
+            "/dicomweb/studies",
+            content=dicom_bytes,
+            headers={
+                "Content-Type": "application/dicom",
+                "X-User-ID": "dr_watson",
+            },
+        )
+        assert response.status_code == 200
+        mock_actor.tell.assert_called_once()
+        msg = mock_actor.tell.call_args[0][0]
+        assert msg["type"] == "INGEST_FILE"
+        assert msg["source"].startswith("stow:")
+        assert msg["source_identity"] == "user:dr_watson"
+        assert msg["destination"].startswith("stow:")
+        assert msg["destination_identity"] == "service:dicomweb"
+        assert msg["acted_by"] == "user:dr_watson"
