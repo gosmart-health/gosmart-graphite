@@ -43,6 +43,8 @@ def start(
             f"[bold green]Starting GoSmart DICOM Graph Server[/bold green]\n"
             f"• HTTP & OpenAPI: [cyan]http://{bind_host}:{bind_port}/docs[/cyan]\n"
             f"• MCP SSE Endpoint: [cyan]http://{bind_host}:{bind_port}/mcp/sse[/cyan]\n"
+            f"• DICOM C-STORE SCP: [cyan]{getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GS')}@"
+            f"{getattr(settings, 'DICOM_SCP_HOST', '0.0.0.0')}:{getattr(settings, 'DICOM_SCP_PORT', 11112)}[/cyan]\n"
             f"• Storage Root: [yellow]{settings.STORAGE_ROOT_URI}[/yellow]\n"
             f"• Neo4j Connection: [magenta]{settings.DB_CONNECTION_URI}[/magenta]\n"
             f"• Log Auto-Rotation: [blue]{settings.LOG_ROTATION_DAYS} days (Retain {settings.LOG_BACKUP_COUNT})[/blue]",
@@ -95,6 +97,11 @@ def health():
         "Storage Root",
         "[green]CONFIGURED[/green]",
         settings.STORAGE_ROOT_URI,
+    )
+    table.add_row(
+        "DICOM C-STORE SCP",
+        f"[green]CONFIGURED ({getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GS')})[/green]",
+        f"Port: {getattr(settings, 'DICOM_SCP_PORT', 11112)} (Host: {getattr(settings, 'DICOM_SCP_HOST', '0.0.0.0')})",
     )
     table.add_row(
         "Log Rotation",

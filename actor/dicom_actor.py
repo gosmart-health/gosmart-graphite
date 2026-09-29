@@ -32,8 +32,12 @@ class DicomIngestionActor(pykka.ThreadingActor):
 
         elif msg_type == "INGEST_FILE":
             file_path = message.get("file_path")
+            test_id = message.get("test_id")
+            acted_by = message.get("acted_by", "actor")
             try:
                 hierarchy = dicom_service.parse_file(file_path)
+                hierarchy.test_id = test_id
+                hierarchy.acted_by = acted_by
                 result = None
                 try:
                     result = graph_service.save_hierarchy_sync(hierarchy)
@@ -47,6 +51,7 @@ class DicomIngestionActor(pykka.ThreadingActor):
                     patient_id=hierarchy.patient.patient_id,
                     study_instance_uid=hierarchy.study.study_instance_uid,
                     sop_instance_uid=hierarchy.instance.sop_instance_uid,
+                    test_id=test_id,
                     processed_count=self.processed_count,
                 )
                 return {
@@ -54,6 +59,7 @@ class DicomIngestionActor(pykka.ThreadingActor):
                     "patient_id": hierarchy.patient.patient_id,
                     "study_instance_uid": hierarchy.study.study_instance_uid,
                     "sop_instance_uid": hierarchy.instance.sop_instance_uid,
+                    "test_id": test_id,
                     "graph_result": result,
                 }
             except Exception as e:
@@ -64,9 +70,13 @@ class DicomIngestionActor(pykka.ThreadingActor):
         elif msg_type == "INGEST_MOCK":
             patient_id = message.get("patient_id", "MOCK_PATIENT")
             modality = message.get("modality", "MR")
+            test_id = message.get("test_id")
+            acted_by = message.get("acted_by", "actor")
             try:
                 ds = dicom_service.create_mock_dicom(patient_id=patient_id, modality=modality)
                 hierarchy = dicom_service.parse_dataset(ds)
+                hierarchy.test_id = test_id
+                hierarchy.acted_by = acted_by
                 saved_uri = dicom_service.save_raw_dicom(ds, hierarchy.instance.sop_instance_uid)
                 hierarchy.instance.storage_uri = saved_uri
                 result = None

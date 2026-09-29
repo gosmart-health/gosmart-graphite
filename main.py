@@ -42,10 +42,32 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     actor_ref = get_dicom_actor()
     logger.info("pykka_actor_started", actor_urn=actor_ref.actor_urn)
 
+    # Initialize DICOM C-STORE / C-ECHO SCP Server (binds to 0.0.0.0:11112 for LAN)
+    if getattr(settings, "DICOM_SCP_ENABLED", True):
+        try:
+            from service.pynetdicom_service import pynetdicom_service
+
+            scp_host = getattr(settings, "DICOM_SCP_HOST", "0.0.0.0")
+            scp_port = getattr(settings, "DICOM_SCP_PORT", 11112)
+            pynetdicom_service.start_server(
+                host=scp_host,
+                port=scp_port,
+                block=False,
+            )
+        except Exception as e:
+            logger.error("dicom_scp_start_failed", error=str(e), exc_info=True)
+
     yield
 
     # Clean shutdown
     logger.info("server_shutting_down", app_name=settings.APP_NAME)
+    if getattr(settings, "DICOM_SCP_ENABLED", True):
+        try:
+            from service.pynetdicom_service import pynetdicom_service
+
+            pynetdicom_service.stop_server()
+        except Exception as e:
+            logger.warning("dicom_scp_stop_failed", error=str(e))
     stop_dicom_actor()
     await neo4j_client.close()
     logger.info("server_shutdown_complete")

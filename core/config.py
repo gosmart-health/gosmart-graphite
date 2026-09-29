@@ -1,6 +1,7 @@
 from functools import lru_cache
+from typing import Optional
 
-from pydantic import Field
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -36,7 +37,10 @@ class Settings(BaseSettings):
         description="Neo4j connection URI (e.g. bolt://localhost:7687 or neo4j://...)",
     )
     DB_USER: str = Field(default="neo4j", description="Neo4j username")
-    DB_PASSWORD: str = Field(default="password", description="Neo4j password")
+    #
+    # NOTE: To read SecretStr from environment variables, use .get_secret_value() method,
+    # e.g. os.environ.get("GOSMART_GS_DB_PASSWORD").get_secret_value()
+    DB_PASSWORD: SecretStr = Field(default="password", description="Neo4j password")
     DB_DATABASE: str = Field(default="neo4j", description="Neo4j database name")
     DB_MAX_CONNECTION_LIFETIME: int = Field(default=3600, description="Max connection lifetime in seconds")
     DB_MAX_CONNECTION_POOL_SIZE: int = Field(default=50, description="Max connection pool size")
@@ -44,7 +48,71 @@ class Settings(BaseSettings):
     # Storage Root URI
     STORAGE_ROOT_URI: str = Field(
         default="file:///tmp/gosmart_dicom_storage",
-        description="Storage root URI for DICOM binaries (e.g., file:///path or s3://bucket/path)",
+        description="Storage root URI (e.g. file:///path, gs://..., s3://..., az://..., \\\\unc\\share)",
+    )
+
+    # Cloud Storage Credentials & Endpoints (Supports both standard SDK env vars and GOSMART_GS_ prefix)
+    GOOGLE_APPLICATION_CREDENTIALS: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS", "GOSMART_GS_GOOGLE_APPLICATION_CREDENTIALS"),
+        description="Path to Google Cloud Service Account credentials JSON",
+    )
+    GOOGLE_CLOUD_PROJECT: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT", "GOSMART_GS_GOOGLE_CLOUD_PROJECT"),
+        description="Google Cloud Project ID",
+    )
+    GCS_ENDPOINT_URL: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("GCS_ENDPOINT_URL", "STORAGE_EMULATOR_HOST", "GOSMART_GS_GCS_ENDPOINT_URL"),
+        description="Custom GCS endpoint or emulator host",
+    )
+
+    AWS_ACCESS_KEY_ID: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("AWS_ACCESS_KEY_ID", "GOSMART_GS_AWS_ACCESS_KEY_ID"),
+        description="AWS Access Key ID",
+    )
+    AWS_SECRET_ACCESS_KEY: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("AWS_SECRET_ACCESS_KEY", "GOSMART_GS_AWS_SECRET_ACCESS_KEY"),
+        description="AWS Secret Access Key",
+    )
+    AWS_SESSION_TOKEN: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("AWS_SESSION_TOKEN", "GOSMART_GS_AWS_SESSION_TOKEN"),
+        description="AWS Temporary Session Token",
+    )
+    AWS_DEFAULT_REGION: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("AWS_DEFAULT_REGION", "AWS_REGION", "GOSMART_GS_AWS_DEFAULT_REGION"),
+        description="AWS Region name",
+    )
+    AWS_ENDPOINT_URL: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("AWS_ENDPOINT_URL", "AWS_S3_ENDPOINT_URL", "GOSMART_GS_AWS_ENDPOINT_URL"),
+        description="Custom S3 endpoint URL (MinIO/LocalStack)",
+    )
+
+    AZURE_STORAGE_CONNECTION_STRING: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("AZURE_STORAGE_CONNECTION_STRING", "GOSMART_GS_AZURE_STORAGE_CONNECTION_STRING"),
+        description="Azure Blob Storage Connection String",
+    )
+    AZURE_STORAGE_ACCOUNT_NAME: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("AZURE_STORAGE_ACCOUNT_NAME", "GOSMART_GS_AZURE_STORAGE_ACCOUNT_NAME"),
+        description="Azure Storage Account Name",
+    )
+    AZURE_STORAGE_ACCOUNT_KEY: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("AZURE_STORAGE_ACCOUNT_KEY", "GOSMART_GS_AZURE_STORAGE_ACCOUNT_KEY"),
+        description="Azure Storage Account Key",
+    )
+    AZURE_STORAGE_SAS_TOKEN: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices("AZURE_STORAGE_SAS_TOKEN", "GOSMART_GS_AZURE_STORAGE_SAS_TOKEN"),
+        description="Azure Storage SAS Token",
     )
 
     # DICOM Network (pynetdicom) Settings

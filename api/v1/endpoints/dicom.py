@@ -26,18 +26,22 @@ class MockDicomRequest(BaseModel):
     modality: str = "CT"
     study_description: str = "Chest CT High-Resolution"
     async_actor: bool = False
+    test_id: Optional[str] = None
 
 
 @router.post("/upload", response_model=DicomIngestResponse)
 async def upload_dicom_file(
     file: UploadFile = File(...),
     async_actor: bool = Form(default=False),
+    test_id: Optional[str] = Form(default=None),
 ) -> DicomIngestResponse:
     """Upload and process a DICOM (.dcm) file directly."""
     try:
         content = await file.read()
         buffer = io.BytesIO(content)
         hierarchy = dicom_service.parse_file(buffer)
+        hierarchy.test_id = test_id
+        hierarchy.acted_by = "api"
 
         # Save to storage root
         storage_uri = dicom_service.save_raw_dicom(content, hierarchy.instance.sop_instance_uid)
@@ -49,6 +53,8 @@ async def upload_dicom_file(
                 {
                     "type": "INGEST_FILE",
                     "file_path": storage_uri.replace("file://", ""),
+                    "test_id": test_id,
+                    "acted_by": "api_actor",
                 }
             )
             return DicomIngestResponse(
@@ -60,9 +66,10 @@ async def upload_dicom_file(
                 sop_instance_uid=hierarchy.instance.sop_instance_uid,
                 storage_uri=storage_uri,
                 dispatched_to_actor=True,
+                test_id=test_id,
             )
 
-        # Synchronous graph save
+        # Synchronous processing
         await graph_service.save_hierarchy(hierarchy)
         return DicomIngestResponse(
             success=True,
@@ -73,6 +80,7 @@ async def upload_dicom_file(
             sop_instance_uid=hierarchy.instance.sop_instance_uid,
             storage_uri=storage_uri,
             dispatched_to_actor=False,
+            test_id=test_id,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to process DICOM file: {str(e)}")
@@ -88,6 +96,8 @@ async def generate_and_ingest_mock(req: MockDicomRequest) -> DicomIngestResponse
                 "type": "INGEST_MOCK",
                 "patient_id": req.patient_id,
                 "modality": req.modality,
+                "test_id": req.test_id,
+                "acted_by": "api_actor",
             }
         )
         return DicomIngestResponse(
@@ -98,6 +108,7 @@ async def generate_and_ingest_mock(req: MockDicomRequest) -> DicomIngestResponse
             sop_instance_uid=res.get("sop_instance_uid"),
             storage_uri=res.get("storage_uri"),
             dispatched_to_actor=True,
+            test_id=req.test_id,
         )
 
     # Synchronous processing
@@ -108,6 +119,8 @@ async def generate_and_ingest_mock(req: MockDicomRequest) -> DicomIngestResponse
         study_description=req.study_description,
     )
     hierarchy = dicom_service.parse_dataset(ds)
+    hierarchy.test_id = req.test_id
+    hierarchy.acted_by = "api"
     storage_uri = dicom_service.save_raw_dicom(ds, hierarchy.instance.sop_instance_uid)
     hierarchy.instance.storage_uri = storage_uri
 
@@ -121,6 +134,7 @@ async def generate_and_ingest_mock(req: MockDicomRequest) -> DicomIngestResponse
         sop_instance_uid=hierarchy.instance.sop_instance_uid,
         storage_uri=storage_uri,
         dispatched_to_actor=False,
+        test_id=req.test_id,
     )
 
 

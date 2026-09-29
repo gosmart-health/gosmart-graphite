@@ -8,6 +8,8 @@ A high-performance DICOM Knowledge Graph backend server powered by **Python 3.14
 
 - **FastAPI & Pydantic**: Async REST API endpoints with automated OpenAPI schemas (`/docs`), strong typing, and validation.
 - **Neo4j Knowledge Graph**: Models the DICOM hierarchy `(:Patient)-[:HAS_STUDY]->(:Study)-[:HAS_SERIES]->(:Series)-[:HAS_INSTANCE]->(:Instance)` with uniqueness constraints and indexed lookup.
+- **Auditable & Immutable Entity System**: All nodes and relationships derive from `Auditable` featuring deterministic UUIDv5 IDs derived from canonical JSON property subsets, `test_id` telemetry isolation, UTC Cypher timestamps (`CreatedAt`, `ActedAt`, `ExpiresAt`), and immutable action logs (`Action`, `ActedBy`).
+- **Reserved `NOT_` Relationship Semantics**: Non-destructive relationship soft-deletion executing atomic property-cloning swaps to `NOT_<rel_type>` within managed Neo4j write transactions.
 - **pydicom & pynetdicom**: DICOM header parsing, file persistence, mock dataset generation, and network operations (C-ECHO SCU / Verification).
 - **Pykka Concurrency**: Actor model (`DicomIngestionActor`) for non-blocking asynchronous DICOM ingestion and background processing.
 - **UV & Python 3.14**: Managed with Astral `uv` on Python 3.14.5.
@@ -41,17 +43,21 @@ gosmart-dicom-py-graph-server/
 │   ├── __init__.py
 │   ├── dicom.py            # Patient, Study, Series, Instance models
 │   ├── graph.py            # Cypher and graph schema models
-│   └── health.py           # Health response models
+│   ├── health.py           # Health response models
+│   └── media.py            # StorageScheme, ParsedStorageUri, MediaMetadata
 ├── notebooks/              # Exploration and interactive experiments
 │   └── exploration.ipynb   # Interactive notebook for pydicom, neo4j, pykka, etc.
 ├── service/                # Business logic services
 │   ├── __init__.py
 │   ├── dicom_service.py    # pydicom parsing, mock generation, storage save
 │   ├── graph_service.py    # Cypher queries for DICOM hierarchy
+│   ├── media_service.py    # Storage-agnostic async media service (Local, UNC, GCS, S3, Azure)
 │   └── pynetdicom_service.py # Network AE, C-ECHO SCU verification
 ├── tests/                  # Test suite
+│   ├── assets/mr/          # 10 MR DICOM validation test assets
 │   ├── test_actor.py
-│   └── test_api.py
+│   ├── test_api.py
+│   └── test_media_service.py # Tests for local files, UNC, GCS, S3, Azure, actors
 ├── neo4j/                  # Local Neo4j Database (via Docker) Setup
 │   ├── docker-compose.yaml
 │   └── README.md           # Instructions
@@ -61,6 +67,33 @@ gosmart-dicom-py-graph-server/
 ├── pyproject.toml          # uv project definition & dependencies
 └── README.md
 ```
+
+---
+
+## ☁️ Storage Agnostic Media Service (`media_service.py`)
+
+`gosmart-dicom-py-graph-server` includes a unified, storage-agnostic `MediaService` (`service/media_service.py`) that abstracts file operations across local storage, Windows network shares, and multi-cloud providers.
+
+### Supported URI Schemes
+
+| Provider / Target | URI Scheme Prefix | Example URI |
+| :--- | :--- | :--- |
+| **Google Cloud Storage** | `gs://` (or `gcs://`) | `gs://my-dicom-bucket/mr_studies/MR.01.dcm` |
+| **Amazon S3** | `s3://` (or `s3a://`) | `s3://my-dicom-bucket/mr_studies/MR.01.dcm` |
+| **Azure Blob Storage** | `az://` (or `azure://`, `abfs://`) | `az://dicom-container/mr_studies/MR.01.dcm` |
+| **Local File** | `file://` (or absolute path) | `file:///data/storage/MR.01.dcm` |
+| **Windows UNC** | Denoted by backslash (`\\` or `\`) | `\\hospital-nas\imaging_share\MR.01.dcm` |
+
+### Cloud Credentials (SDK Standard Labels)
+
+The service automatically resolves credentials from standard environment variables:
+- **GCP**: `GOOGLE_APPLICATION_CREDENTIALS` (JSON key file path), `GOOGLE_CLOUD_PROJECT` / `GCP_PROJECT`, `GCS_ENDPOINT_URL` (emulator host)
+- **AWS**: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `AWS_DEFAULT_REGION` / `AWS_REGION`, `AWS_ENDPOINT_URL`
+- **Azure**: `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_ACCOUNT_NAME`, `AZURE_STORAGE_ACCOUNT_KEY`, `AZURE_STORAGE_SAS_TOKEN`
+
+### Asynchronous & Actor Execution
+
+All core operations in `media_service` (`read`, `write`, `exists`, `delete`, `stat`, `list_files`, `copy`, `move`, `read_dicom`, `write_dicom`) are asynchronous (`async def`). For Pykka actors running on worker threads (e.g. `pykka.ThreadingActor`) or synchronous scripts, `run_sync()` and sync method equivalents (`read_sync`, `write_sync`, etc.) are provided without event loop deadlocks.
 
 ---
 
@@ -74,13 +107,15 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_DB_USER` | `neo4j` | Neo4j Username |
 | `GOSMART_GS_DB_PASSWORD` | `password` | Neo4j Password |
 | `GOSMART_GS_DB_DATABASE` | `neo4j` | Neo4j Database Name |
-| `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI for raw DICOM files |
+| `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI (file://, gs://, s3://, az://, azure://, \\\\unc\\share) |
+
 | `GOSMART_GS_HOST` | `0.0.0.0` | FastAPI host binding |
 | `GOSMART_GS_PORT` | `8000` | FastAPI HTTP port |
 | `GOSMART_GS_RELOAD` | `true` | Uvicorn auto-reload |
 | `GOSMART_GS_LOG_LEVEL` | `INFO` | Server logging level |
 | `GOSMART_GS_DICOM_AE_TITLE` | `GOSMART_GS` | Local DICOM Application Entity Title |
 | `GOSMART_GS_DICOM_SCP_PORT` | `11112` | DICOM C-STORE / C-ECHO SCP Port |
+
 
 ---
 

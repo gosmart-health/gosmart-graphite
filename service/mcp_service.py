@@ -116,19 +116,60 @@ async def ingest_dicom_file(file_path: str, use_actor: bool = True) -> Dict[str,
 
 
 @mcp.tool()
-async def list_patients(limit: int = 50) -> List[Dict[str, Any]]:
+async def list_patients(
+    limit: int = 50,
+    include_tests: bool = False,
+    test_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Query list of patients and their study counts from Neo4j."""
-    patients = await graph_service.list_patients(limit=limit)
-    logger.info("mcp_patients_queried", count=len(patients), limit=limit)
+    patients = await graph_service.list_patients(limit=limit, include_tests=include_tests, test_id=test_id)
+    logger.info("mcp_patients_queried", count=len(patients), limit=limit, include_tests=include_tests)
     return patients
 
 
 @mcp.tool()
-async def get_patient_graph(patient_id: str) -> Dict[str, Any]:
+async def get_patient_graph(
+    patient_id: str,
+    include_tests: bool = False,
+) -> Dict[str, Any]:
     """Retrieve full DICOM graph hierarchy (Patient -> Studies -> Series -> Instances) for a patient."""
-    graph_data = await graph_service.get_patient_graph(patient_id=patient_id)
-    logger.info("mcp_patient_graph_queried", patient_id=patient_id, found=bool(graph_data))
+    graph_data = await graph_service.get_patient_graph(patient_id=patient_id, include_tests=include_tests)
+    logger.info("mcp_patient_graph_queried", patient_id=patient_id, found=bool(graph_data), include_tests=include_tests)
     return graph_data
+
+
+@mcp.tool()
+async def soft_delete_relationship(
+    start_node_id: str,
+    end_node_id: str,
+    rel_type: str,
+    acted_by: str = "mcp_agent",
+) -> Dict[str, Any]:
+    """Atomically soft-delete a relationship in Neo4j, cloning properties to NOT_<rel_type> under a transaction."""
+    res = await graph_service.soft_delete_relationship(
+        start_node_id=start_node_id,
+        end_node_id=end_node_id,
+        rel_type=rel_type,
+        acted_by=acted_by,
+    )
+    return {"success": bool(res), "relationship": res}
+
+
+@mcp.tool()
+async def restore_relationship(
+    start_node_id: str,
+    end_node_id: str,
+    rel_type: str,
+    acted_by: str = "mcp_agent",
+) -> Dict[str, Any]:
+    """Atomically restore a soft-deleted relationship in Neo4j back to <rel_type> under a write transaction."""
+    res = await graph_service.restore_relationship(
+        start_node_id=start_node_id,
+        end_node_id=end_node_id,
+        rel_type=rel_type,
+        acted_by=acted_by,
+    )
+    return {"success": bool(res), "relationship": res}
 
 
 @mcp.tool()

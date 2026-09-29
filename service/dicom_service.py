@@ -130,17 +130,16 @@ class DicomService:
         return self.parse_dataset(ds, storage_uri=storage_uri, file_size=file_size)
 
     def save_raw_dicom(self, content_or_dataset: Union[bytes, Dataset], sop_instance_uid: str) -> str:
-        """Persist a raw DICOM object into the configured storage directory."""
-        storage_dir = self.get_storage_path()
-        target_path = storage_dir / f"{sop_instance_uid}.dcm"
+        """Persist a raw DICOM object into the configured storage URI."""
+        from service.media_service import media_service
 
-        if isinstance(content_or_dataset, bytes):
-            with open(target_path, "wb") as f:
-                f.write(content_or_dataset)
-        elif isinstance(content_or_dataset, Dataset):
-            content_or_dataset.save_as(str(target_path))
+        root_uri = self.settings.STORAGE_ROOT_URI.rstrip("/")
+        target_uri = f"{root_uri}/{sop_instance_uid}.dcm"
 
-        return f"file://{target_path.resolve()}"
+        if isinstance(content_or_dataset, Dataset):
+            return media_service.write_dicom_sync(target_uri, content_or_dataset)
+        else:
+            return media_service.write_sync(target_uri, content_or_dataset)
 
     def create_mock_dicom(
         self,

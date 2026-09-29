@@ -19,7 +19,12 @@ class Neo4jClient:
         """Initialize Neo4j driver connections."""
         if self._async_driver is None:
             logger.info("Initializing Neo4j Async Driver with URI: %s", self.settings.DB_CONNECTION_URI)
-            auth = (self.settings.DB_USER, self.settings.DB_PASSWORD) if self.settings.DB_PASSWORD else None
+            password = (
+                self.settings.DB_PASSWORD.get_secret_value()
+                if hasattr(self.settings.DB_PASSWORD, "get_secret_value")
+                else str(self.settings.DB_PASSWORD)
+            )
+            auth = (self.settings.DB_USER, password) if password else None
             self._async_driver = AsyncGraphDatabase.driver(
                 self.settings.DB_CONNECTION_URI,
                 auth=auth,
@@ -30,7 +35,12 @@ class Neo4jClient:
     def get_sync_driver(self) -> Driver:
         """Obtain a synchronous driver (useful for Pykka threading actors)."""
         if self._sync_driver is None:
-            auth = (self.settings.DB_USER, self.settings.DB_PASSWORD) if self.settings.DB_PASSWORD else None
+            password = (
+                self.settings.DB_PASSWORD.get_secret_value()
+                if hasattr(self.settings.DB_PASSWORD, "get_secret_value")
+                else str(self.settings.DB_PASSWORD)
+            )
+            auth = (self.settings.DB_USER, password) if password else None
             self._sync_driver = GraphDatabase.driver(
                 self.settings.DB_CONNECTION_URI,
                 auth=auth,
@@ -52,6 +62,12 @@ class Neo4jClient:
             return False
         return False
 
+    async def get_async_driver(self) -> AsyncDriver:
+        """Obtain or initialize the asynchronous driver."""
+        if self._async_driver is None:
+            await self.connect()
+        return self._async_driver
+
     async def execute_query(
         self,
         query: str,
@@ -59,14 +75,34 @@ class Neo4jClient:
         database: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Run a Cypher query and return list of records as dictionaries."""
-        if not self._async_driver:
-            await self.connect()
-
+        driver = await self.get_async_driver()
         target_db = database or self.settings.DB_DATABASE
-        async with self._async_driver.session(database=target_db) as session:
+        async with driver.session(database=target_db) as session:
             result = await session.run(query, parameters or {})
             records = [record.data() async for record in result]
             return records
+
+    async def execute_write_tx(
+        self,
+        transaction_fn: Any,
+        database: Optional[str] = None,
+    ) -> Any:
+        """Execute a unit of work inside an explicit managed async write transaction."""
+        driver = await self.get_async_driver()
+        target_db = database or self.settings.DB_DATABASE
+        async with driver.session(database=target_db) as session:
+            return await session.execute_write(transaction_fn)
+
+    def execute_write_tx_sync(
+        self,
+        transaction_fn: Any,
+        database: Optional[str] = None,
+    ) -> Any:
+        """Execute a unit of work synchronously inside an explicit write transaction."""
+        driver = self.get_sync_driver()
+        target_db = database or self.settings.DB_DATABASE
+        with driver.session(database=target_db) as session:
+            return session.execute_write(transaction_fn)
 
     async def close(self) -> None:
         """Close driver connections."""
