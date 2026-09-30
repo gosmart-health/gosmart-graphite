@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -227,6 +227,84 @@ class InstanceNode(AuditableNode):
         return {"entity": self.__label__, "sop_instance_uid": self.sop_instance_uid}
 
 
+class SystemNode(AuditableNode):
+    """Graph node representing the immutable root System."""
+
+    __label__: ClassVar[str] = "System"
+
+    name: str = Field(default="GoSmart Health VNA", description="Name of the system")
+    owner: str = Field(default="GoSmart Health", description="Name of the owner user or organization")
+    address: str = Field(default="Half Moon Bay, California", description="Physical address string")
+    email: str = Field(default="admin@gosmart.health", description="Email address of the owner (non-auth)")
+    phone: str = Field(default="+1 (650) 535-0097", description="Phone number of the owner (non-auth)")
+    serial_number: str = Field(default="GSH-VNA-0001", description="System serial number")
+    installed_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="Installation UTC DateTime",
+    )
+
+    def get_identity_subset(self) -> Dict[str, Any]:
+        subset: Dict[str, Any] = {"entity": self.__label__}
+        if self.test_id:
+            subset["test_id"] = self.test_id
+        return subset
+
+
+class DICOMConfigurationNode(AuditableNode):
+    """Graph node representing a DICOM protocol configuration (DIMSE and DICOMweb)."""
+
+    __label__: ClassVar[str] = "DICOMConfiguration"
+
+    ae_title: str = Field(default="*", description="Application Entity Title (* for promiscuous SCP)")
+    roles: List[str] = Field(default_factory=lambda: ["SCP"], description="Roles: SCP, SCU")
+    host: str = Field(default="0.0.0.0", description="Host or bind address")
+    port: int = Field(default=11112, description="TCP port")
+    is_promiscuous: bool = Field(default=False, description="Promiscuous mode flag (True when ae_title is *)")
+    tls_enabled: bool = Field(default=False, description="Whether TLS is enabled")
+    tls_cert_path: Optional[str] = Field(default=None, description="Path to TLS certificate file")
+    tls_key_path: Optional[str] = Field(default=None, description="Path to TLS private key file")
+    tls_ca_path: Optional[str] = Field(default=None, description="Path to TLS CA bundle")
+    tls_ciphers: Optional[List[str]] = Field(default=None, description="Allowed TLS ciphers")
+    dicom_services: List[str] = Field(
+        default_factory=lambda: ["*"],
+        description="Supported DICOM services or SOP Classes (* accepts all)",
+    )
+    transfer_syntaxes: List[str] = Field(
+        default_factory=lambda: ["*"],
+        description="Proposed or acceptable transfer syntaxes (* accepts all)",
+    )
+    dicomweb_enabled: bool = Field(default=True, description="Enable DICOMweb support")
+    dicomweb_url_prefix: Optional[str] = Field(default="/dicomweb", description="DICOMweb URL prefix")
+    dicomweb_qido_enabled: bool = Field(default=True, description="Enable QIDO-RS")
+    dicomweb_wado_enabled: bool = Field(default=True, description="Enable WADO-RS")
+    dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
+    description: Optional[str] = Field(default=None, description="Human readable description")
+
+    @model_validator(mode="before")
+    @classmethod
+    def compute_promiscuous_flag(cls, data: Any) -> Any:
+        if isinstance(data, dict) and data.get("ae_title") == "*":
+            data.setdefault("is_promiscuous", True)
+        return data
+
+    @model_validator(mode="after")
+    def sync_promiscuous_flag(self) -> "DICOMConfigurationNode":
+        if self.ae_title == "*" and not self.is_promiscuous:
+            object.__setattr__(self, "is_promiscuous", True)
+        return self
+
+    def get_identity_subset(self) -> Dict[str, Any]:
+        subset: Dict[str, Any] = {
+            "entity": self.__label__,
+            "ae_title": self.ae_title,
+            "host": self.host,
+            "port": self.port,
+        }
+        if self.test_id:
+            subset["test_id"] = self.test_id
+        return subset
+
+
 # Concrete DICOM Graph Relationships
 
 
@@ -246,6 +324,12 @@ class HasInstanceRelation(AuditableRelation):
     """Relationship connecting Series -> Instance."""
 
     __type__: ClassVar[str] = "HAS_INSTANCE"
+
+
+class HasDicomConfigurationRelation(AuditableRelation):
+    """Relationship connecting System -> DICOMConfiguration."""
+
+    __type__: ClassVar[str] = "HAS_DICOM_CONFIGURATION"
 
 
 # Generic Query Models

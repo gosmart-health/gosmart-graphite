@@ -46,6 +46,9 @@ The system combines:
 | **REQ-FUN-018** | Standardized Environment Configuration | The system SHALL manage all runtime parameters via Pydantic Settings using the uniform prefix `GOSMART_GS_` with `.env` file fallback. | High |
 | **REQ-FUN-019** | Mock DICOM Synthesis | The system SHALL provide on-the-fly synthesis of valid DICOM composite instances for unit testing, integration testing, and simulation without external dependencies. | Medium |
 | **REQ-FUN-020** | Health Check & Degradation Resilience | The system SHALL provide a health check endpoint and CLI status report detailing Neo4j, Pykka, and storage status, continuing to run in DEGRADED mode if the graph database is temporarily offline. | High |
+| **REQ-FUN-021** | System Node & Enterprise Metadata | The system SHALL maintain an immutable root `(:System)` node representing the deployment environment, persisting `name`, `owner`, `address`, `email`, `phone`, `serial_number`, and `installed_at` with default GoSmart Health organizational placeholders. | High |
+| **REQ-FUN-022** | DICOMConfiguration & Promiscuous SCP Support | The system SHALL support multiple `(:DICOMConfiguration)` nodes linked via `[:HAS_DICOM_CONFIGURATION]`, capturing DIMSE and DICOMweb protocols, TLS settings, SOP services, transfer syntaxes, and promiscuous SCP mode via wildcard `ae_title = "*"`. | High |
+| **REQ-FUN-023** | System & Configuration Management APIs and MCP Tools | The system SHALL provide REST endpoints (`/api/v1/system`, `/api/v1/configurations/dicom`) and MCP administrative tools (`get_system_info`, `update_system_info`, `bootstrap_system_defaults`, `list_dicom_configurations`, `create_dicom_configuration`, `update_dicom_configuration`, `delete_dicom_configuration`, `restore_dicom_configuration`) for full lifecycle CRUD and auditing. | High |
 
 ---
 

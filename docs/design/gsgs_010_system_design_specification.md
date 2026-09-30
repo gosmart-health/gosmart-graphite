@@ -79,9 +79,13 @@ graph TD
   - `Auditable`: Base model providing `id`, `test_id`, `Action` (`CREATE`, `UPDATE`, `DELETE`, `RESTORE`), `ActedAt`, `ActedBy`, `CreatedAt`, `UpdatedAt`, and `ExpiresAt` (all timestamps Cypher `datetime({timezone: 'UTC'})`).
   - `AuditableNode`: Base node with single static class label enforcement (`__label__`).
   - `AuditableRelation`: Base relationship with single static class type enforcement (`__type__`) and reserved `NOT_` negation semantics.
-  - Concrete Nodes: `PatientNode` (`:Patient`), `StudyNode` (`:Study`), `SeriesNode` (`:Series`), `InstanceNode` (`:Instance`).
-  - Concrete Relationships: `HasStudyRelation` (`HAS_STUDY`), `HasSeriesRelation` (`HAS_SERIES`), `HasInstanceRelation` (`HAS_INSTANCE`).
+  - Concrete Nodes: `PatientNode` (`:Patient`), `StudyNode` (`:Study`), `SeriesNode` (`:Series`), `InstanceNode` (`:Instance`), `SystemNode` (`:System`), `DICOMConfigurationNode` (`:DICOMConfiguration`).
+  - Concrete Relationships: `HasStudyRelation` (`HAS_STUDY`), `HasSeriesRelation` (`HAS_SERIES`), `HasInstanceRelation` (`HAS_INSTANCE`), `HasDicomConfigurationRelation` (`HAS_DICOM_CONFIGURATION`).
   - Generic query models: `CypherQueryRequest`, `GraphNode`, `GraphRelationship`, `GraphQueryResult`.
+* **`system.py`**: Pydantic DTO models for system and protocol configurations:
+  - `SystemResponse`, `SystemUpdateRequest`: Root environment metadata with owner contact information and serial numbers.
+  - `DICOMConfigurationResponse`, `DICOMConfigurationCreateRequest`, `DICOMConfigurationUpdateRequest`: DIMSE/DICOMweb parameters, TLS security settings, services, transfer syntaxes, and promiscuous mode support.
+  - `SystemBootstrapResponse`: Idempotent environment initialization status.
 * **`dicom.py`**: Pydantic models for domain entities:
   - `PatientModel`: `patient_id`, `patient_name`, `patient_birth_date`, `patient_sex`
   - `StudyModel`: `study_instance_uid`, `study_date`, `study_time`, `study_description`, `accession_number`
@@ -92,6 +96,10 @@ graph TD
 * **`health.py`**: Health models (`ServiceHealth`, `HealthResponse`).
 
 ### 3.4 Services Subsystem (`service/`)
+* **`system_service.py`**:
+  - `bootstrap_system()`: Ensures the root `System` node exists with default organizational placeholders and connects the primary promiscuous DICOM configuration (`ae_title="*"`) matching `config.py`.
+  - Manages full CRUD operations for `System` and `DICOMConfiguration` nodes.
+  - Handles relationship soft-deletion (`NOT_HAS_DICOM_CONFIGURATION`) and restoration (`HAS_DICOM_CONFIGURATION`).
 * **`media_service.py`**:
   - Storage-agnostic media service implementing unified read, write, exists, delete, stat, list_files, copy, move, and DICOM dataset read/write.
   - Multi-provider URI support: Local files (`file://`), Windows UNC (`\\server\share`), Google Cloud Storage (`gs://`), Amazon S3 (`s3://`), and Azure Blob (`az://` or `azure://`).
@@ -116,7 +124,7 @@ graph TD
   - WADO-RS: Single instance Part-10 file retrieval and multipart/related bulk retrieval for studies and series by resolving `storage_uri` via `media_service`.
   - STOW-RS: Ingestion endpoint supporting raw binary and `multipart/related` payloads with blackbox persistence and instance provenance tracking.
 * **`mcp_service.py`**:
-  - Exposes 9 tools: `health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `soft_delete_relationship`, `restore_relationship`, `execute_cypher`, `echo_scu`.
+  - Exposes administrative and diagnostic MCP tools: `health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `soft_delete_relationship`, `restore_relationship`, `execute_cypher`, `echo_scu`, `get_system_info`, `update_system_info`, `bootstrap_system_defaults`, `list_dicom_configurations`, `get_dicom_configuration`, `create_dicom_configuration`, `update_dicom_configuration`, `delete_dicom_configuration`, `restore_dicom_configuration`.
 
 
 ### 3.5 Actor Subsystem (`actor/`)
@@ -176,7 +184,29 @@ erDiagram
         string DestinationIdentity
         datetime created_at
     }
+    SYSTEM {
+        string id PK
+        string name
+        string owner
+        string address
+        string email
+        string phone
+        string serial_number
+        datetime installed_at
+        datetime created_at
+    }
+    DICOM_CONFIGURATION {
+        string id PK
+        string ae_title
+        string roles
+        string host
+        int port
+        boolean is_promiscuous
+        boolean tls_enabled
+        datetime created_at
+    }
 
+    SYSTEM ||--o{ DICOM_CONFIGURATION : HAS_DICOM_CONFIGURATION
     PATIENT ||--o{ STUDY : HAS_STUDY
     STUDY ||--o{ SERIES : HAS_SERIES
     SERIES ||--o{ INSTANCE : HAS_INSTANCE

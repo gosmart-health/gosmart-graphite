@@ -35,6 +35,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         await neo4j_client.connect()
         await graph_service.init_schema_constraints()
+        from service.system_service import system_service
+
+        await system_service.bootstrap_system()
     except Exception as e:
         logger.warning("neo4j_init_notice", error=str(e))
 

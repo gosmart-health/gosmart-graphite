@@ -1,7 +1,7 @@
-import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from core.logging import get_logger
 from db.neo4j import Neo4jClient, neo4j_client
 from model.dicom import DicomHierarchy
 from model.graph import (
@@ -10,7 +10,7 @@ from model.graph import (
     to_positive_relation_type,
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger("gosmart_gs.graph")
 
 INGEST_CYPHER = """
 MERGE (p:Patient {id: $patient.id})
@@ -430,6 +430,11 @@ class GraphService:
             (
                 "CREATE CONSTRAINT instance_uid_unique IF NOT EXISTS "
                 "FOR (i:Instance) REQUIRE i.sop_instance_uid IS UNIQUE"
+            ),
+            "CREATE CONSTRAINT system_sys_id_unique IF NOT EXISTS FOR (sys:System) REQUIRE sys.id IS UNIQUE",
+            (
+                "CREATE CONSTRAINT dicom_config_sys_id_unique IF NOT EXISTS "
+                "FOR (c:DICOMConfiguration) REQUIRE c.id IS UNIQUE"
             ),
         ]
         if not await self.client.verify_connectivity():

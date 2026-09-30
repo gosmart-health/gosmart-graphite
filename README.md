@@ -141,7 +141,26 @@ Interactive Swagger documentation will be available at:
 - **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
 - **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
 
-### 3. Run Tests
+### 3. System & DICOM Configurations API & MCP
+
+The server automatically bootstraps an immutable root `(:System)` node linked to a primary promiscuous DICOM entry (`ae_title = "*"`):
+
+#### REST Endpoints:
+- `GET /api/v1/system` — Inspect System metadata (`name`, `owner`, `address`, `email`, `phone`, `serial_number`, `installed_at`) and attached configurations.
+- `PUT /api/v1/system` — Installer update of mutable System properties.
+- `POST /api/v1/system/bootstrap` — Idempotent environment bootstrap.
+- `GET /api/v1/configurations/dicom` — Query active configurations (filters: `role`, `is_promiscuous`, `include_tests`).
+- `POST /api/v1/configurations/dicom` — Register a new DICOMConfiguration node.
+- `GET /api/v1/configurations/dicom/{id}` — Retrieve single configuration.
+- `PUT /api/v1/configurations/dicom/{id}` — Update configuration properties.
+- `DELETE /api/v1/configurations/dicom/{id}` — Soft delete (sets `Action="DELETE"` and negates relationship to `NOT_HAS_DICOM_CONFIGURATION`).
+- `POST /api/v1/configurations/dicom/{id}/restore` — Restore soft-deleted configuration.
+
+#### MCP Administrative Tools:
+- `get_system_info`, `update_system_info`, `bootstrap_system_defaults`
+- `list_dicom_configurations`, `get_dicom_configuration`, `create_dicom_configuration`, `update_dicom_configuration`, `delete_dicom_configuration`, `restore_dicom_configuration`
+
+### 4. Run Tests
 
 ```bash
 uv run pytest
