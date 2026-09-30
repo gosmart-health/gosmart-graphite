@@ -110,6 +110,11 @@ graph TD
 * **`pynetdicom_service.py`**:
   - Configures Application Entity (`GOSMART_GS`) with presentation contexts for C-STORE, C-FIND, C-GET, C-MOVE, and C-ECHO.
   - Handles C-ECHO SCU ping execution.
+* **`dicomweb_service.py`**:
+  - Implements DICOMweb (PS 3.18) operations backed by Neo4j Knowledge Graph.
+  - QIDO-RS: Fast query engine for Studies, Series, and Instances directly from graph node properties, computing live series/instance counts and modalities via relationship traversal.
+  - WADO-RS: Single instance Part-10 file retrieval and multipart/related bulk retrieval for studies and series by resolving `storage_uri` via `media_service`.
+  - STOW-RS: Ingestion endpoint supporting raw binary and `multipart/related` payloads with blackbox persistence and instance provenance tracking.
 * **`mcp_service.py`**:
   - Exposes 9 tools: `health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `soft_delete_relationship`, `restore_relationship`, `execute_cypher`, `echo_scu`.
 

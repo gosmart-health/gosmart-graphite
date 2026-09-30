@@ -105,3 +105,177 @@ def test_dicomweb_stow_rs_provenance(client):
         assert msg["destination"].startswith("stow:")
         assert msg["destination_identity"] == "service:dicomweb"
         assert msg["acted_by"] == "user:dr_watson"
+
+
+def test_dicomweb_qido_series_and_instances(client):
+    """Verify QIDO-RS series and instance level queries."""
+    ds = dicom_service.create_mock_dicom(
+        patient_id="QIDO-SERIES-001",
+        modality="CT",
+        study_description="QIDO Test Study",
+    )
+    study_uid = ds.StudyInstanceUID
+    series_uid = ds.SeriesInstanceUID
+    sop_uid = ds.SOPInstanceUID
+    dicom_service.save_raw_dicom(ds, sop_uid)
+
+    # Ingest into graph synchronously if Neo4j is available
+    hierarchy = dicom_service.parse_dataset(ds)
+    hierarchy.test_id = "test_qido_series"
+    from service.graph_service import graph_service
+
+    try:
+        graph_service.save_hierarchy_sync(hierarchy)
+    except Exception:
+        pass
+
+    # 1. Query series
+    res_series = client.get(f"/dicomweb/studies/{study_uid}/series")
+    assert res_series.status_code == 200
+    assert res_series.headers["content-type"] == "application/dicom+json"
+    series_list = res_series.json()
+    assert isinstance(series_list, list)
+
+    # 2. Query instances
+    res_inst = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}/instances")
+    assert res_inst.status_code == 200
+    assert res_inst.headers["content-type"] == "application/dicom+json"
+    inst_list = res_inst.json()
+    assert isinstance(inst_list, list)
+
+
+def test_dicomweb_wado_series_and_study_bulk(client):
+    """Verify WADO-RS study and series bulk retrieval returns multipart/related."""
+    ds1 = dicom_service.create_mock_dicom(
+        patient_id="BULK-TEST-001",
+        modality="MR",
+    )
+    study_uid = ds1.StudyInstanceUID
+    series_uid = ds1.SeriesInstanceUID
+    dicom_service.save_raw_dicom(ds1, ds1.SOPInstanceUID)
+
+    # Study bulk retrieval
+    res_study = client.get(f"/dicomweb/studies/{study_uid}")
+    assert res_study.status_code == 200
+    assert "multipart/related" in res_study.headers["content-type"]
+    assert b"Content-Type: application/dicom" in res_study.content
+
+    # Series bulk retrieval
+    res_series = client.get(f"/dicomweb/studies/{study_uid}/series/{series_uid}")
+    assert res_series.status_code == 200
+    assert "multipart/related" in res_series.headers["content-type"]
+    assert b"Content-Type: application/dicom" in res_series.content
+
+
+def test_dicomweb_stow_rs_multipart(client):
+    """Verify STOW-RS supports multipart/related payloads with multiple instances."""
+    ds1 = dicom_service.create_mock_dicom(
+        patient_id="MULTI-STOW-001",
+        modality="CT",
+    )
+    ds2 = dicom_service.create_mock_dicom(
+        patient_id="MULTI-STOW-001",
+        modality="CT",
+    )
+
+    buf1 = io.BytesIO()
+    ds1.save_as(buf1, enforce_file_format=True)
+    buf2 = io.BytesIO()
+    ds2.save_as(buf2, enforce_file_format=True)
+
+    boundary = "TEST_MULTIPART_BOUNDARY"
+    body = (
+        f"--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode()
+        + buf1.getvalue()
+        + f"\r\n--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode()
+        + buf2.getvalue()
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+
+    response = client.post(
+        "/dicomweb/studies",
+        content=body,
+        headers={"Content-Type": f'multipart/related; type="application/dicom"; boundary={boundary}'},
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/dicom+json"
+    data = response.json()
+    assert "00081199" in data
+    referenced = data["00081199"]["Value"]
+    assert len(referenced) == 2
+    uids = [item["00081155"]["Value"][0] for item in referenced]
+    assert ds1.SOPInstanceUID in uids
+    assert ds2.SOPInstanceUID in uids
+
+
+def test_dicomweb_graph_qido_live_traversal(client):
+    """Verify QIDO-RS reads directly from Neo4j Knowledge Graph with live traversal counts."""
+    from pydicom.uid import generate_uid
+
+    from db.neo4j import neo4j_client
+    from service.graph_service import graph_service
+
+    try:
+        neo4j_client.get_sync_driver().verify_connectivity()
+    except Exception:
+        pytest.skip("Neo4j database is not reachable")
+
+    test_study_uid = generate_uid()
+    test_patient_id = "PT-QIDO-GRAPH-01"
+
+    # Create 2 slices in Series 1 (MR) and 1 slice in Series 2 (CT) under the same study
+    ds_mr1 = dicom_service.create_mock_dicom(
+        patient_id=test_patient_id,
+        patient_name="TEST^GRAPH^QIDO",
+        modality="MR",
+        study_description="Brain Multi-Sequence",
+    )
+    ds_mr1.StudyInstanceUID = test_study_uid
+
+    ds_mr2 = dicom_service.create_mock_dicom(
+        patient_id=test_patient_id,
+        patient_name="TEST^GRAPH^QIDO",
+        modality="MR",
+        study_description="Brain Multi-Sequence",
+    )
+    ds_mr2.StudyInstanceUID = test_study_uid
+    ds_mr2.SeriesInstanceUID = ds_mr1.SeriesInstanceUID
+    ds_mr2.SeriesNumber = 1
+
+    ds_ct = dicom_service.create_mock_dicom(
+        patient_id=test_patient_id,
+        patient_name="TEST^GRAPH^QIDO",
+        modality="CT",
+        study_description="Brain Multi-Sequence",
+    )
+    ds_ct.StudyInstanceUID = test_study_uid
+    ds_ct.SeriesNumber = 2
+
+    # Ingest into Neo4j
+    for ds in (ds_mr1, ds_mr2, ds_ct):
+        h = dicom_service.parse_dataset(ds)
+        h.test_id = "test_qido_graph_live"
+        graph_service.save_hierarchy_sync(h)
+
+    # Execute QIDO query via HTTP endpoint
+    response = client.get(f"/dicomweb/studies?StudyInstanceUID={test_study_uid}")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/dicom+json"
+    studies = response.json()
+    assert len(studies) == 1
+    study_json = studies[0]
+
+    # Verify Patient & Study Properties read directly from graph
+    assert study_json["00100020"]["Value"][0] == test_patient_id
+    assert study_json["00100010"]["Value"][0]["Alphabetic"] == "TEST^GRAPH^QIDO"
+    assert study_json["00081030"]["Value"][0] == "Brain Multi-Sequence"
+    assert study_json["0020000D"]["Value"][0] == test_study_uid
+
+    # Verify traversal-computed live counts: 2 series, 3 instances
+    assert study_json["00201206"]["Value"][0] == 2  # NumberOfStudyRelatedSeries
+    assert study_json["00201208"]["Value"][0] == 3  # NumberOfStudyRelatedInstances
+
+    # Verify collected modalities: both 'MR' and 'CT'
+    modalities = study_json["00080061"]["Value"]
+    assert "MR" in modalities
+    assert "CT" in modalities

@@ -448,5 +448,360 @@ class GraphService:
 
         self._constraints_initialized = True
 
+    async def search_studies_qido(
+        self,
+        patient_id: Optional[str] = None,
+        study_uid: Optional[str] = None,
+        study_date: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """QIDO-RS: Search for studies traversing to Series and Instances to compute real counts."""
+        query = """
+        MATCH (p:Patient)-[:HAS_STUDY]->(s:Study)
+        WHERE (s.Action IS NULL OR s.Action <> 'DELETE')
+          AND (s.ExpiresAt IS NULL OR s.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($patient_id IS NULL OR p.patient_id = $patient_id)
+          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
+          AND ($study_date IS NULL OR s.study_date = $study_date)
+          AND (
+            $include_tests = true
+            OR s.test_id IS NULL
+            OR s.test_id = ''
+            OR ($test_id IS NOT NULL AND s.test_id = $test_id)
+          )
+        OPTIONAL MATCH (s)-[:HAS_SERIES]->(se:Series)
+          WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
+            AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
+        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
+          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN p.patient_id AS patient_id,
+               p.patient_name AS patient_name,
+               p.patient_birth_date AS patient_birth_date,
+               p.patient_sex AS patient_sex,
+               s.study_instance_uid AS study_instance_uid,
+               s.study_date AS study_date,
+               s.study_time AS study_time,
+               s.study_description AS study_description,
+               s.accession_number AS accession_number,
+               collect(distinct se.modality) AS modalities,
+               count(distinct se) AS num_series,
+               count(distinct i) AS num_instances
+        ORDER BY s.study_date DESC, s.study_time DESC
+        LIMIT $limit
+        """
+        return await self.client.execute_query(
+            query,
+            {
+                "patient_id": patient_id,
+                "study_uid": study_uid,
+                "study_date": study_date,
+                "include_tests": include_tests,
+                "test_id": test_id,
+                "limit": limit,
+            },
+        )
+
+    def search_studies_qido_sync(
+        self,
+        patient_id: Optional[str] = None,
+        study_uid: Optional[str] = None,
+        study_date: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronous QIDO-RS search for studies."""
+        query = """
+        MATCH (p:Patient)-[:HAS_STUDY]->(s:Study)
+        WHERE (s.Action IS NULL OR s.Action <> 'DELETE')
+          AND (s.ExpiresAt IS NULL OR s.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($patient_id IS NULL OR p.patient_id = $patient_id)
+          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
+          AND ($study_date IS NULL OR s.study_date = $study_date)
+          AND (
+            $include_tests = true
+            OR s.test_id IS NULL
+            OR s.test_id = ''
+            OR ($test_id IS NOT NULL AND s.test_id = $test_id)
+          )
+        OPTIONAL MATCH (s)-[:HAS_SERIES]->(se:Series)
+          WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
+            AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
+        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
+          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN p.patient_id AS patient_id,
+               p.patient_name AS patient_name,
+               p.patient_birth_date AS patient_birth_date,
+               p.patient_sex AS patient_sex,
+               s.study_instance_uid AS study_instance_uid,
+               s.study_date AS study_date,
+               s.study_time AS study_time,
+               s.study_description AS study_description,
+               s.accession_number AS accession_number,
+               collect(distinct se.modality) AS modalities,
+               count(distinct se) AS num_series,
+               count(distinct i) AS num_instances
+        ORDER BY s.study_date DESC, s.study_time DESC
+        LIMIT $limit
+        """
+        driver = self.client.get_sync_driver()
+        with driver.session() as session:
+            result = session.run(
+                query,
+                patient_id=patient_id,
+                study_uid=study_uid,
+                study_date=study_date,
+                include_tests=include_tests,
+                test_id=test_id,
+                limit=limit,
+            )
+            return [record.data() for record in result]
+
+    async def search_series_qido(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        modality: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """QIDO-RS: Search for series with real instance counts via traversal."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
+        WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
+          AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
+          AND ($modality IS NULL OR se.modality = $modality)
+          AND (
+            $include_tests = true
+            OR se.test_id IS NULL
+            OR se.test_id = ''
+            OR ($test_id IS NOT NULL AND se.test_id = $test_id)
+          )
+        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
+          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               se.series_number AS series_number,
+               se.modality AS modality,
+               se.series_description AS series_description,
+               se.body_part_examined AS body_part_examined,
+               count(distinct i) AS num_instances
+        ORDER BY se.series_number ASC
+        LIMIT $limit
+        """
+        return await self.client.execute_query(
+            query,
+            {
+                "study_uid": study_uid,
+                "series_uid": series_uid,
+                "modality": modality,
+                "include_tests": include_tests,
+                "test_id": test_id,
+                "limit": limit,
+            },
+        )
+
+    def search_series_qido_sync(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        modality: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronous QIDO-RS search for series."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
+        WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
+          AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
+          AND ($modality IS NULL OR se.modality = $modality)
+          AND (
+            $include_tests = true
+            OR se.test_id IS NULL
+            OR se.test_id = ''
+            OR ($test_id IS NOT NULL AND se.test_id = $test_id)
+          )
+        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
+          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               se.series_number AS series_number,
+               se.modality AS modality,
+               se.series_description AS series_description,
+               se.body_part_examined AS body_part_examined,
+               count(distinct i) AS num_instances
+        ORDER BY se.series_number ASC
+        LIMIT $limit
+        """
+        driver = self.client.get_sync_driver()
+        with driver.session() as session:
+            result = session.run(
+                query,
+                study_uid=study_uid,
+                series_uid=series_uid,
+                modality=modality,
+                include_tests=include_tests,
+                test_id=test_id,
+                limit=limit,
+            )
+            return [record.data() for record in result]
+
+    async def search_instances_qido(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        sop_uid: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """QIDO-RS: Search for instances."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR i.sop_instance_uid = $sop_uid)
+          AND (
+            $include_tests = true
+            OR i.test_id IS NULL
+            OR i.test_id = ''
+            OR ($test_id IS NOT NULL AND i.test_id = $test_id)
+          )
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               i.sop_instance_uid AS sop_instance_uid,
+               i.sop_class_uid AS sop_class_uid,
+               i.instance_number AS instance_number,
+               i.storage_uri AS storage_uri
+        ORDER BY i.instance_number ASC
+        LIMIT $limit
+        """
+        return await self.client.execute_query(
+            query,
+            {
+                "study_uid": study_uid,
+                "series_uid": series_uid,
+                "sop_uid": sop_uid,
+                "include_tests": include_tests,
+                "test_id": test_id,
+                "limit": limit,
+            },
+        )
+
+    def search_instances_qido_sync(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        sop_uid: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronous QIDO-RS search for instances."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR i.sop_instance_uid = $sop_uid)
+          AND (
+            $include_tests = true
+            OR i.test_id IS NULL
+            OR i.test_id = ''
+            OR ($test_id IS NOT NULL AND i.test_id = $test_id)
+          )
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               i.sop_instance_uid AS sop_instance_uid,
+               i.sop_class_uid AS sop_class_uid,
+               i.instance_number AS instance_number,
+               i.storage_uri AS storage_uri
+        ORDER BY i.instance_number ASC
+        LIMIT $limit
+        """
+        driver = self.client.get_sync_driver()
+        with driver.session() as session:
+            result = session.run(
+                query,
+                study_uid=study_uid,
+                series_uid=series_uid,
+                sop_uid=sop_uid,
+                include_tests=include_tests,
+                test_id=test_id,
+                limit=limit,
+            )
+            return [record.data() for record in result]
+
+    def get_instance_storage_uri_sync(self, sop_uid: str) -> Optional[str]:
+        """Resolve storage URI for an instance synchronously from Neo4j."""
+        query = """
+        MATCH (i:Instance {sop_instance_uid: $sop_uid})
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN i.storage_uri AS storage_uri
+        LIMIT 1
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, sop_uid=sop_uid)
+                record = result.single()
+                if record:
+                    return record.get("storage_uri")
+        except Exception as e:
+            logger.warning("graph_instance_storage_uri_failed", sop_uid=sop_uid, error=str(e))
+        return None
+
+    def get_series_storage_uris_sync(self, study_uid: str, series_uid: str) -> List[Dict[str, str]]:
+        """Resolve all storage URIs for a series synchronously from Neo4j."""
+        query = """
+        MATCH (s:Study {study_instance_uid: $study_uid})
+              -[:HAS_SERIES]->(se:Series {series_instance_uid: $series_uid})
+              -[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN i.sop_instance_uid AS sop_instance_uid, i.storage_uri AS storage_uri
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, study_uid=study_uid, series_uid=series_uid)
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_series_storage_uris_failed", study_uid=study_uid, series_uid=series_uid, error=str(e))
+        return []
+
+    def get_study_storage_uris_sync(self, study_uid: str) -> List[Dict[str, str]]:
+        """Resolve all storage URIs for a study synchronously from Neo4j."""
+        query = """
+        MATCH (s:Study {study_instance_uid: $study_uid})-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN i.sop_instance_uid AS sop_instance_uid, i.storage_uri AS storage_uri
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, study_uid=study_uid)
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_study_storage_uris_failed", study_uid=study_uid, error=str(e))
+        return []
+
 
 graph_service = GraphService()
