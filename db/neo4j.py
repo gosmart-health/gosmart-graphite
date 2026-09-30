@@ -107,13 +107,21 @@ class Neo4jClient:
     async def close(self) -> None:
         """Close driver connections."""
         if self._async_driver is not None:
-            logger.info("Closing Neo4j Async Driver")
-            await self._async_driver.close()
-            self._async_driver = None
+            try:
+                logger.info("Closing Neo4j Async Driver")
+                await self._async_driver.close()
+            except Exception as e:
+                logger.debug("async_driver_close_warning", error=str(e))
+            finally:
+                self._async_driver = None
         if self._sync_driver is not None:
-            logger.info("Closing Neo4j Sync Driver")
-            self._sync_driver.close()
-            self._sync_driver = None
+            try:
+                logger.info("Closing Neo4j Sync Driver")
+                self._sync_driver.close()
+            except Exception as e:
+                logger.debug("sync_driver_close_warning", error=str(e))
+            finally:
+                self._sync_driver = None
 
 
 # Singleton instance

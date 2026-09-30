@@ -808,5 +808,123 @@ class GraphService:
             logger.warning("graph_study_storage_uris_failed", study_uid=study_uid, error=str(e))
         return []
 
+    def find_patient_records_sync(
+        self,
+        patient_id: Optional[str] = None,
+        patient_name: Optional[str] = None,
+        include_tests: bool = True,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronous search for Patient Root C-FIND queries."""
+        query = """
+        MATCH (p:Patient)
+        WHERE (p.Action IS NULL OR p.Action <> 'DELETE')
+          AND (p.ExpiresAt IS NULL OR p.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND (
+            $patient_id IS NULL OR $patient_id = '' OR $patient_id = '*'
+            OR p.patient_id = $patient_id OR toLower(p.patient_id) CONTAINS toLower(replace($patient_id, '*', ''))
+          )
+          AND (
+            $patient_name IS NULL OR $patient_name = '' OR $patient_name = '*'
+            OR p.patient_name = $patient_name
+            OR toLower(p.patient_name) CONTAINS toLower(replace($patient_name, '*', ''))
+          )
+          AND (
+            $include_tests = true
+            OR p.test_id IS NULL
+            OR p.test_id = ''
+            OR ($test_id IS NOT NULL AND p.test_id = $test_id)
+          )
+        RETURN p.patient_id AS patient_id,
+               p.patient_name AS patient_name,
+               p.patient_birth_date AS patient_birth_date,
+               p.patient_sex AS patient_sex
+        ORDER BY p.patient_id ASC
+        LIMIT $limit
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(
+                    query,
+                    patient_id=patient_id,
+                    patient_name=patient_name,
+                    include_tests=include_tests,
+                    test_id=test_id,
+                    limit=limit,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_find_patients_failed", error=str(e), exc_info=True)
+            return []
+
+    def find_instances_for_retrieve_sync(
+        self,
+        level: str,
+        patient_id: Optional[str] = None,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        sop_uid: Optional[str] = None,
+        include_tests: bool = True,
+        test_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Synchronously retrieve instance records and storage URIs for C-MOVE and C-GET."""
+        query = """
+        MATCH (p:Patient)-[:HAS_STUDY]->(s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($patient_id IS NULL OR $patient_id = '' OR p.patient_id = $patient_id)
+          AND ($study_uid IS NULL OR $study_uid = '' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR $sop_uid = '' OR i.sop_instance_uid = $sop_uid)
+          AND (
+            $include_tests = true
+            OR i.test_id IS NULL
+            OR i.test_id = ''
+            OR ($test_id IS NOT NULL AND i.test_id = $test_id)
+          )
+        RETURN i.sop_instance_uid AS sop_instance_uid,
+               i.sop_class_uid AS sop_class_uid,
+               i.storage_uri AS storage_uri
+        ORDER BY i.instance_number ASC, i.sop_instance_uid ASC
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(
+                    query,
+                    patient_id=patient_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                    sop_uid=sop_uid,
+                    include_tests=include_tests,
+                    test_id=test_id,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_find_instances_failed", error=str(e), exc_info=True)
+            return []
+
+    def find_destination_ae_sync(self, ae_title: str) -> Optional[Dict[str, Any]]:
+        """Look up destination AE connection parameters from active DICOMConfiguration nodes."""
+        query = """
+        MATCH (c:DICOMConfiguration)
+        WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
+          AND (c.ae_title = $ae_title OR c.ae_title = '*' OR c.is_promiscuous = true)
+        RETURN c.host AS host, c.port AS port, c.ae_title AS ae_title
+        LIMIT 1
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, ae_title=ae_title.strip())
+                record = result.single()
+                if record:
+                    return record.data()
+        except Exception as e:
+            logger.warning("find_destination_ae_failed", ae_title=ae_title, error=str(e))
+        return None
+
 
 graph_service = GraphService()

@@ -45,18 +45,30 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     actor_ref = get_dicom_actor()
     logger.info("pykka_actor_started", actor_urn=actor_ref.actor_urn)
 
-    # Initialize DICOM C-STORE / C-ECHO SCP Server (binds to 0.0.0.0:11112 for LAN)
+    # Initialize DICOM SCP Servers for active DICOM configurations
     if getattr(settings, "DICOM_SCP_ENABLED", True):
         try:
             from service.pynetdicom_service import pynetdicom_service
+            from service.system_service import system_service
 
-            scp_host = getattr(settings, "DICOM_SCP_HOST", "0.0.0.0")
-            scp_port = getattr(settings, "DICOM_SCP_PORT", 11112)
-            pynetdicom_service.start_server(
-                host=scp_host,
-                port=scp_port,
-                block=False,
-            )
+            active_configs = await system_service.list_configurations(role="SCP")
+            if not active_configs:
+                scp_host = getattr(settings, "DICOM_SCP_HOST", "0.0.0.0")
+                scp_port = getattr(settings, "DICOM_SCP_PORT", 11112)
+                scp_aet = getattr(settings, "DICOM_AE_TITLE", "GOSMART_GS")
+                active_configs = [
+                    {
+                        "id": f"default_scp_{scp_port}",
+                        "ae_title": scp_aet,
+                        "roles": ["SCP"],
+                        "host": scp_host,
+                        "port": scp_port,
+                        "is_promiscuous": True,
+                        "dicom_services": ["*"],
+                        "transfer_syntaxes": ["*"],
+                    }
+                ]
+            pynetdicom_service.sync_from_configurations(active_configs)
         except Exception as e:
             logger.error("dicom_scp_start_failed", error=str(e), exc_info=True)
 
@@ -68,7 +80,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         try:
             from service.pynetdicom_service import pynetdicom_service
 
-            pynetdicom_service.stop_server()
+            pynetdicom_service.stop_all()
         except Exception as e:
             logger.warning("dicom_scp_stop_failed", error=str(e))
     stop_dicom_actor()

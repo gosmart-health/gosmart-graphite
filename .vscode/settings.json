@@ -5,7 +5,7 @@
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
         // Prevents VS Code from saving mid-generation and triggering a rollback
-    "files.autoSave": "off", 
+    "files.autoSave": "afterDelay", 
     
     // Disables formatters from modifying the temporary diff buffer
     "editor.formatOnSave": false,

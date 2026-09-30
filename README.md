@@ -150,11 +150,19 @@ The server automatically bootstraps an immutable root `(:System)` node linked to
 - `PUT /api/v1/system` — Installer update of mutable System properties.
 - `POST /api/v1/system/bootstrap` — Idempotent environment bootstrap.
 - `GET /api/v1/configurations/dicom` — Query active configurations (filters: `role`, `is_promiscuous`, `include_tests`).
-- `POST /api/v1/configurations/dicom` — Register a new DICOMConfiguration node.
+- `POST /api/v1/configurations/dicom` — Register a new DICOMConfiguration node and dynamically instantiate SCP if role is SCP.
 - `GET /api/v1/configurations/dicom/{id}` — Retrieve single configuration.
-- `PUT /api/v1/configurations/dicom/{id}` — Update configuration properties.
-- `DELETE /api/v1/configurations/dicom/{id}` — Soft delete (sets `Action="DELETE"` and negates relationship to `NOT_HAS_DICOM_CONFIGURATION`).
-- `POST /api/v1/configurations/dicom/{id}/restore` — Restore soft-deleted configuration.
+- `PUT /api/v1/configurations/dicom/{id}` — Update configuration properties; maintains in-flight association threads while launching updated SCP instance.
+- `DELETE /api/v1/configurations/dicom/{id}` — Soft delete (sets `Action="DELETE"` and negates relationship to `NOT_HAS_DICOM_CONFIGURATION`); maintains in-flight associations until done.
+- `POST /api/v1/configurations/dicom/{id}/restore` — Restore soft-deleted configuration and re-activate SCP.
+- `GET /api/v1/configurations/dicom-instances` — Inspect live runtime status and active association counts for all running and draining SCP instances.
+- `GET /api/v1/configurations/dicom-instances/{id}` — Inspect runtime status of a specific SCP instance.
+
+#### Dynamic SCP Lifecycle & Presentation Context Enforcement:
+- **Added**: Instantiates and launches a new SCP instance dynamically on its configured host, port, and AE title.
+- **Changed**: Drains and preserves existing association threads uninterrupted while launching a new SCP instance with the updated configuration.
+- **Removed**: Transitions the SCP to draining state (stops accepting new associations while letting active transfer threads complete).
+- **Service Class & Transfer Syntax Enforcement**: Strictly negotiates presentation contexts according to configured `dicom_services` (SOP Classes) and `transfer_syntaxes`, rejecting unconfigured services or syntax during association negotiation.
 
 #### MCP Administrative Tools:
 - `get_system_info`, `update_system_info`, `bootstrap_system_defaults`

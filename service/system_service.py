@@ -248,6 +248,13 @@ class SystemService:
         configs = await self.list_configurations(system_id=sys_node.id, include_tests=bool(test_id), test_id=test_id)
         sys_resp = _dict_to_system_response(raw_system, configs)
 
+        try:
+            from service.pynetdicom_service import pynetdicom_service
+
+            pynetdicom_service.sync_from_configurations(configs)
+        except Exception as scp_err:
+            logger.warning("scp_bootstrap_sync_failed", error=str(scp_err))
+
         return {
             "success": True,
             "message": "System and promiscuous DICOM configuration verified/bootstrapped successfully",
@@ -465,7 +472,14 @@ class SystemService:
             },
         )
         raw_c = records[0].get("c", {}) if records else {}
-        return _dict_to_dicom_config(raw_c)
+        cfg_resp = _dict_to_dicom_config(raw_c)
+        try:
+            from service.pynetdicom_service import pynetdicom_service
+
+            pynetdicom_service.on_configuration_added(cfg_resp)
+        except Exception as scp_err:
+            logger.warning("scp_on_configuration_added_failed", error=str(scp_err))
+        return cfg_resp
 
     async def update_configuration(
         self,
@@ -525,7 +539,14 @@ class SystemService:
         records = await self.client.execute_query(query, params)
         if not records:
             return None
-        return _dict_to_dicom_config(records[0].get("c", {}))
+        updated_cfg = _dict_to_dicom_config(records[0].get("c", {}))
+        try:
+            from service.pynetdicom_service import pynetdicom_service
+
+            pynetdicom_service.on_configuration_changed(config_id, updated_cfg)
+        except Exception as scp_err:
+            logger.warning("scp_on_configuration_changed_failed", error=str(scp_err))
+        return updated_cfg
 
     async def delete_configuration(
         self,
@@ -541,7 +562,15 @@ class SystemService:
             RETURN count(c) AS cnt
             """
             recs = await self.client.execute_query(del_cypher, {"config_id": config_id})
-            return bool(recs and recs[0].get("cnt", 0) > 0)
+            deleted = bool(recs and recs[0].get("cnt", 0) > 0)
+            if deleted:
+                try:
+                    from service.pynetdicom_service import pynetdicom_service
+
+                    pynetdicom_service.on_configuration_removed(config_id)
+                except Exception as scp_err:
+                    logger.warning("scp_on_configuration_removed_failed", error=str(scp_err))
+            return deleted
 
         # Soft delete: swap relation to NOT_HAS_DICOM_CONFIGURATION and set Action='DELETE'
         find_rel_query = """
@@ -584,7 +613,15 @@ class SystemService:
             rec = await res.single()
             return bool(rec and rec.get("cnt", 0) > 0)
 
-        return await self.client.execute_write_tx(_swap_tx)
+        success = await self.client.execute_write_tx(_swap_tx)
+        if success:
+            try:
+                from service.pynetdicom_service import pynetdicom_service
+
+                pynetdicom_service.on_configuration_removed(config_id)
+            except Exception as scp_err:
+                logger.warning("scp_on_configuration_removed_failed", error=str(scp_err))
+        return success
 
     async def restore_configuration(
         self,
@@ -636,12 +673,28 @@ class SystemService:
                 return None
             return _dict_to_dicom_config(rec.get("c", {}))
 
-        return await self.client.execute_write_tx(_restore_tx)
+        restored_cfg = await self.client.execute_write_tx(_restore_tx)
+        if restored_cfg:
+            try:
+                from service.pynetdicom_service import pynetdicom_service
+
+                pynetdicom_service.on_configuration_added(restored_cfg)
+            except Exception as scp_err:
+                logger.warning("scp_on_configuration_restored_failed", error=str(scp_err))
+        return restored_cfg
 
     async def cleanup_test_data(self, test_id: str) -> int:
         """Detach and delete all System and Configuration nodes tagged with test_id."""
         if not test_id:
             return 0
+        try:
+            from service.pynetdicom_service import pynetdicom_service
+
+            for inst in list(pynetdicom_service._instances.values()):
+                if inst.config.get("test_id") == test_id:
+                    pynetdicom_service.on_configuration_removed(inst.config_id)
+        except Exception:
+            pass
         query = """
         MATCH (n)
         WHERE (n:System OR n:DICOMConfiguration) AND n.test_id = $test_id

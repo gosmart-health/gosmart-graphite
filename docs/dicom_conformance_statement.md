@@ -101,13 +101,16 @@ graph LR
 
 ### 2.2 Functional Definition of Application Entities (AEs)
 
-#### 2.2.1 `GOSMART_GS` Application Entity
-The `GOSMART_GS` AE acts as a single multi-role Application Entity responsible for:
-1. **Verification (C-ECHO)**: Accepting and responding to verification requests from remote modalities, archives, and monitoring agents.
-2. **Storage (C-STORE SCP)**: Receiving incoming composite SOP Instances, persisting raw Part-10 files to `STORAGE_ROOT_URI`, extracting DICOM hierarchy tags, and notifying the `DicomIngestionActor` to index graph topology into Neo4j.
-3. **Query (C-FIND SCP)**: Receiving query requests for Patient Root, Study Root, and Modality Worklist information models, executing high-speed Cypher queries in Neo4j, and returning matching dataset identifiers.
-4. **Retrieve (C-GET SCP)**: Receiving retrieve requests and transmitting matching SOP instances back across the same association using C-STORE sub-operations.
-5. **Move (C-MOVE SCP)**: Receiving retrieve requests for designated destination Application Entities, opening secondary C-STORE SCU associations, and streaming instances to the requested target.
+#### 2.2.1 Application Entities and Dynamic Multi-SCP Architecture
+The server supports both the default promiscuous Application Entity (`GOSMART_GS`, `ae_title="*"`) and dynamic, dedicated Application Entities configured via `(:DICOMConfiguration)` nodes:
+1. **Dynamic AE Title & Role Management**: Each configuration with role `SCP` instantiates an independent SCP instance listening on its assigned port, validating Called AE Title (unless in promiscuous mode `*`).
+2. **Dynamic Lifecycle**: Added configurations instantiate new SCP listeners; updated configurations preserve active association threads while launching updated SCP instances; removed configurations complete in-flight associations before concluding.
+3. **Presentation Context Enforcement**: Presentation contexts accepted during association negotiation are strictly filtered by the configuration's `dicom_services` (SOP Classes) and `transfer_syntaxes`.
+4. **Verification (C-ECHO)**: Accepting and responding to verification requests from remote modalities, archives, and monitoring agents.
+5. **Storage (C-STORE SCP)**: Receiving incoming composite SOP Instances, persisting raw Part-10 files to `STORAGE_ROOT_URI`, extracting DICOM hierarchy tags, and notifying the `DicomIngestionActor` to index graph topology into Neo4j.
+6. **Query (C-FIND SCP)**: Receiving query requests for Patient Root, Study Root, and Modality Worklist information models, executing high-speed Cypher queries in Neo4j, and returning matching dataset identifiers.
+7. **Retrieve (C-GET SCP)**: Receiving retrieve requests and transmitting matching SOP instances back across the same association using C-STORE sub-operations.
+8. **Move (C-MOVE SCP)**: Receiving retrieve requests for designated destination Application Entities, opening secondary C-STORE SCU associations, and streaming instances to the requested target.
 
 ### 2.3 Sequencing of Real-World Activities
 

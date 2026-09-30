@@ -116,8 +116,13 @@ graph TD
   - Pre-test cleanup routine (`cleanup_test_data`) isolating ephemeral test entities.
   - Query methods: `list_patients()`, `get_patient_graph()`, `execute_custom_query()` with test isolation and deletion filtering.
 * **`pynetdicom_service.py`**:
-  - Configures Application Entity (`GOSMART_GS`) with presentation contexts for C-STORE, C-FIND, C-GET, C-MOVE, and C-ECHO.
-  - Handles C-ECHO SCU ping execution.
+  - Manages dynamic multi-SCP server instances (`SCPInstance`) based on active `(:DICOMConfiguration)` nodes in Neo4j.
+  - Implements dynamic lifecycle transitions:
+    - **Added**: Instantiates and launches new SCP instances bound to configured host, port, and AE title.
+    - **Changed**: Drains active association threads on old instance while launching new SCP with updated configuration.
+    - **Removed**: Drains active associations until completion before fully stopping.
+  - Strictly negotiates and honors configured `dicom_services` (SOP Classes) and `transfer_syntaxes` during association negotiation.
+  - Provides C-ECHO verification SCU and C-STORE Part-10 blackbox recording.
 * **`dicomweb_service.py`**:
   - Implements DICOMweb (PS 3.18) operations backed by Neo4j Knowledge Graph.
   - QIDO-RS: Fast query engine for Studies, Series, and Instances directly from graph node properties, computing live series/instance counts and modalities via relationship traversal.
