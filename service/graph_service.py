@@ -911,7 +911,7 @@ class GraphService:
         query = """
         MATCH (c:DICOMConfiguration)
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
-          AND (c.ae_title = $ae_title OR c.ae_title = '*' OR c.is_promiscuous = true)
+          AND c.ae_title = $ae_title
         RETURN c.host AS host, c.port AS port, c.ae_title AS ae_title
         LIMIT 1
         """

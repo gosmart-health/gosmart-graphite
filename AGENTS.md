@@ -23,7 +23,7 @@ If usage changes—including command-line options, environment variables, config
 
 ## 3. Implementations
 
-- Always present an Implementation Plan before implementing and wait for approval.
+- Always write an Implementation Plan (ImplementationPlan.md) usable for copying in GitHub Issues before implementing and wait for approval.
 - Avoid making assumptions if you are not certain, suggest alternatives and ask for inputs.
 - Test driven design, always write modular test. Do not rely on previous test states.
 - Only delete data that test cases has created so that that tests can be run even in production without colliding existing data, use `test_id` in database properties
