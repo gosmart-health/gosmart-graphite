@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DICOMConfigurationResponse(BaseModel):
@@ -58,6 +58,14 @@ class DICOMConfigurationCreateRequest(BaseModel):
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
     description: Optional[str] = Field(default=None, description="Human readable description")
     test_id: Optional[str] = Field(default=None, description="Test identifier if ephemeral")
+
+    @field_validator("test_id", mode="before")
+    @classmethod
+    def normalize_test_id(cls, v: Any) -> Optional[str]:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
 
 
 class DICOMConfigurationUpdateRequest(BaseModel):
@@ -128,3 +136,14 @@ class SystemBootstrapResponse(BaseModel):
         default=None,
         description="Promiscuous main DICOM configuration",
     )
+
+
+class TestCleanupResponse(BaseModel):
+    """API response model for test data cleanup."""
+
+    success: bool = Field(..., description="Whether cleanup succeeded")
+    message: str = Field(..., description="Status message")
+    total_deleted: int = Field(default=0, description="Total count of nodes detached and deleted")
+    deleted_by_label: Dict[str, int] = Field(default_factory=dict, description="Breakdown of deleted nodes by label")
+    labels_cleaned: List[str] = Field(default_factory=list, description="List of labels scanned and cleaned")
+    test_id: Optional[str] = Field(default=None, description="Test identifier that was cleaned up if filtered")
