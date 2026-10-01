@@ -31,6 +31,12 @@ class Neo4jClient:
                 max_connection_lifetime=self.settings.DB_MAX_CONNECTION_LIFETIME,
                 max_connection_pool_size=self.settings.DB_MAX_CONNECTION_POOL_SIZE,
             )
+            import asyncio
+
+            try:
+                self._driver_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._driver_loop = None
 
     def get_sync_driver(self) -> Driver:
         """Obtain a synchronous driver (useful for Pykka threading actors)."""
@@ -52,10 +58,9 @@ class Neo4jClient:
     async def verify_connectivity(self) -> bool:
         """Check if Neo4j instance is reachable."""
         try:
-            if not self._async_driver:
-                await self.connect()
-            if self._async_driver:
-                await self._async_driver.verify_connectivity()
+            driver = await self.get_async_driver()
+            if driver:
+                await driver.verify_connectivity()
                 return True
         except Exception as e:
             logger.warning("Neo4j connectivity check failed: %s", e)
@@ -64,6 +69,17 @@ class Neo4jClient:
 
     async def get_async_driver(self) -> AsyncDriver:
         """Obtain or initialize the asynchronous driver."""
+        import asyncio
+
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if self._async_driver is not None and getattr(self, "_driver_loop", None) != current_loop:
+            self._async_driver = None
+            self._driver_loop = None
+
         if self._async_driver is None:
             await self.connect()
         return self._async_driver

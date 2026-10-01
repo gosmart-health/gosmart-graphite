@@ -32,6 +32,14 @@ def _clean_neo4j_value(val: Any) -> Any:
     return val
 
 
+def _normalize_test_id(test_id: Optional[str]) -> Optional[str]:
+    """Normalize test_id so empty strings or whitespace are safely converted to None."""
+    if test_id and isinstance(test_id, str):
+        stripped = test_id.strip()
+        return stripped if stripped else None
+    return None
+
+
 def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
     """Map raw Neo4j node properties to a standardized DICOMConfigurationResponse dictionary."""
     clean = _clean_neo4j_value(data)
@@ -108,6 +116,7 @@ class SystemService:
 
     async def bootstrap_system(self, acted_by: str = "system", test_id: Optional[str] = None) -> Dict[str, Any]:
         """Ensure the immutable root System node and default promiscuous DICOM entry exist."""
+        test_id = _normalize_test_id(test_id)
         settings = get_settings()
 
         # 1. Create or ensure root System Node
@@ -268,10 +277,11 @@ class SystemService:
         test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Retrieve root System node and linked active configurations."""
+        test_id = _normalize_test_id(test_id)
         query = """
         MATCH (s:System)
-        WHERE ($test_id IS NULL AND (s.test_id IS NULL OR s.test_id = ''))
-           OR ($test_id IS NOT NULL AND s.test_id = $test_id)
+        WHERE (($test_id IS NULL OR $test_id = '') AND (s.test_id IS NULL OR s.test_id = ''))
+           OR ($test_id IS NOT NULL AND $test_id <> '' AND s.test_id = $test_id)
         RETURN properties(s) AS s
         LIMIT 1
         """
@@ -295,10 +305,11 @@ class SystemService:
         test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Update mutable fields of the root System node."""
+        test_id = _normalize_test_id(test_id)
         query = """
         MATCH (s:System)
-        WHERE ($test_id IS NULL AND (s.test_id IS NULL OR s.test_id = ''))
-           OR ($test_id IS NOT NULL AND s.test_id = $test_id)
+        WHERE (($test_id IS NULL OR $test_id = '') AND (s.test_id IS NULL OR s.test_id = ''))
+           OR ($test_id IS NOT NULL AND $test_id <> '' AND s.test_id = $test_id)
         SET s.name = coalesce($name, s.name),
             s.owner = coalesce($owner, s.owner),
             s.address = coalesce($address, s.address),
@@ -341,12 +352,13 @@ class SystemService:
         test_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List active DICOM configurations linked to System or matching filters."""
+        test_id = _normalize_test_id(test_id)
         query = """
         MATCH (s:System)-[:HAS_DICOM_CONFIGURATION]->(c:DICOMConfiguration)
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
           AND ($system_id IS NULL OR s.id = $system_id)
           AND ($include_tests = true OR c.test_id IS NULL OR c.test_id = '')
-          AND ($test_id IS NULL OR c.test_id = $test_id)
+          AND ($test_id IS NULL OR $test_id = '' OR c.test_id = $test_id)
           AND ($role IS NULL OR $role IN c.roles)
           AND ($is_promiscuous IS NULL OR c.is_promiscuous = $is_promiscuous)
         RETURN properties(c) AS c
@@ -382,6 +394,7 @@ class SystemService:
         system_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new DICOMConfiguration node and link to the root System."""
+        norm_test_id = _normalize_test_id(config_data.test_id)
         cfg_node = DICOMConfigurationNode(
             ae_title=config_data.ae_title,
             roles=config_data.roles,
@@ -400,7 +413,7 @@ class SystemService:
             dicomweb_wado_enabled=config_data.dicomweb_wado_enabled,
             dicomweb_stow_enabled=config_data.dicomweb_stow_enabled,
             description=config_data.description,
-            test_id=config_data.test_id,
+            test_id=norm_test_id,
             ActedBy=acted_by,
         )
 
@@ -408,23 +421,23 @@ class SystemService:
         if not system_id:
             sys_query = """
             MATCH (s:System)
-            WHERE ($test_id IS NULL AND (s.test_id IS NULL OR s.test_id = ''))
-               OR ($test_id IS NOT NULL AND s.test_id = $test_id)
+            WHERE (($test_id IS NULL OR $test_id = '') AND (s.test_id IS NULL OR s.test_id = ''))
+               OR ($test_id IS NOT NULL AND $test_id <> '' AND s.test_id = $test_id)
             RETURN s.id AS id
             LIMIT 1
             """
-            sys_rec = await self.client.execute_query(sys_query, {"test_id": config_data.test_id})
+            sys_rec = await self.client.execute_query(sys_query, {"test_id": norm_test_id})
             if sys_rec:
                 system_id = sys_rec[0].get("id")
             else:
                 # Bootstrap system if missing
-                boot = await self.bootstrap_system(acted_by=acted_by, test_id=config_data.test_id)
+                boot = await self.bootstrap_system(acted_by=acted_by, test_id=norm_test_id)
                 system_id = boot["system"]["id"]
 
         rel = HasDicomConfigurationRelation(
             start_node_id=system_id,
             end_node_id=cfg_node.id,
-            test_id=config_data.test_id,
+            test_id=norm_test_id,
             ActedBy=acted_by,
         )
 
@@ -685,13 +698,14 @@ class SystemService:
 
     async def cleanup_test_data(self, test_id: str) -> int:
         """Detach and delete all System and Configuration nodes tagged with test_id."""
-        if not test_id:
+        clean_test_id = _normalize_test_id(test_id)
+        if not clean_test_id:
             return 0
         try:
             from service.pynetdicom_service import pynetdicom_service
 
             for inst in list(pynetdicom_service._instances.values()):
-                if inst.config.get("test_id") == test_id:
+                if _normalize_test_id(inst.config.get("test_id")) == clean_test_id:
                     pynetdicom_service.on_configuration_removed(inst.config_id)
         except Exception:
             pass
@@ -701,9 +715,9 @@ class SystemService:
         DETACH DELETE n
         RETURN count(n) AS cnt
         """
-        records = await self.client.execute_query(query, {"test_id": test_id})
+        records = await self.client.execute_query(query, {"test_id": clean_test_id})
         deleted = records[0].get("cnt", 0) if records else 0
-        logger.info("system_test_data_cleaned", test_id=test_id, deleted_count=deleted)
+        logger.info("system_test_data_cleaned", test_id=clean_test_id, deleted_count=deleted)
         return deleted
 
 

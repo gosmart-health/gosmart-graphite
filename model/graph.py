@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, ClassVar, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # Default namespace for deterministic DICOM graph entity ID derivation
 DICOM_GRAPH_NAMESPACE: uuid.UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "gosmart.dicom.graph")
@@ -48,6 +48,15 @@ class Auditable(BaseModel):
         default=None,
         description="Test related identifier. Non-null/non-empty indicates ephemeral test-generated data.",
     )
+
+    @field_validator("test_id", mode="before")
+    @classmethod
+    def normalize_test_id(cls, v: Any) -> Optional[str]:
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
     Action: ActionType = Field(
         default="CREATE",
         description="Auditable action taken: CREATE, UPDATE, DELETE, or RESTORE",

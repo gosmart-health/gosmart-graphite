@@ -177,3 +177,29 @@ async def test_system_service_bootstrap_and_crud():
         system_id=sys_obj["id"], include_tests=True, test_id=test_id
     )
     assert config_id in [c["id"] for c in configs_after_restore]
+
+
+@pytest.mark.anyio
+async def test_empty_string_test_id_normalization():
+    """Verify that passing test_id='' normalizes to None in models and queries."""
+    req = DICOMConfigurationCreateRequest(
+        ae_title="NORM_TEST",
+        roles=["SCU"],
+        host="192.168.1.99",
+        port=104,
+        test_id="",
+    )
+    assert req.test_id is None
+
+    node = DICOMConfigurationNode(
+        ae_title="NORM_TEST",
+        test_id="   ",
+    )
+    assert node.test_id is None
+
+    # Verify query handling with empty string vs None
+    sys_none = await system_service.get_system(test_id=None)
+    sys_empty = await system_service.get_system(test_id="")
+    assert sys_none is not None
+    assert sys_empty is not None
+    assert sys_none["id"] == sys_empty["id"]
