@@ -149,6 +149,7 @@ The server automatically bootstraps an immutable root `(:System)` node linked to
 - `GET /api/v1/system` — Inspect System metadata (`name`, `owner`, `address`, `email`, `phone`, `serial_number`, `installed_at`) and attached configurations.
 - `PUT /api/v1/system` — Installer update of mutable System properties.
 - `POST /api/v1/system/bootstrap` — Idempotent environment bootstrap.
+- `POST /api/v1/system/test/cleanup` — Full test data cleanup endpoint to detach and delete test nodes across target labels (`System`, `DICOMConfiguration`, `Instance`, `Patient`, `Series`, `Study`, etc.) where `test_id` is defined and non-empty; also drains associated ephemeral test SCP instances.
 - `GET /api/v1/configurations/dicom` — Query active configurations (filters: `role`, `is_promiscuous`, `include_tests`).
 - `POST /api/v1/configurations/dicom` — Register a new DICOMConfiguration node and dynamically instantiate SCP if role is SCP.
 - `GET /api/v1/configurations/dicom/{id}` — Retrieve single configuration.

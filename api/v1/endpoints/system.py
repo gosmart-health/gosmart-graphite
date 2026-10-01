@@ -9,6 +9,7 @@ from model.system import (
     SystemBootstrapResponse,
     SystemResponse,
     SystemUpdateRequest,
+    TestCleanupResponse,
 )
 from service.system_service import system_service
 
@@ -59,6 +60,34 @@ async def bootstrap_system(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to bootstrap system: {str(e)}")
+
+
+# -----------------------------------------------------------------------------
+# Test Data Management
+# -----------------------------------------------------------------------------
+
+
+@router.post("/system/test/cleanup", response_model=TestCleanupResponse)
+async def cleanup_test_data_endpoint(
+    test_id: Optional[str] = Query(
+        default=None,
+        description="Optional specific test_id to clean up; if omitted, cleans up all test data across target labels",
+    ),
+    labels: Optional[List[str]] = Query(
+        default=None,
+        description=(
+            "Optional subset of node labels to clean. "
+            "Defaults to System, DICOMConfiguration, Instance, Patient, Series, Study"
+        ),
+    ),
+    x_user_id: Optional[str] = Header(default="installer", alias="X-User-ID"),
+) -> TestCleanupResponse:
+    """Full test cleanup endpoint to detach and delete test data across property graph labels."""
+    try:
+        res = await system_service.cleanup_all_test_data(test_id=test_id, labels=labels)
+        return TestCleanupResponse(**res)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to cleanup test data: {str(e)}")
 
 
 # -----------------------------------------------------------------------------

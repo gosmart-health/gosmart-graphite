@@ -98,6 +98,7 @@ graph TD
 ### 3.4 Services Subsystem (`service/`)
 * **`system_service.py`**:
   - `bootstrap_system()`: Ensures the root `System` node exists with default organizational placeholders and connects the primary promiscuous DICOM configuration (`ae_title="*"`) matching `config.py`.
+  - `cleanup_all_test_data()`: Full test cleanup routine across property graph labels (`System`, `DICOMConfiguration`, `Instance`, `Patient`, `Series`, `Study`) where `test_id` is defined and non-empty. Drains associated ephemeral test SCP instances and detaches/deletes nodes with label breakdown.
   - Manages full CRUD operations for `System` and `DICOMConfiguration` nodes.
   - Handles relationship soft-deletion (`NOT_HAS_DICOM_CONFIGURATION`) and restoration (`HAS_DICOM_CONFIGURATION`).
 * **`media_service.py`**:

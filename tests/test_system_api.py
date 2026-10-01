@@ -204,3 +204,31 @@ def test_api_dicom_configuration_crud(client):
         res_restore = client.post("/api/v1/configurations/dicom/cfg_cardio_1/restore")
         assert res_restore.status_code == 200
         assert res_restore.json()["action"] == "RESTORE"
+
+
+def test_api_system_test_cleanup(client):
+    """Test POST /api/v1/system/test/cleanup endpoint."""
+    mock_res = {
+        "success": True,
+        "message": "Test data cleanup completed successfully. Deleted 6 test nodes.",
+        "total_deleted": 6,
+        "deleted_by_label": {
+            "Patient": 1,
+            "Study": 1,
+            "Series": 1,
+            "Instance": 1,
+            "DICOMConfiguration": 1,
+            "System": 1,
+        },
+        "labels_cleaned": ["System", "DICOMConfiguration", "Instance", "Patient", "Series", "Study"],
+        "test_id": "test_mock_123",
+    }
+    with patch.object(system_service, "cleanup_all_test_data", new=AsyncMock(return_value=mock_res)):
+        res = client.post("/api/v1/system/test/cleanup?test_id=test_mock_123")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["success"] is True
+        assert data["total_deleted"] == 6
+        assert data["deleted_by_label"]["Patient"] == 1
+        assert data["test_id"] == "test_mock_123"
+        assert len(data["labels_cleaned"]) == 6

@@ -108,6 +108,16 @@ def _dict_to_system_response(data: Dict[str, Any], configs: Optional[List[Dict[s
     }
 
 
+DEFAULT_TEST_CLEANUP_LABELS: List[str] = [
+    "System",
+    "DICOMConfiguration",
+    "Instance",
+    "Patient",
+    "Series",
+    "Study",
+]
+
+
 class SystemService:
     """Service handling lifecycle, graph persistence, and CRUD operations for System & DICOM configurations."""
 
@@ -719,6 +729,87 @@ class SystemService:
         deleted = records[0].get("cnt", 0) if records else 0
         logger.info("system_test_data_cleaned", test_id=clean_test_id, deleted_count=deleted)
         return deleted
+
+    async def cleanup_all_test_data(
+        self,
+        test_id: Optional[str] = None,
+        labels: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Detach and delete test data across specified node labels where test_id is non-null/non-empty."""
+        import re
+
+        clean_test_id = _normalize_test_id(test_id)
+        raw_labels = labels if labels is not None else DEFAULT_TEST_CLEANUP_LABELS
+        target_labels = [lbl.strip() for lbl in raw_labels if lbl and lbl.strip()]
+
+        valid_identifier = re.compile(r"^[A-Za-z0-9_]+$")
+        target_labels = [lbl for lbl in target_labels if valid_identifier.match(lbl)]
+        if not target_labels:
+            target_labels = list(DEFAULT_TEST_CLEANUP_LABELS)
+
+        # 1. Drain and stop any running DICOM SCP instances matching test configs
+        try:
+            from service.pynetdicom_service import pynetdicom_service
+
+            for inst in list(pynetdicom_service._instances.values()):
+                inst_test_id = _normalize_test_id(inst.config.get("test_id"))
+                if inst_test_id and (clean_test_id is None or inst_test_id == clean_test_id):
+                    pynetdicom_service.on_configuration_removed(inst.config_id)
+        except Exception as e:
+            logger.warning("cleanup_test_scp_drain_failed", error=str(e))
+
+        # 2. Query breakdown of matching nodes by label before deletion
+        count_query = """
+        UNWIND $target_labels AS target_label
+        CALL {
+            WITH target_label
+            MATCH (n)
+            WHERE target_label IN labels(n)
+              AND n.test_id IS NOT NULL
+              AND trim(toString(n.test_id)) <> ''
+              AND ($test_id IS NULL OR n.test_id = $test_id)
+            RETURN count(n) AS cnt
+        }
+        RETURN target_label AS label, cnt
+        """
+        count_recs = await self.client.execute_query(
+            count_query,
+            {"target_labels": target_labels, "test_id": clean_test_id},
+        )
+        deleted_by_label: Dict[str, int] = {r["label"]: r["cnt"] for r in count_recs if r.get("cnt", 0) > 0}
+        total_to_delete = sum(deleted_by_label.values())
+
+        # 3. Detach and delete matching nodes
+        if total_to_delete > 0:
+            delete_query = """
+            MATCH (n)
+            WHERE any(lbl IN labels(n) WHERE lbl IN $target_labels)
+              AND n.test_id IS NOT NULL
+              AND trim(toString(n.test_id)) <> ''
+              AND ($test_id IS NULL OR n.test_id = $test_id)
+            DETACH DELETE n
+            """
+            await self.client.execute_query(
+                delete_query,
+                {"target_labels": target_labels, "test_id": clean_test_id},
+            )
+
+        logger.info(
+            "test_cleanup_completed",
+            test_id=clean_test_id,
+            total_deleted=total_to_delete,
+            deleted_by_label=deleted_by_label,
+            labels_cleaned=target_labels,
+        )
+
+        return {
+            "success": True,
+            "message": f"Test data cleanup completed successfully. Deleted {total_to_delete} test nodes.",
+            "total_deleted": total_to_delete,
+            "deleted_by_label": deleted_by_label,
+            "labels_cleaned": target_labels,
+            "test_id": clean_test_id,
+        }
 
 
 system_service = SystemService()

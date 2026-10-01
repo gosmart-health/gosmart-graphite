@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class DICOMConfigurationResponse(BaseModel):
@@ -58,14 +58,6 @@ class DICOMConfigurationCreateRequest(BaseModel):
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
     description: Optional[str] = Field(default=None, description="Human readable description")
     test_id: Optional[str] = Field(default=None, description="Test identifier if ephemeral")
-
-    @field_validator("test_id", mode="before")
-    @classmethod
-    def normalize_test_id(cls, v: Any) -> Optional[str]:
-        if isinstance(v, str):
-            stripped = v.strip()
-            return stripped if stripped else None
-        return v
 
 
 class DICOMConfigurationUpdateRequest(BaseModel):

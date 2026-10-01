@@ -203,3 +203,50 @@ async def test_empty_string_test_id_normalization():
     assert sys_none is not None
     assert sys_empty is not None
     assert sys_none["id"] == sys_empty["id"]
+
+
+@pytest.mark.anyio
+async def test_system_service_cleanup_all_test_data():
+    """Verify cleanup_all_test_data across all target node labels."""
+    if not await neo4j_client.verify_connectivity():
+        pytest.skip(f"Neo4j database not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
+
+    test_id = f"test_cleanup_{uuid.uuid4().hex[:8]}"
+
+    # Pre-clean before test
+    await system_service.cleanup_all_test_data(test_id=test_id)
+
+    # Seed test nodes across Patient, Study, Series, Instance, DICOMConfiguration
+    driver = await neo4j_client.get_async_driver()
+    async with driver.session() as session:
+        await session.run(
+            """
+            CREATE (p:Patient {id: $pid, patient_id: 'P_TEST', test_id: $test_id})
+            CREATE (s:Study {id: $sid, study_instance_uid: '1.2.3', test_id: $test_id})
+            CREATE (se:Series {id: $seid, series_instance_uid: '1.2.3.4', test_id: $test_id})
+            CREATE (i:Instance {id: $iid, sop_instance_uid: '1.2.3.4.5', test_id: $test_id})
+            CREATE (cfg:DICOMConfiguration {id: $cfgid, ae_title: 'TEST_AET', test_id: $test_id})
+            """,
+            pid=f"p_{test_id}",
+            sid=f"s_{test_id}",
+            seid=f"se_{test_id}",
+            iid=f"i_{test_id}",
+            cfgid=f"cfg_{test_id}",
+            test_id=test_id,
+        )
+
+    # Run cleanup for this specific test_id
+    res = await system_service.cleanup_all_test_data(test_id=test_id)
+    assert res["success"] is True
+    assert res["total_deleted"] >= 5
+    assert "Patient" in res["deleted_by_label"]
+    assert "Study" in res["deleted_by_label"]
+    assert "Series" in res["deleted_by_label"]
+    assert "Instance" in res["deleted_by_label"]
+    assert "DICOMConfiguration" in res["deleted_by_label"]
+
+    # Verify nodes are deleted
+    async with driver.session() as session:
+        result = await session.run("MATCH (n {test_id: $test_id}) RETURN count(n) AS cnt", test_id=test_id)
+        rec = await result.single()
+        assert rec["cnt"] == 0
