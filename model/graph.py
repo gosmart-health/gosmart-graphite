@@ -268,6 +268,10 @@ class DICOMConfigurationNode(AuditableNode):
     roles: List[str] = Field(default_factory=lambda: ["SCP"], description="Roles: SCP, SCU")
     host: str = Field(default="0.0.0.0", description="Host or bind address")
     port: int = Field(default=11112, description="TCP port")
+    is_local: bool = Field(
+        default=False,
+        description="Whether this is a local server (True) bound to a local interface or remote SCP (False)",
+    )
     is_promiscuous: bool = Field(default=False, description="Promiscuous mode flag (True when ae_title is *)")
     tls_enabled: bool = Field(default=False, description="Whether TLS is enabled")
     tls_cert_path: Optional[str] = Field(default=None, description="Path to TLS certificate file")

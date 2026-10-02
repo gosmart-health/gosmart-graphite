@@ -1,3 +1,4 @@
+import socket
 import ssl
 import threading
 import uuid
@@ -5,7 +6,13 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydicom.dataset import Dataset
-from pydicom.uid import UID, UID_dictionary
+from pydicom.uid import (
+    UID,
+    ExplicitVRLittleEndian,
+    ImplicitVRLittleEndian,
+    JPEG2000Lossless,
+    UID_dictionary,
+)
 from pynetdicom import (
     AE,
     ALL_TRANSFER_SYNTAXES,
@@ -134,6 +141,32 @@ class SCPInstance:
             "active_associations_count": len(self.active_associations),
             "created_at": self.created_at.isoformat(),
         }
+
+
+def _clean_cfind_param(val: Any) -> Optional[str]:
+    """Normalize C-FIND request parameter.
+
+    In DICOM C-FIND, zero-length attributes and single wildcard '*' or empty strings
+    indicate return keys or open matching, which should not restrict the query.
+    """
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s == "*":
+        return None
+    return s
+
+
+def is_local_address(host: str) -> bool:
+    """Check if a host address belongs to local machine interfaces."""
+    if not host or host in ("0.0.0.0", "127.0.0.1", "localhost", "::", "::1"):
+        return True
+    try:
+        local_ips = {addr[4][0] for addr in socket.getaddrinfo(socket.gethostname(), None)}
+        local_ips.update({"127.0.0.1", "0.0.0.0", "::1"})
+        return host in local_ips
+    except Exception:
+        return False
 
 
 class PyNetDicomService:
@@ -281,6 +314,11 @@ class PyNetDicomService:
         port = int(config.get("port") or getattr(self.settings, "DICOM_SCP_PORT", 11112))
         is_promiscuous = bool(config.get("is_promiscuous", ae_title == "*"))
 
+        # Skip local socket binding for remote hosts (e.g. external SCP configurations)
+        if config.get("is_local") is False or not is_local_address(host):
+            logger.info("skip_scp_start_remote_host", config_id=config_id, host=host, port=port)
+            return None
+
         # Format compliant AE Title (max 16 ASCII chars)
         resolved_aet = (self.settings.DICOM_AE_TITLE if ae_title == "*" else ae_title)[:16].strip()
 
@@ -295,7 +333,10 @@ class PyNetDicomService:
 
         # Register requested storage contexts on AE for outbound C-MOVE sub-operations
         for cx in StoragePresentationContexts:
-            ae.add_requested_context(cx.abstract_syntax, ALL_TRANSFER_SYNTAXES)
+            ae.add_requested_context(
+                cx.abstract_syntax,
+                [JPEG2000Lossless, ExplicitVRLittleEndian, ImplicitVRLittleEndian],
+            )
 
         # Build negotiated Presentation Contexts strictly honoring configuration
         contexts = self.build_presentation_contexts(
@@ -722,11 +763,11 @@ class PyNetDicomService:
 
         try:
             if norm_level == "PATIENT":
-                pid = getattr(identifier, "PatientID", None)
-                pname = getattr(identifier, "PatientName", None)
+                pid = _clean_cfind_param(getattr(identifier, "PatientID", None))
+                pname = _clean_cfind_param(getattr(identifier, "PatientName", None))
                 matches = graph_service.find_patient_records_sync(
                     patient_id=pid,
-                    patient_name=str(pname) if pname else None,
+                    patient_name=pname,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
@@ -741,13 +782,17 @@ class PyNetDicomService:
                     yield (0xFF00, ds)
 
             elif norm_level == "STUDY":
-                pid = getattr(identifier, "PatientID", None)
-                suid = getattr(identifier, "StudyInstanceUID", None)
-                sdate = getattr(identifier, "StudyDate", None)
+                pid = _clean_cfind_param(getattr(identifier, "PatientID", None))
+                pname = _clean_cfind_param(getattr(identifier, "PatientName", None))
+                suid = _clean_cfind_param(getattr(identifier, "StudyInstanceUID", None))
+                sdate = _clean_cfind_param(getattr(identifier, "StudyDate", None))
+                acc = _clean_cfind_param(getattr(identifier, "AccessionNumber", None))
                 matches = graph_service.search_studies_qido_sync(
                     patient_id=pid,
+                    patient_name=pname,
                     study_uid=suid,
                     study_date=sdate,
+                    accession_number=acc,
                     include_tests=True,
                 )
                 for rec in matches:
@@ -761,8 +806,11 @@ class PyNetDicomService:
                     ds.StudyTime = rec.get("study_time") or ""
                     ds.StudyDescription = rec.get("study_description") or ""
                     ds.AccessionNumber = rec.get("accession_number") or ""
+                    ds.StudyID = rec.get("study_id") or ""
                     ds.PatientID = rec.get("patient_id") or ""
                     ds.PatientName = rec.get("patient_name") or ""
+                    ds.PatientBirthDate = rec.get("patient_birth_date") or ""
+                    ds.PatientSex = rec.get("patient_sex") or ""
                     mods = rec.get("modalities") or []
                     if mods:
                         ds.ModalitiesInStudy = "\\".join(mods)
@@ -771,9 +819,9 @@ class PyNetDicomService:
                     yield (0xFF00, ds)
 
             elif norm_level == "SERIES":
-                suid = getattr(identifier, "StudyInstanceUID", None)
-                seuid = getattr(identifier, "SeriesInstanceUID", None)
-                mod = getattr(identifier, "Modality", None)
+                suid = _clean_cfind_param(getattr(identifier, "StudyInstanceUID", None))
+                seuid = _clean_cfind_param(getattr(identifier, "SeriesInstanceUID", None))
+                mod = _clean_cfind_param(getattr(identifier, "Modality", None))
                 matches = graph_service.search_series_qido_sync(
                     study_uid=suid,
                     series_uid=seuid,
@@ -796,9 +844,9 @@ class PyNetDicomService:
                     yield (0xFF00, ds)
 
             elif norm_level in ("IMAGE", "INSTANCE"):
-                suid = getattr(identifier, "StudyInstanceUID", None)
-                seuid = getattr(identifier, "SeriesInstanceUID", None)
-                sopuid = getattr(identifier, "SOPInstanceUID", None)
+                suid = _clean_cfind_param(getattr(identifier, "StudyInstanceUID", None))
+                seuid = _clean_cfind_param(getattr(identifier, "SeriesInstanceUID", None))
+                sopuid = _clean_cfind_param(getattr(identifier, "SOPInstanceUID", None))
                 matches = graph_service.search_instances_qido_sync(
                     study_uid=suid,
                     series_uid=seuid,
@@ -830,6 +878,51 @@ class PyNetDicomService:
 
         yield (0x0000, None)  # Success
 
+    def build_outbound_move_contexts(self, matching_instances: List[Dict[str, Any]]) -> List[PresentationContext]:
+        """Build optimized presentation contexts for outbound C-MOVE C-STORE sub-operations.
+
+        Proposes dedicated presentation contexts for each matching instance's native transfer
+        syntax to ensure peers like Micro DICOM negotiate the exact required syntax rather than
+        falling back to suboptimal formats. Also includes uncompressed transfer syntax fallbacks.
+        """
+        contexts: List[PresentationContext] = []
+        seen = set()
+
+        for inst in matching_instances:
+            sop_class = inst.get("sop_class_uid")
+            ts_uid = inst.get("transfer_syntax_uid")
+            if not sop_class:
+                continue
+
+            if not ts_uid:
+                storage_uri = inst.get("storage_uri")
+                if storage_uri:
+                    try:
+                        ds = media_service.read_dicom_sync(storage_uri)
+                        ts_uid = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
+                    except Exception:
+                        pass
+
+            if sop_class and ts_uid:
+                key = (str(sop_class), str(ts_uid))
+                if key not in seen and len(contexts) < 120:
+                    seen.add(key)
+                    contexts.append(build_context(sop_class, [ts_uid]))
+
+            for fallback_ts in (ExplicitVRLittleEndian, ImplicitVRLittleEndian):
+                key = (str(sop_class), str(fallback_ts))
+                if key not in seen and len(contexts) < 120:
+                    seen.add(key)
+                    contexts.append(build_context(sop_class, [fallback_ts]))
+
+        for cx in StoragePresentationContexts:
+            if len(contexts) >= 128:
+                break
+            if cx.abstract_syntax not in [c.abstract_syntax for c in contexts]:
+                contexts.append(build_context(cx.abstract_syntax, [ExplicitVRLittleEndian, ImplicitVRLittleEndian]))
+
+        return contexts or list(StoragePresentationContexts)
+
     def handle_c_move(self, event: Any):
         """Handle incoming C-MOVE retrieve request.
 
@@ -855,13 +948,26 @@ class PyNetDicomService:
 
         # Resolve destination AE in Neo4j
         dest_info = graph_service.find_destination_ae_sync(dest_aet)
+        requestor_address = getattr(requestor, "address", None)
         if not dest_info:
-            logger.warning("c_move_destination_unknown", dest_aet=dest_aet)
-            yield (None, None)  # Signals 0xA801 Move Destination Unknown
-            return
-
-        dest_host = dest_info["host"]
-        dest_port = dest_info["port"]
+            if requestor_address and requestor_address not in ("127.0.0.1", "localhost", "::1"):
+                logger.info("c_move_destination_fallback", dest_aet=dest_aet, fallback_host=requestor_address)
+                dest_host = requestor_address
+                dest_port = 11113
+            else:
+                logger.warning("c_move_destination_unknown", dest_aet=dest_aet)
+                yield (None, None)  # Signals 0xA801 Move Destination Unknown
+                return
+        else:
+            dest_host = dest_info["host"]
+            dest_port = dest_info["port"]
+            if (
+                dest_host in ("127.0.0.1", "localhost", "0.0.0.0", "::1")
+                and requestor_address
+                and requestor_address not in ("127.0.0.1", "localhost", "::1")
+            ):
+                logger.info("c_move_reroute_to_remote_requestor", dest_aet=dest_aet, dest_host=requestor_address)
+                dest_host = requestor_address
 
         level = getattr(identifier, "QueryRetrieveLevel", "STUDY")
         norm_level = str(level).upper()
@@ -888,8 +994,9 @@ class PyNetDicomService:
             matches_count=len(matching_instances),
         )
 
-        # 1. First yield: Destination (host, port)
-        yield (dest_host, dest_port)
+        # 1. First yield: Destination (host, port, {"contexts": outbound_contexts})
+        outbound_contexts = self.build_outbound_move_contexts(matching_instances)
+        yield (dest_host, dest_port, {"contexts": outbound_contexts})
 
         # 2. Second yield: Number of C-STORE sub-operations
         num_subops = len(matching_instances)
@@ -908,8 +1015,6 @@ class PyNetDicomService:
                 yield (0xFF00, ds)
             except Exception as read_err:
                 logger.error("c_move_instance_read_failed", storage_uri=storage_uri, error=str(read_err))
-
-        yield (0x0000, None)  # Success
 
     def handle_c_get(self, event: Any):
         """Handle incoming C-GET retrieve request.
@@ -963,8 +1068,6 @@ class PyNetDicomService:
                 yield (0xFF00, ds)
             except Exception as read_err:
                 logger.error("c_get_instance_read_failed", storage_uri=storage_uri, error=str(read_err))
-
-        yield (0x0000, None)  # Success
 
 
 pynetdicom_service = PyNetDicomService()

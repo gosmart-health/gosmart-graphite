@@ -64,15 +64,19 @@ def _build_multipart_dicom_response(files: List[Path]) -> Response:
 @router.get("/studies", response_class=Response)
 async def qido_search_studies(
     PatientID: Optional[str] = Query(None, alias="PatientID"),
+    PatientName: Optional[str] = Query(None, alias="PatientName"),
     StudyInstanceUID: Optional[str] = Query(None, alias="StudyInstanceUID"),
     StudyDate: Optional[str] = Query(None, alias="StudyDate"),
+    AccessionNumber: Optional[str] = Query(None, alias="AccessionNumber"),
     limit: int = Query(100, ge=1, le=1000),
 ):
     """QIDO-RS: Search for studies matching query parameters directly from the graph."""
     studies = dicomweb_service.search_studies(
         patient_id=PatientID,
+        patient_name=PatientName,
         study_uid=StudyInstanceUID,
         study_date=StudyDate,
+        accession_number=AccessionNumber,
         limit=limit,
     )
     return Response(

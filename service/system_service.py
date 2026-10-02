@@ -59,6 +59,7 @@ def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
         "roles": roles,
         "host": clean.get("host", "0.0.0.0"),
         "port": clean.get("port", 11112),
+        "is_local": clean.get("is_local", False),
         "is_promiscuous": clean.get("is_promiscuous", clean.get("ae_title") == "*"),
         "tls_enabled": clean.get("tls_enabled", False),
         "tls_cert_path": clean.get("tls_cert_path"),
@@ -194,6 +195,7 @@ class SystemService:
                 roles=["SCP"],
                 host="0.0.0.0",
                 port=settings.DICOM_SCP_PORT,
+                is_local=True,
                 is_promiscuous=True,
                 dicom_services=["*"],
                 transfer_syntaxes=["*"],
@@ -221,6 +223,7 @@ class SystemService:
                           c.roles = $cfg.roles,
                           c.host = $cfg.host,
                           c.port = $cfg.port,
+                          c.is_local = $cfg.is_local,
                           c.is_promiscuous = $cfg.is_promiscuous,
                           c.tls_enabled = $cfg.tls_enabled,
                           c.tls_cert_path = $cfg.tls_cert_path,
@@ -358,6 +361,7 @@ class SystemService:
         system_id: Optional[str] = None,
         role: Optional[str] = None,
         is_promiscuous: Optional[bool] = None,
+        is_local: Optional[bool] = None,
         include_tests: bool = False,
         test_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -371,6 +375,7 @@ class SystemService:
           AND ($test_id IS NULL OR $test_id = '' OR c.test_id = $test_id)
           AND ($role IS NULL OR $role IN c.roles)
           AND ($is_promiscuous IS NULL OR c.is_promiscuous = $is_promiscuous)
+          AND ($is_local IS NULL OR c.is_local = $is_local)
         RETURN properties(c) AS c
         ORDER BY c.ae_title ASC
         """
@@ -378,6 +383,7 @@ class SystemService:
             "system_id": system_id,
             "role": role,
             "is_promiscuous": is_promiscuous,
+            "is_local": is_local,
             "include_tests": include_tests,
             "test_id": test_id,
         }
@@ -410,6 +416,7 @@ class SystemService:
             roles=config_data.roles,
             host=config_data.host,
             port=config_data.port,
+            is_local=config_data.is_local,
             tls_enabled=config_data.tls_enabled,
             tls_cert_path=config_data.tls_cert_path,
             tls_key_path=config_data.tls_key_path,
@@ -458,6 +465,7 @@ class SystemService:
                       c.roles = $cfg.roles,
                       c.host = $cfg.host,
                       c.port = $cfg.port,
+                      c.is_local = $cfg.is_local,
                       c.is_promiscuous = $cfg.is_promiscuous,
                       c.tls_enabled = $cfg.tls_enabled,
                       c.tls_cert_path = $cfg.tls_cert_path,
@@ -518,6 +526,7 @@ class SystemService:
             c.roles = coalesce($roles, c.roles),
             c.host = coalesce($host, c.host),
             c.port = coalesce($port, c.port),
+            c.is_local = coalesce($is_local, c.is_local),
             c.is_promiscuous = CASE WHEN $ae_title IS NOT NULL THEN ($ae_title = '*') ELSE c.is_promiscuous END,
             c.tls_enabled = coalesce($tls_enabled, c.tls_enabled),
             c.tls_cert_path = coalesce($tls_cert_path, c.tls_cert_path),
@@ -544,6 +553,7 @@ class SystemService:
             "roles": update_data.roles,
             "host": update_data.host,
             "port": update_data.port,
+            "is_local": update_data.is_local,
             "tls_enabled": update_data.tls_enabled,
             "tls_cert_path": update_data.tls_cert_path,
             "tls_key_path": update_data.tls_key_path,

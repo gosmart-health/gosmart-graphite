@@ -27,6 +27,7 @@ ON CREATE SET p.patient_id = $patient.patient_id,
 ON MATCH SET  p.patient_name = coalesce($patient.patient_name, p.patient_name),
               p.patient_birth_date = coalesce($patient.patient_birth_date, p.patient_birth_date),
               p.patient_sex = coalesce($patient.patient_sex, p.patient_sex),
+              p.test_id = coalesce($patient.test_id, p.test_id),
               p.Action = "UPDATE",
               p.ActedAt = datetime({timezone: 'UTC'}),
               p.ActedBy = $patient.ActedBy,
@@ -51,6 +52,7 @@ ON MATCH SET  s.study_date = coalesce($study.study_date, s.study_date),
               s.study_time = coalesce($study.study_time, s.study_time),
               s.study_description = coalesce($study.study_description, s.study_description),
               s.accession_number = coalesce($study.accession_number, s.accession_number),
+              s.test_id = coalesce($study.test_id, s.test_id),
               s.Action = "UPDATE",
               s.ActedAt = datetime({timezone: 'UTC'}),
               s.ActedBy = $study.ActedBy,
@@ -75,6 +77,7 @@ ON MATCH SET  se.series_number = coalesce($series.series_number, se.series_numbe
               se.modality = coalesce($series.modality, se.modality),
               se.series_description = coalesce($series.series_description, se.series_description),
               se.body_part_examined = coalesce($series.body_part_examined, se.body_part_examined),
+              se.test_id = coalesce($series.test_id, se.test_id),
               se.Action = "UPDATE",
               se.ActedAt = datetime({timezone: 'UTC'}),
               se.ActedBy = $series.ActedBy,
@@ -106,6 +109,7 @@ ON MATCH SET  i.storage_uri = coalesce($instance.storage_uri, i.storage_uri),
               i.SourceIdentity = coalesce(i.SourceIdentity, $instance.SourceIdentity),
               i.Destination = coalesce(i.Destination, $instance.Destination),
               i.DestinationIdentity = coalesce(i.DestinationIdentity, $instance.DestinationIdentity),
+              i.test_id = coalesce($instance.test_id, i.test_id),
               i.Action = "UPDATE",
               i.ActedAt = datetime({timezone: 'UTC'}),
               i.ActedBy = $instance.ActedBy,
@@ -121,6 +125,7 @@ ON CREATE SET r_ps.test_id = $rel_ps.test_id,
               r_ps.ActedBy = $rel_ps.ActedBy,
               r_ps.CreatedAt = datetime({timezone: 'UTC'}),
               r_ps.ExpiresAt = CASE WHEN $rel_ps.ExpiresAt IS NOT NULL THEN datetime($rel_ps.ExpiresAt) ELSE null END
+ON MATCH SET  r_ps.test_id = coalesce($rel_ps.test_id, r_ps.test_id)
 
 MERGE (s)-[r_se:HAS_SERIES {id: $rel_se.id}]->(se)
 ON CREATE SET r_se.test_id = $rel_se.test_id,
@@ -129,6 +134,7 @@ ON CREATE SET r_se.test_id = $rel_se.test_id,
               r_se.ActedBy = $rel_se.ActedBy,
               r_se.CreatedAt = datetime({timezone: 'UTC'}),
               r_se.ExpiresAt = CASE WHEN $rel_se.ExpiresAt IS NOT NULL THEN datetime($rel_se.ExpiresAt) ELSE null END
+ON MATCH SET  r_se.test_id = coalesce($rel_se.test_id, r_se.test_id)
 
 MERGE (se)-[r_ei:HAS_INSTANCE {id: $rel_ei.id}]->(i)
 ON CREATE SET r_ei.test_id = $rel_ei.test_id,
@@ -137,6 +143,7 @@ ON CREATE SET r_ei.test_id = $rel_ei.test_id,
               r_ei.ActedBy = $rel_ei.ActedBy,
               r_ei.CreatedAt = datetime({timezone: 'UTC'}),
               r_ei.ExpiresAt = CASE WHEN $rel_ei.ExpiresAt IS NOT NULL THEN datetime($rel_ei.ExpiresAt) ELSE null END
+ON MATCH SET  r_ei.test_id = coalesce($rel_ei.test_id, r_ei.test_id)
 
 RETURN p.id AS p_id,
        p.patient_id AS patient_id,
@@ -456,8 +463,10 @@ class GraphService:
     async def search_studies_qido(
         self,
         patient_id: Optional[str] = None,
+        patient_name: Optional[str] = None,
         study_uid: Optional[str] = None,
         study_date: Optional[str] = None,
+        accession_number: Optional[str] = None,
         include_tests: bool = False,
         test_id: Optional[str] = None,
         limit: int = 100,
@@ -467,9 +476,14 @@ class GraphService:
         MATCH (p:Patient)-[:HAS_STUDY]->(s:Study)
         WHERE (s.Action IS NULL OR s.Action <> 'DELETE')
           AND (s.ExpiresAt IS NULL OR s.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($patient_id IS NULL OR p.patient_id = $patient_id)
-          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
-          AND ($study_date IS NULL OR s.study_date = $study_date)
+          AND ($patient_id IS NULL OR $patient_id = '' OR $patient_id = '*' OR p.patient_id = $patient_id)
+          AND ($patient_name IS NULL OR $patient_name = '' OR $patient_name = '*' OR p.patient_name = $patient_name)
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($study_date IS NULL OR $study_date = '' OR $study_date = '*' OR s.study_date = $study_date)
+          AND (
+            $accession_number IS NULL OR $accession_number = '' OR $accession_number = '*'
+            OR s.accession_number = $accession_number
+          )
           AND (
             $include_tests = true
             OR s.test_id IS NULL
@@ -501,8 +515,10 @@ class GraphService:
             query,
             {
                 "patient_id": patient_id,
+                "patient_name": patient_name,
                 "study_uid": study_uid,
                 "study_date": study_date,
+                "accession_number": accession_number,
                 "include_tests": include_tests,
                 "test_id": test_id,
                 "limit": limit,
@@ -512,8 +528,10 @@ class GraphService:
     def search_studies_qido_sync(
         self,
         patient_id: Optional[str] = None,
+        patient_name: Optional[str] = None,
         study_uid: Optional[str] = None,
         study_date: Optional[str] = None,
+        accession_number: Optional[str] = None,
         include_tests: bool = False,
         test_id: Optional[str] = None,
         limit: int = 100,
@@ -523,9 +541,14 @@ class GraphService:
         MATCH (p:Patient)-[:HAS_STUDY]->(s:Study)
         WHERE (s.Action IS NULL OR s.Action <> 'DELETE')
           AND (s.ExpiresAt IS NULL OR s.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($patient_id IS NULL OR p.patient_id = $patient_id)
-          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
-          AND ($study_date IS NULL OR s.study_date = $study_date)
+          AND ($patient_id IS NULL OR $patient_id = '' OR $patient_id = '*' OR p.patient_id = $patient_id)
+          AND ($patient_name IS NULL OR $patient_name = '' OR $patient_name = '*' OR p.patient_name = $patient_name)
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($study_date IS NULL OR $study_date = '' OR $study_date = '*' OR s.study_date = $study_date)
+          AND (
+            $accession_number IS NULL OR $accession_number = '' OR $accession_number = '*'
+            OR s.accession_number = $accession_number
+          )
           AND (
             $include_tests = true
             OR s.test_id IS NULL
@@ -558,8 +581,10 @@ class GraphService:
             result = session.run(
                 query,
                 patient_id=patient_id,
+                patient_name=patient_name,
                 study_uid=study_uid,
                 study_date=study_date,
+                accession_number=accession_number,
                 include_tests=include_tests,
                 test_id=test_id,
                 limit=limit,
@@ -580,9 +605,9 @@ class GraphService:
         MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
         WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
           AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
-          AND ($modality IS NULL OR se.modality = $modality)
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($modality IS NULL OR $modality = '' OR $modality = '*' OR se.modality = $modality)
           AND (
             $include_tests = true
             OR se.test_id IS NULL
@@ -628,9 +653,9 @@ class GraphService:
         MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
         WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
           AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
-          AND ($modality IS NULL OR se.modality = $modality)
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($modality IS NULL OR $modality = '' OR $modality = '*' OR se.modality = $modality)
           AND (
             $include_tests = true
             OR se.test_id IS NULL
@@ -677,9 +702,9 @@ class GraphService:
         MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
         WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
           AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
-          AND ($sop_uid IS NULL OR i.sop_instance_uid = $sop_uid)
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR $sop_uid = '' OR $sop_uid = '*' OR i.sop_instance_uid = $sop_uid)
           AND (
             $include_tests = true
             OR i.test_id IS NULL
@@ -721,9 +746,9 @@ class GraphService:
         MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
         WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
           AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR se.series_instance_uid = $series_uid)
-          AND ($sop_uid IS NULL OR i.sop_instance_uid = $sop_uid)
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR $sop_uid = '' OR $sop_uid = '*' OR i.sop_instance_uid = $sop_uid)
           AND (
             $include_tests = true
             OR i.test_id IS NULL
@@ -886,6 +911,7 @@ class GraphService:
           )
         RETURN i.sop_instance_uid AS sop_instance_uid,
                i.sop_class_uid AS sop_class_uid,
+               i.transfer_syntax_uid AS transfer_syntax_uid,
                i.storage_uri AS storage_uri
         ORDER BY i.instance_number ASC, i.sop_instance_uid ASC
         """

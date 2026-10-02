@@ -12,6 +12,7 @@ class DICOMConfigurationResponse(BaseModel):
     roles: List[str] = Field(default_factory=list, description="Roles: SCP, SCU")
     host: str = Field(..., description="Host or bind address")
     port: int = Field(..., description="TCP port")
+    is_local: bool = Field(default=False, description="Whether this configuration represents a local server")
     is_promiscuous: bool = Field(default=False, description="Promiscuous mode flag")
     tls_enabled: bool = Field(default=False, description="Whether TLS is enabled")
     tls_cert_path: Optional[str] = Field(default=None, description="Path to TLS certificate file")
@@ -42,6 +43,10 @@ class DICOMConfigurationCreateRequest(BaseModel):
     roles: List[str] = Field(default_factory=lambda: ["SCP"], description="Roles: SCP, SCU")
     host: str = Field(default="0.0.0.0", description="Host or bind address")
     port: int = Field(default=11112, description="TCP port")
+    is_local: bool = Field(
+        default=False,
+        description="Whether this is a local server (True) bound to a local interface or remote SCP (False)",
+    )
     tls_enabled: bool = Field(default=False, description="Whether TLS is enabled")
     tls_cert_path: Optional[str] = Field(default=None, description="Path to TLS certificate file")
     tls_key_path: Optional[str] = Field(default=None, description="Path to TLS private key file")
@@ -75,6 +80,10 @@ class DICOMConfigurationUpdateRequest(BaseModel):
     roles: Optional[List[str]] = Field(default=None, description="Roles: SCP, SCU")
     host: Optional[str] = Field(default=None, description="Host or bind address")
     port: Optional[int] = Field(default=None, description="TCP port")
+    is_local: Optional[bool] = Field(
+        default=None,
+        description="Whether this is a local server (True) bound to a local interface or remote SCP (False)",
+    )
     tls_enabled: Optional[bool] = Field(default=None, description="Whether TLS is enabled")
     tls_cert_path: Optional[str] = Field(default=None, description="Path to TLS certificate file")
     tls_key_path: Optional[str] = Field(default=None, description="Path to TLS private key file")

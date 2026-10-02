@@ -145,8 +145,10 @@ class DicomWebService:
     def search_studies(
         self,
         patient_id: Optional[str] = None,
+        patient_name: Optional[str] = None,
         study_uid: Optional[str] = None,
         study_date: Optional[str] = None,
+        accession_number: Optional[str] = None,
         include_tests: bool = True,
         test_id: Optional[str] = None,
         limit: int = 100,
@@ -155,8 +157,10 @@ class DicomWebService:
         try:
             records = graph_service.search_studies_qido_sync(
                 patient_id=patient_id,
+                patient_name=patient_name,
                 study_uid=study_uid,
                 study_date=study_date,
+                accession_number=accession_number,
                 include_tests=include_tests,
                 test_id=test_id,
                 limit=limit,

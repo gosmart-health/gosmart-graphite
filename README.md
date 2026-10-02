@@ -131,6 +131,15 @@ uv sync
 
 ### 2. Run the Servers
 
+NOTE: Before running the server you may issue the following Cypher to clear the entire
+database. This will initialize the system to its default, then you can add remote AEs
+etc after the server starts via the REST scripts (under test/rest-client) with the
+REST Client on VS Code.
+
+```cypher
+MATCH (n) DETACH DELETE n;
+```
+
 ```bash
 uv run python main.py
 # or directly with uvicorn

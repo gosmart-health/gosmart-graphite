@@ -1,0 +1,43 @@
+@host = http://localhost:8086
+
+GET {{host}}/docs
+
+### Clanup Test Data
+POST {{host}}/api/v1/system/test/cleanup
+
+### Get DICOM Configurations
+
+GET {{host}}/api/v1/configurations/dicom
+
+### ADD DICOM AE CONFIGURATION
+POST {{host}}/api/v1/configurations/dicom HTTP/1.1
+content-type: application/json
+
+{
+  "ae_title": "MDICOM",
+  "roles": [
+    "SCU", "SCP"
+  ],
+  "host": "10.200.0.103",
+  "port": 11113,
+  "tls_enabled": false,
+  "tls_cert_path": null,
+  "tls_key_path": null,
+  "tls_ca_path": null,
+  "tls_ciphers": [
+  ],
+  "dicom_services": [
+    "*"
+  ],
+  "transfer_syntaxes": [
+    "*"
+  ],
+  "dicomweb_enabled": true,
+  "dicomweb_url_prefix": "/dicomweb",
+  "dicomweb_qido_enabled": true,
+  "dicomweb_wado_enabled": true,
+  "dicomweb_stow_enabled": true,
+  "description": "Micro DICOM",
+  "test_id": ""
+}
+

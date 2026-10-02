@@ -73,6 +73,7 @@ def dicom_qr_env():
         "roles": ["SCP"],
         "host": "127.0.0.1",
         "port": port,
+        "is_local": True,
         "is_promiscuous": False,
         "dicom_services": ["*"],
         "transfer_syntaxes": ["*"],
@@ -157,6 +158,94 @@ def test_dimse_c_find_study_level(dicom_qr_env):
     matched_datasets = [ds for status, ds in responses if ds is not None]
     assert len(matched_datasets) >= 1
     assert any(ds.StudyInstanceUID == study_uid for ds in matched_datasets)
+
+
+def test_dimse_c_find_study_level_empty_return_keys(dicom_qr_env):
+    """Test C-FIND at STUDY level with empty return keys as sent by MicroDICOM."""
+    port = dicom_qr_env["port"]
+    scp_aet = dicom_qr_env["ae_title"]
+    study_uid = dicom_qr_env["study_uid"]
+    patient_id = dicom_qr_env["patient_id"]
+
+    client_ae = AE(ae_title="MICRODICOM")
+    client_ae.add_requested_context(StudyRootQueryRetrieveInformationModelFind)
+
+    assoc = client_ae.associate("127.0.0.1", port, ae_title=scp_aet)
+    assert assoc.is_established
+
+    query_ds = Dataset()
+    query_ds.QueryRetrieveLevel = "STUDY"
+    query_ds.StudyInstanceUID = ""
+    query_ds.PatientID = ""
+    query_ds.PatientName = ""
+    query_ds.StudyDate = ""
+    query_ds.AccessionNumber = ""
+
+    responses = list(assoc.send_c_find(query_ds, StudyRootQueryRetrieveInformationModelFind))
+    assoc.release()
+
+    matched_datasets = [ds for status, ds in responses if ds is not None]
+    assert len(matched_datasets) >= 1
+    target = next((ds for ds in matched_datasets if ds.StudyInstanceUID == study_uid), None)
+    assert target is not None, f"Study {study_uid} not returned when query attributes are empty return keys"
+    assert target.PatientID == patient_id
+    assert hasattr(target, "PatientName")
+    assert hasattr(target, "PatientBirthDate")
+    assert hasattr(target, "PatientSex")
+
+
+def test_dimse_c_find_study_level_wildcard_matching(dicom_qr_env):
+    """Test C-FIND at STUDY level with wildcard '*' parameters."""
+    port = dicom_qr_env["port"]
+    scp_aet = dicom_qr_env["ae_title"]
+    study_uid = dicom_qr_env["study_uid"]
+
+    client_ae = AE(ae_title="TEST_FIND_SCU")
+    client_ae.add_requested_context(StudyRootQueryRetrieveInformationModelFind)
+
+    assoc = client_ae.associate("127.0.0.1", port, ae_title=scp_aet)
+    assert assoc.is_established
+
+    query_ds = Dataset()
+    query_ds.QueryRetrieveLevel = "STUDY"
+    query_ds.StudyInstanceUID = "*"
+    query_ds.PatientID = "*"
+    query_ds.PatientName = "*"
+    query_ds.StudyDate = "*"
+
+    responses = list(assoc.send_c_find(query_ds, StudyRootQueryRetrieveInformationModelFind))
+    assoc.release()
+
+    matched_datasets = [ds for status, ds in responses if ds is not None]
+    assert len(matched_datasets) >= 1
+    assert any(ds.StudyInstanceUID == study_uid for ds in matched_datasets)
+
+
+def test_dimse_c_find_series_level_empty_return_keys(dicom_qr_env):
+    """Test C-FIND at SERIES level with empty return keys."""
+    port = dicom_qr_env["port"]
+    scp_aet = dicom_qr_env["ae_title"]
+    study_uid = dicom_qr_env["study_uid"]
+    series_uid = dicom_qr_env["series_uid"]
+
+    client_ae = AE(ae_title="TEST_FIND_SCU")
+    client_ae.add_requested_context(StudyRootQueryRetrieveInformationModelFind)
+
+    assoc = client_ae.associate("127.0.0.1", port, ae_title=scp_aet)
+    assert assoc.is_established
+
+    query_ds = Dataset()
+    query_ds.QueryRetrieveLevel = "SERIES"
+    query_ds.StudyInstanceUID = study_uid
+    query_ds.SeriesInstanceUID = ""
+    query_ds.Modality = ""
+
+    responses = list(assoc.send_c_find(query_ds, StudyRootQueryRetrieveInformationModelFind))
+    assoc.release()
+
+    matched_datasets = [ds for status, ds in responses if ds is not None]
+    assert len(matched_datasets) >= 1
+    assert any(ds.SeriesInstanceUID == series_uid for ds in matched_datasets)
 
 
 def test_dimse_c_find_series_level(dicom_qr_env):

@@ -99,6 +99,9 @@ async def cleanup_test_data_endpoint(
 async def list_dicom_configurations(
     role: Optional[str] = Query(default=None, description="Filter by DICOM role (SCP or SCU)"),
     is_promiscuous: Optional[bool] = Query(default=None, description="Filter by promiscuous mode flag"),
+    is_local: Optional[bool] = Query(
+        default=None, description="Filter by local server flag (True for local server, False for remote SCP)"
+    ),
     include_tests: bool = Query(default=False, description="Whether to include test configurations"),
     test_id: Optional[str] = Query(default=None, description="Filter by test identifier"),
 ):
@@ -107,6 +110,7 @@ async def list_dicom_configurations(
         configs = await system_service.list_configurations(
             role=role,
             is_promiscuous=is_promiscuous,
+            is_local=is_local,
             include_tests=include_tests,
             test_id=test_id,
         )
