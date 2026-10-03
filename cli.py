@@ -282,6 +282,59 @@ def echo(
 
 
 @cli_app.command()
+def send(
+    target: str = typer.Argument(..., help="Path to DICOM file or directory, or SOP Instance UID"),
+    dest_aet: str = typer.Option(..., "--dest-aet", "-d", help="Destination AE Title (e.g. MDICOM)"),
+    host: Optional[str] = typer.Option(None, "--host", "-h", help="Target SCP host (resolved from Neo4j if omitted)"),
+    port: Optional[int] = typer.Option(None, "--port", "-p", help="Target SCP port (resolved from Neo4j if omitted)"),
+    calling_aet: Optional[str] = typer.Option(None, "--calling-aet", "-a", help="Calling AE Title"),
+    timeout: float = typer.Option(60.0, "--timeout", "-t", help="Timeout in seconds"),
+):
+    """Send DICOM instance(s) to a remote AE Title using Store SCU Actor."""
+    from actor.store_scu_actor import get_store_scu_actor, stop_store_scu_actor
+
+    setup_logging()
+    console.print(f"[cyan]Dispatching Store SCU transfer to {dest_aet}...[/cyan]")
+
+    target_path = Path(target)
+    instances = []
+    if target_path.is_dir():
+        instances = [str(p) for p in target_path.glob("**/*.dcm")]
+    elif target_path.is_file():
+        instances = [str(target_path)]
+    else:
+        instances = [target]
+
+    actor = get_store_scu_actor()
+    try:
+        res = actor.ask(
+            {
+                "type": "STORE",
+                "destination_aet": dest_aet,
+                "host": host,
+                "port": port,
+                "calling_aet": calling_aet,
+                "instances": instances,
+                "acted_by": "cli_operator",
+            },
+            timeout=timeout,
+        )
+    finally:
+        stop_store_scu_actor()
+
+    if res.get("success"):
+        console.print(
+            f"[green]✓ Store SCU Success:[/green] Completed {res.get('completed', 0)}/{res.get('total', 0)} "
+            f"transfers to {dest_aet}"
+        )
+    else:
+        console.print(
+            f"[red]✗ Store SCU Failed:[/red] Completed {res.get('completed', 0)}, "
+            f"Failed {res.get('failed', 0)} (Error: {res.get('error')})"
+        )
+
+
+@cli_app.command()
 def mcp(
     transport: str = typer.Option("sse", "--transport", "-t", help="Transport mode: sse or stdio"),
     port: int = typer.Option(8001, "--port", "-p", help="Port for standalone SSE server"),

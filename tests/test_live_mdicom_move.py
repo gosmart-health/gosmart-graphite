@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pydicom
+import pytest
 from pydicom.dataset import Dataset
 from pynetdicom import AE
 from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelMove
@@ -13,7 +14,7 @@ from model.graph import DICOMConfigurationNode
 from service.dicom_service import dicom_service
 from service.graph_service import graph_service
 from service.media_service import media_service
-from service.pynetdicom_service import PyNetDicomService
+from service.pynetdicom_service import PyNetDicomService, pynetdicom_service
 
 TEST_ASSET_DCM = Path("tests/assets/mr/MR.2.25.10986282349447326157620829373816019196.dcm")
 LIVE_MDICOM_HOST = "10.200.0.103"
@@ -33,7 +34,20 @@ def test_live_mdicom_c_move_push():
 
     This test exercises the live, external Micro DICOM server to ensure that presentation
     context negotiation and C-STORE sub-operations complete with 0x0000 (Success) and zero failures.
+    If MDICOM is not reachable (e.g., in CI/CD), the test gracefully skips.
     """
+    # Verify MDICOM server availability via C-ECHO; skip test if offline (e.g. CI/CD)
+    echo_res = pynetdicom_service.echo_scu(
+        host=LIVE_MDICOM_HOST,
+        port=LIVE_MDICOM_PORT,
+        called_aet=LIVE_MDICOM_AET,
+        silent=True,
+    )
+    if not echo_res.get("success"):
+        pytest.skip(
+            f"MDICOM server at {LIVE_MDICOM_HOST}:{LIVE_MDICOM_PORT} ({LIVE_MDICOM_AET}) "
+            f"unreachable: {echo_res.get('message')}"
+        )
     settings = get_settings()
     test_id = "test_live_mdicom"
 

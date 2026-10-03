@@ -625,8 +625,11 @@ class PyNetDicomService:
         port: int,
         calling_aet: Optional[str] = None,
         called_aet: Optional[str] = None,
+        silent: bool = False,
     ) -> Dict[str, Any]:
         """Send C-ECHO verification request to a remote DICOM SCP."""
+        import logging as py_logging
+
         ae = self.get_ae()
         if calling_aet:
             ae.ae_title = calling_aet
@@ -634,25 +637,39 @@ class PyNetDicomService:
             ae.ae_title = self.settings.DICOM_AE_TITLE
         target_aet = called_aet or "ANY_SCP"
 
-        assoc = ae.associate(host, port, ae_title=target_aet)
-        if assoc.is_established:
-            status = assoc.send_c_echo()
-            assoc.release()
-            is_success = bool(status and status.Status == 0x0000)
-            logger.info("c_echo_scu_completed", target_aet=target_aet, host=host, port=port, success=is_success)
-            msg = "Association established and C-ECHO verified" if is_success else "C-ECHO returned non-zero status"
-            return {
-                "success": is_success,
-                "status_code": hex(status.Status) if status else "None",
-                "message": msg,
-            }
-        else:
-            logger.warning("c_echo_scu_rejected", target_aet=target_aet, host=host, port=port)
-            return {
-                "success": False,
-                "status_code": "ASSOCIATION_REJECTED",
-                "message": f"Could not establish association with {target_aet}@{host}:{port}",
-            }
+        # Suppress noisy transport connection errors if probing silently (e.g. CI/CD test skip checks)
+        pydicom_loggers = [py_logging.getLogger("pynetdicom"), py_logging.getLogger("pynetdicom.transport")]
+        prev_levels = [pylogger.level for pylogger in pydicom_loggers]
+        if silent:
+            for pylogger in pydicom_loggers:
+                pylogger.setLevel(py_logging.CRITICAL)
+
+        try:
+            assoc = ae.associate(host, port, ae_title=target_aet)
+            if assoc.is_established:
+                status = assoc.send_c_echo()
+                assoc.release()
+                is_success = bool(status and status.Status == 0x0000)
+                if not silent:
+                    logger.info("c_echo_scu_completed", target_aet=target_aet, host=host, port=port, success=is_success)
+                msg = "Association established and C-ECHO verified" if is_success else "C-ECHO returned non-zero status"
+                return {
+                    "success": is_success,
+                    "status_code": hex(status.Status) if status else "None",
+                    "message": msg,
+                }
+            else:
+                if not silent:
+                    logger.warning("c_echo_scu_rejected", target_aet=target_aet, host=host, port=port)
+                return {
+                    "success": False,
+                    "status_code": "ASSOCIATION_REJECTED",
+                    "message": f"Could not establish association with {target_aet}@{host}:{port}",
+                }
+        finally:
+            if silent:
+                for pylogger, prev in zip(pydicom_loggers, prev_levels):
+                    pylogger.setLevel(prev)
 
     def handle_c_store(self, event: Any) -> int:
         """Handle incoming C-STORE request.

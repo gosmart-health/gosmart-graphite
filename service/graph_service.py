@@ -5,6 +5,7 @@ from core.logging import get_logger
 from db.neo4j import Neo4jClient, neo4j_client
 from model.dicom import DicomHierarchy
 from model.graph import (
+    TransferStatusNode,
     generate_deterministic_id,
     to_negated_relation_type,
     to_positive_relation_type,
@@ -951,6 +952,100 @@ class GraphService:
         except Exception as e:
             logger.warning("find_destination_ae_failed", ae_title=ae_title, error=str(e))
         return None
+
+    def _prepare_transfer_status_params(self, node: TransferStatusNode) -> Dict[str, Any]:
+        """Format TransferStatusNode attributes for Cypher persistence."""
+        params = {
+            "id": node.id,
+            "sender": node.sender,
+            "recepient": node.recepient,
+            "objectRef": node.objectRef,
+            "transferTimeMs": node.transferTimeMs,
+            "transferBytes": node.transferBytes,
+            "statusCode": node.statusCode,
+            "statusMessage": node.statusMessage,
+            "sop_instance_uid": node.sop_instance_uid,
+            "direction": node.direction,
+            "service_type": node.service_type,
+            "test_id": node.test_id,
+            "Action": node.Action,
+            "ActedBy": node.ActedBy,
+            "ExpiresAt": node.ExpiresAt.isoformat() if node.ExpiresAt else None,
+        }
+        return params
+
+    async def save_transfer_status(self, node: TransferStatusNode) -> Dict[str, Any]:
+        """Asynchronously persist a standalone auditable TransferStatusNode in Neo4j."""
+        query = """
+        CREATE (t:TransferStatus {
+            id: $id,
+            sender: $sender,
+            recepient: $recepient,
+            objectRef: $objectRef,
+            transferTimeMs: $transferTimeMs,
+            transferBytes: $transferBytes,
+            statusCode: $statusCode,
+            statusMessage: $statusMessage,
+            sop_instance_uid: $sop_instance_uid,
+            direction: $direction,
+            service_type: $service_type,
+            test_id: $test_id,
+            Action: $Action,
+            ActedAt: datetime({timezone: 'UTC'}),
+            ActedBy: $ActedBy,
+            CreatedAt: datetime({timezone: 'UTC'}),
+            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
+                            THEN datetime($ExpiresAt)
+                            ELSE datetime({timezone: 'UTC'}) + duration({days: 30}) END
+        })
+        RETURN t.id AS id
+        """
+        params = self._prepare_transfer_status_params(node)
+        try:
+            records = await self.client.execute_query(query, params)
+            if records:
+                return {"id": records[0].get("id", node.id), "success": True}
+            return {"id": node.id, "success": True}
+        except Exception as e:
+            logger.warning("save_transfer_status_failed", error=str(e), exc_info=True)
+            return {"id": node.id, "success": False, "error": str(e)}
+
+    def save_transfer_status_sync(self, node: TransferStatusNode) -> Dict[str, Any]:
+        """Synchronously persist a standalone auditable TransferStatusNode in Neo4j."""
+        query = """
+        CREATE (t:TransferStatus {
+            id: $id,
+            sender: $sender,
+            recepient: $recepient,
+            objectRef: $objectRef,
+            transferTimeMs: $transferTimeMs,
+            transferBytes: $transferBytes,
+            statusCode: $statusCode,
+            statusMessage: $statusMessage,
+            sop_instance_uid: $sop_instance_uid,
+            direction: $direction,
+            service_type: $service_type,
+            test_id: $test_id,
+            Action: $Action,
+            ActedAt: datetime({timezone: 'UTC'}),
+            ActedBy: $ActedBy,
+            CreatedAt: datetime({timezone: 'UTC'}),
+            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
+                            THEN datetime($ExpiresAt)
+                            ELSE datetime({timezone: 'UTC'}) + duration({days: 30}) END
+        })
+        RETURN t.id AS id
+        """
+        params = self._prepare_transfer_status_params(node)
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, **params)
+                record = result.single()
+                return {"id": record["id"] if record else node.id, "success": True}
+        except Exception as e:
+            logger.warning("save_transfer_status_sync_failed", error=str(e), exc_info=True)
+            return {"id": node.id, "success": False, "error": str(e)}
 
 
 graph_service = GraphService()

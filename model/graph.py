@@ -1,6 +1,6 @@
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -312,6 +312,62 @@ class DICOMConfigurationNode(AuditableNode):
             "ae_title": self.ae_title,
             "host": self.host,
             "port": self.port,
+        }
+        if self.test_id:
+            subset["test_id"] = self.test_id
+        return subset
+
+
+class TransferStatusNode(AuditableNode):
+    """Auditable database record capturing an individual DICOM DIMSE transfer event.
+
+    Recorded for asynchronous transfer tracking, Store SCU transfers, and C-STORE SCP receipts.
+    Note: Maintained as a standalone node in Neo4j without edges to Instance nodes to avoid
+    dense supernode link explosions.
+    """
+
+    __label__: ClassVar[str] = "TransferStatus"
+
+    sender: str = Field(..., description="Sender AE Title (e.g. GOSMART_GS or remote SCU)")
+    recepient: str = Field(
+        ...,
+        validation_alias="recipient",
+        description="Recipient AE Title (e.g. MDICOM or GOSMART_GS)",
+    )
+    objectRef: str = Field(..., description="The URI of the raw DICOM object")
+    transferTimeMs: int = Field(default=0, description="Transfer duration in milliseconds")
+    transferBytes: int = Field(default=0, description="Number of bytes transferred")
+    statusCode: str = Field(default="0x0000", description="DICOM DIMSE status code (e.g. 0x0000, 0xA700)")
+    statusMessage: Optional[str] = Field(default=None, description="Human-readable status or error message")
+
+    # Additional provenance fields
+    sop_instance_uid: Optional[str] = Field(default=None, description="Affected SOP Instance UID")
+    direction: str = Field(default="OUTBOUND", description="Transfer direction: OUTBOUND (SCU) or INBOUND (SCP)")
+    service_type: str = Field(default="C-STORE", description="DIMSE service: C-STORE, C-MOVE, etc.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_recepient_alias(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "recipient" in data and "recepient" not in data:
+                data["recepient"] = data.pop("recipient")
+        return data
+
+    @model_validator(mode="after")
+    def set_default_expiration(self) -> "TransferStatusNode":
+        """Set ExpiresAt to 30 days from creation date if not explicitly set."""
+        if self.ExpiresAt is None:
+            base_time = self.CreatedAt or datetime.now(timezone.utc)
+            self.ExpiresAt = base_time + timedelta(days=30)
+        return self
+
+    def get_identity_subset(self) -> Dict[str, Any]:
+        subset: Dict[str, Any] = {
+            "entity": self.__label__,
+            "sender": self.sender,
+            "recepient": self.recepient,
+            "objectRef": self.objectRef,
+            "created_at": self.CreatedAt.isoformat() if self.CreatedAt else "",
         }
         if self.test_id:
             subset["test_id"] = self.test_id

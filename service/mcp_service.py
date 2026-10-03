@@ -372,3 +372,51 @@ async def restore_dicom_configuration(
         "success": bool(restored),
         "configuration": restored,
     }
+
+
+@mcp.tool()
+async def store_scu(
+    destination_aet: str,
+    instances_json: Optional[str] = None,
+    study_instance_uid: Optional[str] = None,
+    series_instance_uid: Optional[str] = None,
+    sop_instance_uid: Optional[str] = None,
+    patient_id: Optional[str] = None,
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    calling_aet: Optional[str] = None,
+    acted_by: str = "mcp_agent",
+    timeout: float = 60.0,
+) -> Dict[str, Any]:
+    """Send DICOM instance(s) or query-matched instances to a remote AE Title using Store SCU Actor."""
+    from actor.store_scu_actor import get_store_scu_actor
+
+    instances: List[str] = json.loads(instances_json) if instances_json else []
+
+    if not instances and (study_instance_uid or series_instance_uid or sop_instance_uid or patient_id):
+        level = "IMAGE" if sop_instance_uid else ("SERIES" if series_instance_uid else "STUDY")
+        matched = graph_service.find_instances_for_retrieve_sync(
+            level=level,
+            patient_id=patient_id,
+            study_uid=study_instance_uid,
+            series_uid=series_instance_uid,
+            sop_uid=sop_instance_uid,
+            include_tests=True,
+        )
+        instances = [inst["storage_uri"] for inst in matched if inst.get("storage_uri")]
+
+    actor = get_store_scu_actor()
+    res = actor.ask(
+        {
+            "type": "STORE",
+            "destination_aet": destination_aet,
+            "host": host,
+            "port": port,
+            "calling_aet": calling_aet,
+            "instances": instances,
+            "acted_by": acted_by,
+        },
+        timeout=timeout,
+    )
+    logger.info("mcp_store_scu_executed", destination_aet=destination_aet, result=res)
+    return res
