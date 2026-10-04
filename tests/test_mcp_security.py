@@ -91,7 +91,8 @@ async def test_mcp_sse_valid_jwt_and_api_key_auth(mcp_app):
         )
         raw_api_key = api_key_data["raw_api_key"]
 
-        # Test MCPAuthMiddleware with downstream ASGI handler
+        # Test MCPAuthMiddleware with downstream ASGI handler to verify credentials
+        # without hanging on infinite SSE event stream
         from starlette.responses import PlainTextResponse
 
         from service.mcp_service import MCPAuthMiddleware
@@ -99,9 +100,9 @@ async def test_mcp_sse_valid_jwt_and_api_key_auth(mcp_app):
         captured_user = []
 
         async def dummy_downstream(scope, receive, send):
-            user = get_current_mcp_acted_by()
-            captured_user.append(user)
-            response = PlainTextResponse(f"OK: {user}")
+            user_acted = get_current_mcp_acted_by()
+            captured_user.append(user_acted)
+            response = PlainTextResponse(f"OK: {user_acted}")
             await response(scope, receive, send)
 
         auth_wrapped_app = MCPAuthMiddleware(dummy_downstream)
@@ -121,18 +122,21 @@ async def test_mcp_sse_valid_jwt_and_api_key_auth(mcp_app):
             res2 = await client.get(f"/sse?token={jwt_token}")
             assert res2.status_code == 200
             assert f"user:{user['primary_email']}" in res2.text
+            assert captured_user == [f"user:{user['primary_email']}"]
 
             # 3. API Key in X-API-Key Header
             captured_user.clear()
             res3 = await client.get("/sse", headers={"X-API-Key": raw_api_key})
             assert res3.status_code == 200
             assert f"user:{user['primary_email']}" in res3.text
+            assert captured_user == [f"user:{user['primary_email']}"]
 
             # 4. API Key in query parameter ?api_key=...
             captured_user.clear()
             res4 = await client.get(f"/sse?api_key={raw_api_key}")
             assert res4.status_code == 200
             assert f"user:{user['primary_email']}" in res4.text
+            assert captured_user == [f"user:{user['primary_email']}"]
 
     finally:
         await graph_service.cleanup_test_data(test_id)
