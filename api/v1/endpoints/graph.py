@@ -1,12 +1,17 @@
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from core.auth_dependency import get_current_group_context, get_current_user
 from model.graph import CypherQueryRequest
 from service.graph_service import graph_service
 
-router = APIRouter(prefix="/graph", tags=["Graph (Neo4j)"])
+router = APIRouter(
+    prefix="/graph",
+    tags=["Graph (Neo4j)"],
+    dependencies=[Depends(get_current_user), Depends(get_current_group_context)],
+)
 
 
 class RelationshipActionRequest(BaseModel):

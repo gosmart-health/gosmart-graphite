@@ -1,10 +1,15 @@
 import json
+from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 
 from mcp.server.mcpserver import MCPServer
+from starlette.datastructures import Headers, QueryParams
+from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
 from core.config import get_settings
 from core.logging import get_logger
+from core.security import decode_token
 from db.neo4j import neo4j_client
 from model.system import (
     DICOMConfigurationCreateRequest,
@@ -15,10 +20,37 @@ from service.dicom_service import dicom_service
 from service.graph_service import graph_service
 from service.pynetdicom_service import pynetdicom_service
 from service.system_service import system_service
+from service.user_service import user_service
 
 logger = get_logger("gosmart_gs.mcp")
 
 mcp = MCPServer("gosmart-dicom-graph-server")
+
+# Context variable to hold authenticated user across MCP tool invocations
+_current_mcp_user: ContextVar[Optional[Dict[str, Any]]] = ContextVar("_current_mcp_user", default=None)
+
+
+def get_current_mcp_user() -> Optional[Dict[str, Any]]:
+    """Retrieve the currently authenticated MCP user from context."""
+    return _current_mcp_user.get()
+
+
+def get_current_mcp_acted_by(fallback: str = "mcp_agent") -> str:
+    """Resolve acted_by audit string based on the active MCP user."""
+    user = _current_mcp_user.get()
+    if user:
+        email = user.get("primary_email") or user.get("id")
+        return f"user:{email}"
+    return fallback
+
+
+def check_mcp_admin_role() -> None:
+    """Check if the currently authenticated MCP user has Admin privileges."""
+    user = _current_mcp_user.get()
+    if user:
+        roles = user.get("system_roles", [])
+        if not any(r in roles for r in ["PLATFORM_ADMIN", "Admin", "admin"]):
+            raise PermissionError("Permission denied: Operation requires PLATFORM_ADMIN or Admin role")
 
 
 @mcp.tool()
@@ -233,6 +265,8 @@ async def update_system_info(
     test_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Update mutable properties of the root System node (installer configuration)."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
     req = SystemUpdateRequest(
         name=name,
         owner=owner,
@@ -241,15 +275,17 @@ async def update_system_info(
         phone=phone,
         serial_number=serial_number,
     )
-    updated = await system_service.update_system(data=req, acted_by=acted_by, test_id=test_id)
-    logger.info("mcp_update_system_info_executed", updated=bool(updated), acted_by=acted_by)
+    updated = await system_service.update_system(data=req, acted_by=effective_acted_by, test_id=test_id)
+    logger.info("mcp_update_system_info_executed", updated=bool(updated), acted_by=effective_acted_by)
     return updated
 
 
 @mcp.tool()
 async def bootstrap_system_defaults(acted_by: str = "mcp_agent") -> Dict[str, Any]:
     """Ensure the root System node and default promiscuous DICOM configuration are initialized."""
-    res = await system_service.bootstrap_system(acted_by=acted_by)
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    res = await system_service.bootstrap_system(acted_by=effective_acted_by)
     logger.info("mcp_bootstrap_system_executed", success=res.get("success", False))
     return res
 
@@ -295,6 +331,8 @@ async def create_dicom_configuration(
     acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Create a new DICOM Configuration (* for promiscuous mode) linked to the System."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
     roles = json.loads(roles_json) if roles_json else ["SCP"]
     dicom_services = json.loads(dicom_services_json) if dicom_services_json else ["*"]
     transfer_syntaxes = json.loads(transfer_syntaxes_json) if transfer_syntaxes_json else ["*"]
@@ -311,7 +349,7 @@ async def create_dicom_configuration(
         description=description,
         test_id=test_id,
     )
-    cfg = await system_service.create_configuration(config_data=req, acted_by=acted_by)
+    cfg = await system_service.create_configuration(config_data=req, acted_by=effective_acted_by)
     logger.info("mcp_create_dicom_configuration_executed", config_id=cfg.get("id"), ae_title=ae_title)
     return cfg
 
@@ -329,6 +367,8 @@ async def update_dicom_configuration(
     acted_by: str = "mcp_agent",
 ) -> Optional[Dict[str, Any]]:
     """Update mutable properties of an existing DICOM Configuration."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
     roles = json.loads(roles_json) if roles_json else None
     req = DICOMConfigurationUpdateRequest(
         ae_title=ae_title,
@@ -339,7 +379,9 @@ async def update_dicom_configuration(
         tls_enabled=tls_enabled,
         description=description,
     )
-    updated = await system_service.update_configuration(config_id=config_id, update_data=req, acted_by=acted_by)
+    updated = await system_service.update_configuration(
+        config_id=config_id, update_data=req, acted_by=effective_acted_by
+    )
     logger.info("mcp_update_dicom_configuration_executed", config_id=config_id, updated=bool(updated))
     return updated
 
@@ -351,7 +393,11 @@ async def delete_dicom_configuration(
     acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Soft-delete (or hard-delete if specified) a DICOM Configuration."""
-    deleted = await system_service.delete_configuration(config_id=config_id, acted_by=acted_by, hard_delete=hard)
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    deleted = await system_service.delete_configuration(
+        config_id=config_id, acted_by=effective_acted_by, hard_delete=hard
+    )
     logger.info("mcp_delete_dicom_configuration_executed", config_id=config_id, success=deleted)
     return {
         "success": deleted,
@@ -366,7 +412,9 @@ async def restore_dicom_configuration(
     acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Restore a previously soft-deleted DICOM Configuration."""
-    restored = await system_service.restore_configuration(config_id=config_id, acted_by=acted_by)
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    restored = await system_service.restore_configuration(config_id=config_id, acted_by=effective_acted_by)
     logger.info("mcp_restore_dicom_configuration_executed", config_id=config_id, restored=bool(restored))
     return {
         "success": bool(restored),
@@ -391,6 +439,7 @@ async def store_scu(
     """Send DICOM instance(s) or query-matched instances to a remote AE Title using Store SCU Actor."""
     from actor.store_scu_actor import get_store_scu_actor
 
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
     instances: List[str] = json.loads(instances_json) if instances_json else []
 
     if not instances and (study_instance_uid or series_instance_uid or sop_instance_uid or patient_id):
@@ -414,9 +463,90 @@ async def store_scu(
             "port": port,
             "calling_aet": calling_aet,
             "instances": instances,
-            "acted_by": acted_by,
+            "acted_by": effective_acted_by,
         },
         timeout=timeout,
     )
     logger.info("mcp_store_scu_executed", destination_aet=destination_aet, result=res)
     return res
+
+
+# -----------------------------------------------------------------------------
+# MCP SSE Security Middleware & Application Factory
+# -----------------------------------------------------------------------------
+
+
+class MCPAuthMiddleware:
+    """ASGI Middleware enforcing Bearer JWT or API Key authentication on MCP SSE & Messages endpoints."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        if scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        query_params = QueryParams(scope.get("query_string", b""))
+
+        token = None
+        auth_header = headers.get("authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+        elif "token" in query_params:
+            token = query_params["token"]
+
+        api_key = headers.get("x-api-key") or query_params.get("api_key")
+
+        user: Optional[Dict[str, Any]] = None
+
+        if token:
+            try:
+                payload = decode_token(token)
+                user_id = payload.get("sub")
+                if user_id:
+                    u = await user_service.get_user_by_id(user_id)
+                    if u and u.get("is_active", True):
+                        user = u
+                    elif not u:
+                        user = {
+                            "id": user_id,
+                            "primary_email": payload.get("email"),
+                            "display_name": payload.get("display_name"),
+                            "system_roles": payload.get("roles", []),
+                            "is_active": True,
+                        }
+            except Exception as e:
+                logger.warning("mcp_auth_token_failed", error=str(e))
+        elif api_key:
+            try:
+                u = await user_service.authenticate_api_key(api_key)
+                if u and u.get("is_active", True):
+                    user = u
+            except Exception as e:
+                logger.warning("mcp_auth_api_key_failed", error=str(e))
+
+        if not user:
+            response = JSONResponse(
+                {"detail": "Unauthorized: Authentication credentials required for MCP SSE service"},
+                status_code=401,
+            )
+            await response(scope, receive, send)
+            return
+
+        token_ctx = _current_mcp_user.set(user)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _current_mcp_user.reset(token_ctx)
+
+
+def get_mcp_sse_app(*args: Any, **kwargs: Any) -> Any:
+    """Build and wrap the MCP SSE Starlette app with MCPAuthMiddleware."""
+    base_app = mcp.sse_app(*args, **kwargs)
+    return MCPAuthMiddleware(base_app)

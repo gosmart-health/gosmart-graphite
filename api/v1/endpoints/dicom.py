@@ -1,16 +1,21 @@
 import io
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from actor.dicom_actor import get_dicom_actor
+from core.auth_dependency import get_current_group_context, get_current_user
 from model.dicom import DicomIngestResponse
 from service.dicom_service import dicom_service
 from service.graph_service import graph_service
 from service.pynetdicom_service import pynetdicom_service
 
-router = APIRouter(prefix="/dicom", tags=["DICOM"])
+router = APIRouter(
+    prefix="/dicom",
+    tags=["DICOM"],
+    dependencies=[Depends(get_current_user), Depends(get_current_group_context)],
+)
 
 
 class EchoRequest(BaseModel):

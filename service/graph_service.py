@@ -444,6 +444,12 @@ class GraphService:
                 "CREATE CONSTRAINT dicom_config_sys_id_unique IF NOT EXISTS "
                 "FOR (c:DICOMConfiguration) REQUIRE c.id IS UNIQUE"
             ),
+            "CREATE CONSTRAINT user_sys_id_unique IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
+            "CREATE CONSTRAINT user_email_unique IF NOT EXISTS FOR (u:User) REQUIRE u.primary_email IS UNIQUE",
+            "CREATE CONSTRAINT identity_sys_id_unique IF NOT EXISTS FOR (i:Identity) REQUIRE i.id IS UNIQUE",
+            "CREATE CONSTRAINT authenticator_sys_id_unique IF NOT EXISTS FOR (a:Authenticator) REQUIRE a.id IS UNIQUE",
+            "CREATE CONSTRAINT group_sys_id_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.id IS UNIQUE",
+            "CREATE CONSTRAINT group_code_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.code IS UNIQUE",
         ]
         if not await self.client.verify_connectivity():
             logger.warning(

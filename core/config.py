@@ -120,6 +120,24 @@ class Settings(BaseSettings):
     DICOM_SCP_PORT: int = Field(default=11112, description="DICOM C-STORE/C-ECHO SCP Port")
     DICOM_MAX_PDU: int = Field(default=16382, description="Maximum PDU length in bytes")
 
+    # Authentication & JWT Security Settings
+    JWT_SECRET_KEY: SecretStr = Field(
+        default="gosmart-dicom-graph-server-dev-jwt-secret-key-change-in-production-min32chars",
+        description="Secret key for signing and verifying JWT tokens",
+    )
+    JWT_ALGORITHM: str = Field(default="HS256", description="JWT signing algorithm (e.g. HS256, RS256)")
+    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=60, description="Access token expiration time in minutes (default: 60)"
+    )
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = Field(
+        default=30, description="Refresh token expiration time in days (default: 30)"
+    )
+    API_KEY_PREFIX: str = Field(default="gs_live_", description="Standard prefix for generated API keys")
+    GOOGLE_OAUTH_CLIENT_ID: Optional[str] = Field(
+        default=None, description="Google OAuth2 / OIDC Client ID for federated authentication"
+    )
+    GOOGLE_OAUTH_CLIENT_SECRET: Optional[SecretStr] = Field(default=None, description="Google OAuth2 Client Secret")
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -3,14 +3,22 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from core.auth_dependency import get_current_user
 from main import app
 from service.system_service import system_service
 
 
 @pytest.fixture
 def client():
+    app.dependency_overrides[get_current_user] = lambda: {
+        "id": "usr_test_sys_admin",
+        "primary_email": "admin@gosmart.health",
+        "system_roles": ["PLATFORM_ADMIN"],
+        "is_active": True,
+    }
     with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
 
 
 def test_api_system_bootstrap_and_get(client):

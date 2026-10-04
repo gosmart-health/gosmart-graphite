@@ -1,7 +1,8 @@
 from typing import List, Optional
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
+from core.auth_dependency import get_current_group_context, get_current_user
 from model.system import (
     DICOMConfigurationCreateRequest,
     DICOMConfigurationResponse,
@@ -13,7 +14,10 @@ from model.system import (
 )
 from service.system_service import system_service
 
-router = APIRouter(tags=["System & Configurations"])
+router = APIRouter(
+    tags=["System & Configurations"],
+    dependencies=[Depends(get_current_user), Depends(get_current_group_context)],
+)
 
 
 # -----------------------------------------------------------------------------

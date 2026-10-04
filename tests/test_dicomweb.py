@@ -3,14 +3,22 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
+from core.auth_dependency import get_current_user
 from main import app
 from service.dicom_service import dicom_service
 
 
 @pytest.fixture
 def client():
+    app.dependency_overrides[get_current_user] = lambda: {
+        "id": "usr_test_dicomweb_admin",
+        "primary_email": "dicomweb@gosmart.health",
+        "system_roles": ["PLATFORM_ADMIN"],
+        "is_active": True,
+    }
     with TestClient(app) as c:
         yield c
+    app.dependency_overrides.clear()
 
 
 def test_dicomweb_qido_studies(client):

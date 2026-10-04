@@ -7,17 +7,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pydicom
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 
 from actor.dicom_actor import get_dicom_actor
+from core.auth_dependency import get_current_group_context, get_current_user
 from core.logging import get_logger
 from service.dicom_service import dicom_service
 from service.dicomweb_service import dicomweb_service
 
 logger = get_logger("gosmart_gs.api.dicomweb")
 
-router = APIRouter(prefix="/dicomweb", tags=["DICOMweb"])
+router = APIRouter(
+    prefix="/dicomweb",
+    tags=["DICOMweb"],
+    dependencies=[Depends(get_current_user), Depends(get_current_group_context)],
+)
 
 
 def _extract_dicom_payloads(content_type: str, body: bytes) -> List[bytes]:
