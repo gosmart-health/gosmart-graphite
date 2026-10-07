@@ -29,6 +29,8 @@ class AuditAction(str, Enum):
     USER_DELETED = "User Deleted"
     USER_AUTHENTICATED = "User Authenticated"
     USER_LOGIN_FAILED = "User Login Failed"
+    USER_PASSWORD_RESET = "User Password Reset"
+    ADMIN_BOOTSTRAPPED = "Admin Bootstrapped"
 
     # Group & Access Actions
     GROUP_CREATED = "Group Created"

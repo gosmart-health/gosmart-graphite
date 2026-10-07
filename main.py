@@ -47,6 +47,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     actor_ref = get_dicom_actor()
     logger.info("dicom_actor_started", actor_urn=actor_ref.actor_urn)
 
+    # Bootstrap initial Platform Administrator if configured
+    try:
+        from service.user_service import user_service
+
+        await user_service.bootstrap_admin_user()
+    except Exception as e:
+        logger.warning("admin_bootstrap_failed_notice", error=str(e))
+
     # Initialize DICOM SCP Servers for active DICOM configurations
     if getattr(settings, "DICOM_SCP_ENABLED", True):
         try:

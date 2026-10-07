@@ -1,10 +1,14 @@
 import json
+import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from actor.audit_actor import record_audit
+from core.config import get_settings
 from core.logging import get_logger
 from core.security import generate_api_key, hash_api_key, hash_password, verify_password
 from db.neo4j import Neo4jClient, neo4j_client
+from model.audit import AuditAction
 from model.auth import (
     AuthenticatorNode,
     HasAuthenticatorRelation,
@@ -657,6 +661,290 @@ class UserService:
             },
         )
         return [_clean_neo4j_value(r.get("user", r)) for r in records]
+
+    async def list_platform_admins(
+        self,
+        include_inactive: bool = False,
+        test_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List all users possessing the global PLATFORM_ADMIN system role."""
+        query = """
+        MATCH (u:User)
+        WHERE (u.Action IS NULL OR u.Action <> 'DELETE')
+          AND 'PLATFORM_ADMIN' IN u.system_roles
+          AND ($include_inactive = true OR u.is_active = true)
+          AND ($test_id IS NULL OR u.test_id = $test_id)
+        RETURN properties(u) AS user
+        ORDER BY u.display_name ASC
+        """
+        records = await self.client.execute_query(
+            query,
+            {
+                "include_inactive": include_inactive,
+                "test_id": test_id,
+            },
+        )
+        return [_clean_neo4j_value(r.get("user", r)) for r in records]
+
+    async def reset_admin_password(
+        self,
+        identifier: str,
+        new_password: str,
+        acted_by: str = "cli:admin",
+        test_id: Optional[str] = None,
+    ) -> bool:
+        """Reset the local password for a user identified by email, username, or User ID.
+
+        Updates existing password Authenticator or creates a new one if missing.
+        """
+        norm_ident = identifier.strip()
+        norm_email = norm_ident.lower()
+        pwd_hash = hash_password(new_password)
+
+        find_query = """
+        MATCH (u:User)
+        WHERE (u.Action IS NULL OR u.Action <> 'DELETE')
+          AND (toLower(u.primary_email) = $email OR u.id = $ident)
+        OPTIONAL MATCH (u)-[:HAS_IDENTITY]->(i:Identity)-[:USES_AUTHENTICATOR]->(a:Authenticator)
+        WHERE a.authenticator_type = 'password'
+        RETURN properties(u) AS user, properties(i) AS identity, properties(a) AS auth,
+               a.id AS auth_id, i.id AS identity_id, u.id AS user_id
+        LIMIT 1
+        """
+        records = await self.client.execute_query(find_query, {"email": norm_email, "ident": norm_ident})
+        if not records:
+            logger.warning("reset_password_user_not_found", identifier=identifier)
+            return False
+
+        rec = records[0]
+        user_id = rec.get("user_id")
+        auth_id = rec.get("auth_id")
+        identity_id = rec.get("identity_id")
+
+        if auth_id:
+            update_query = """
+            MATCH (a:Authenticator {id: $auth_id})
+            SET a.secret_hash = $secret_hash,
+                a.Action = 'UPDATE',
+                a.ActedAt = datetime({timezone: 'UTC'}),
+                a.ActedBy = $acted_by,
+                a.UpdatedAt = datetime({timezone: 'UTC'})
+            """
+            await self.client.execute_query(
+                update_query,
+                {"auth_id": auth_id, "secret_hash": pwd_hash, "acted_by": acted_by},
+            )
+        else:
+            auth_node = AuthenticatorNode(
+                authenticator_type="password",
+                secret_hash=pwd_hash,
+                name="Primary Password",
+                test_id=test_id,
+                ActedBy=acted_by,
+            )
+            if identity_id:
+                rel_id = f"rel_uses_{uuid.uuid4().hex[:8]}"
+                create_auth_query = """
+                MATCH (i:Identity {id: $identity_id})
+                CREATE (a:Authenticator {
+                    id: $auth.id,
+                    authenticator_type: 'password',
+                    secret_hash: $auth.secret_hash,
+                    name: $auth.name,
+                    test_id: $auth.test_id,
+                    Action: 'CREATE',
+                    ActedAt: datetime({timezone: 'UTC'}),
+                    ActedBy: $auth.ActedBy,
+                    CreatedAt: datetime({timezone: 'UTC'})
+                })
+                CREATE (i)-[:USES_AUTHENTICATOR {
+                    id: $rel_id,
+                    test_id: $auth.test_id,
+                    Action: 'CREATE',
+                    ActedAt: datetime({timezone: 'UTC'}),
+                    ActedBy: $auth.ActedBy,
+                    CreatedAt: datetime({timezone: 'UTC'})
+                }]->(a)
+                """
+                await self.client.execute_query(
+                    create_auth_query,
+                    {
+                        "identity_id": identity_id,
+                        "rel_id": rel_id,
+                        "auth": {
+                            "id": auth_node.id,
+                            "secret_hash": auth_node.secret_hash,
+                            "name": auth_node.name,
+                            "test_id": test_id,
+                            "ActedBy": acted_by,
+                        },
+                    },
+                )
+            else:
+                rel_id = f"rel_has_{uuid.uuid4().hex[:8]}"
+                create_direct_query = """
+                MATCH (u:User {id: $user_id})
+                CREATE (a:Authenticator {
+                    id: $auth.id,
+                    authenticator_type: 'password',
+                    secret_hash: $auth.secret_hash,
+                    name: $auth.name,
+                    test_id: $auth.test_id,
+                    Action: 'CREATE',
+                    ActedAt: datetime({timezone: 'UTC'}),
+                    ActedBy: $auth.ActedBy,
+                    CreatedAt: datetime({timezone: 'UTC'})
+                })
+                CREATE (u)-[:HAS_AUTHENTICATOR {
+                    id: $rel_id,
+                    test_id: $auth.test_id,
+                    Action: 'CREATE',
+                    ActedAt: datetime({timezone: 'UTC'}),
+                    ActedBy: $auth.ActedBy,
+                    CreatedAt: datetime({timezone: 'UTC'})
+                }]->(a)
+                """
+                await self.client.execute_query(
+                    create_direct_query,
+                    {
+                        "user_id": user_id,
+                        "rel_id": rel_id,
+                        "auth": {
+                            "id": auth_node.id,
+                            "secret_hash": auth_node.secret_hash,
+                            "name": auth_node.name,
+                            "test_id": test_id,
+                            "ActedBy": acted_by,
+                        },
+                    },
+                )
+
+        record_audit(
+            action=AuditAction.USER_PASSWORD_RESET,
+            actor_id=acted_by,
+            actor=acted_by,
+            target_id=user_id,
+            target=identifier,
+            status_code=200,
+            status_message="Password reset successfully",
+            severity="WARNING",
+            test_id=test_id,
+        )
+        logger.info("user_password_reset_success", identifier=identifier, acted_by=acted_by)
+        return True
+
+    async def bootstrap_admin_user(
+        self,
+        test_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Idempotently bootstrap the initial Platform Admin account upon system startup."""
+        settings = get_settings()
+        admin_email = settings.INITIAL_ADMIN_EMAIL
+        admin_pass_secret = settings.INITIAL_ADMIN_PASSWORD
+        force_reset = settings.FORCE_ADMIN_PASSWORD_RESET
+
+        if not admin_email:
+            logger.debug("admin_bootstrap_skipped_no_email")
+            return None
+
+        normalized_email = admin_email.strip().lower()
+        existing_user = await self.get_user_by_email(normalized_email)
+        existing_admins = await self.list_platform_admins(test_id=test_id)
+
+        # 1. If admin user with this email already exists
+        if existing_user:
+            # Ensure user has PLATFORM_ADMIN role
+            roles = existing_user.get("system_roles", [])
+            if "PLATFORM_ADMIN" not in roles:
+                roles = list(set(roles + ["PLATFORM_ADMIN"]))
+                await self.client.execute_query(
+                    "MATCH (u:User {id: $uid}) SET u.system_roles = $roles",
+                    {"uid": existing_user["id"], "roles": roles},
+                )
+                existing_user["system_roles"] = roles
+
+            # If force reset flag is active and password is provided, reset it
+            if force_reset and admin_pass_secret:
+                raw_pass = admin_pass_secret.get_secret_value()
+                await self.reset_admin_password(
+                    identifier=normalized_email,
+                    new_password=raw_pass,
+                    acted_by="system:force_reset_bootstrap",
+                    test_id=test_id,
+                )
+                logger.warning(
+                    "admin_password_force_reset_applied",
+                    email=normalized_email,
+                    notice="FORCE_ADMIN_PASSWORD_RESET flag was set and applied.",
+                )
+            else:
+                logger.info(
+                    "admin_bootstrap_verified_existing",
+                    email=normalized_email,
+                    user_id=existing_user["id"],
+                )
+            return existing_user
+
+        # 2. If other platform admins already exist in system and no initial password is provided
+        if existing_admins and not admin_pass_secret:
+            logger.info(
+                "admin_bootstrap_skipped_admins_present",
+                admin_count=len(existing_admins),
+            )
+            return existing_admins[0]
+
+        # 3. Create initial superuser if password provided
+        if not admin_pass_secret:
+            logger.warning(
+                "no_initial_admin_password_configured",
+                email=normalized_email,
+                message="INITIAL_ADMIN_PASSWORD is not set in environment. Initial admin creation skipped.",
+            )
+            return None
+
+        raw_pass = admin_pass_secret.get_secret_value()
+        admin_username = settings.INITIAL_ADMIN_USERNAME
+        admin_display_name = settings.INITIAL_ADMIN_DISPLAY_NAME
+
+        # Ensure Root Catch-All group exists
+        catch_all_group = await group_service.get_or_create_catch_all_group(
+            test_id=test_id,
+            acted_by="system:bootstrap",
+        )
+
+        # Create local admin user
+        created_user = await self.create_local_user(
+            username=admin_username,
+            email=normalized_email,
+            password=raw_pass,
+            display_name=admin_display_name,
+            system_roles=["USER", "PLATFORM_ADMIN"],
+            group_id=catch_all_group.get("id"),
+            group_roles=["Admin"],
+            test_id=test_id,
+            acted_by="system:bootstrap",
+        )
+
+        record_audit(
+            action=AuditAction.ADMIN_BOOTSTRAPPED,
+            actor_id="system:bootstrap",
+            actor="system:bootstrap",
+            target_id=created_user["id"],
+            target=normalized_email,
+            status_code=201,
+            status_message="Initial Platform Admin account bootstrapped",
+            severity="INFO",
+            test_id=test_id,
+        )
+
+        logger.info(
+            "admin_account_bootstrapped_successfully",
+            email=normalized_email,
+            user_id=created_user["id"],
+            username=admin_username,
+            group_id=catch_all_group.get("id"),
+        )
+        return created_user
 
 
 user_service = UserService()

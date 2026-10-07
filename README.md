@@ -115,6 +115,14 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_LOG_LEVEL` | `INFO` | Server logging level |
 | `GOSMART_GS_DICOM_AE_TITLE` | `GOSMART_GS` | Local DICOM Application Entity Title |
 | `GOSMART_GS_DICOM_SCP_PORT` | `11112` | DICOM C-STORE / C-ECHO SCP Port |
+| `GOSMART_GS_INITIAL_ADMIN_EMAIL` | `admin@gosmart.health` | Bootstrap Platform Admin primary email |
+| `GOSMART_GS_INITIAL_ADMIN_PASSWORD` | *(None)* | Bootstrap Platform Admin initial password |
+| `GOSMART_GS_INITIAL_ADMIN_USERNAME` | `admin` | Bootstrap Platform Admin username |
+| `GOSMART_GS_FORCE_ADMIN_PASSWORD_RESET` | `false` | Force reset admin password to `INITIAL_ADMIN_PASSWORD` upon startup |
+| `GOSMART_GS_JWT_SECRET_KEY` | *(Secret)* | Secret key for signing and verifying JWT tokens |
+| `GOSMART_GS_JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | Access token expiration in minutes |
+| `GOSMART_GS_JWT_REFRESH_TOKEN_EXPIRE_DAYS` | `30` | Refresh token expiration in days |
+| `GOSMART_GS_GOOGLE_OAUTH_CLIENT_ID` | *(None)* | Google OAuth2 / OIDC Client ID for federated login |
 | `GOSMART_GS_AUDIT_RETENTION_DAYS` | `365` | Audit log retention period in days (default: 1 year) |
 | `GOSMART_GS_AUDIT_LOG_TO_DB` | `true` | Enable Neo4j database persistence for audit logs |
 
@@ -180,10 +188,78 @@ The server automatically bootstraps an immutable root `(:System)` node linked to
 - `get_system_info`, `update_system_info`, `bootstrap_system_defaults`
 - `list_dicom_configurations`, `get_dicom_configuration`, `create_dicom_configuration`, `update_dicom_configuration`, `delete_dicom_configuration`, `restore_dicom_configuration`
 
-### 4. Run Tests
+---
+
+## 👑 System Bootstrapping & Administration
+
+> [!CAUTION]
+> **CRITICAL SECURITY REQUIREMENT: SERVER PLATFORM ACCESS CONTROL**  
+> The security model assumes that the underlying host server platform, container execution environment, filesystem, environment variable configurations, and direct Neo4j database ports are **strictly access-controlled and hardened**.
+>
+> Direct shell access to the host/container or write access to environment variables enables out-of-band administrative privileges (such as password resets via CLI or `FORCE_ADMIN_PASSWORD_RESET`). Ensure that only authorized infrastructure administrators have shell, SSH, container exec, or configuration management access to the host environment.
+
+### 1. Automated Superuser Bootstrapping
+When the server starts up, it checks if an initial Platform Administrator (`PLATFORM_ADMIN`) exists in Neo4j. If not, and `INITIAL_ADMIN_PASSWORD` is configured in `.env`, it automatically creates the superuser account and affiliates them with the `"GoSmart Health"` Catch-All organization:
+
+```bash
+# In your .env or deployment environment:
+GOSMART_GS_INITIAL_ADMIN_EMAIL=admin@gosmart.health
+GOSMART_GS_INITIAL_ADMIN_PASSWORD=MySecurePassword123!
+GOSMART_GS_INITIAL_ADMIN_USERNAME=admin
+```
+
+> [!NOTE]
+> Bootstrapping is **idempotent**. On subsequent restarts, if the admin user already exists, the server preserves the existing database state and does not overwrite user credentials or settings.
+
+---
+
+### 2. Out-of-Band Disaster Recovery & Password Reset (`cli/admin.py`)
+
+If a superuser forgets their password or loses access, the system provides **two** recovery mechanisms to prevent lockout:
+
+#### Mechanism A: Administrative CLI Utility (Host / Container)
+Run the out-of-band admin CLI tool directly on the server or container:
+
+```bash
+# Reset an existing administrator's password
+uv run python -m cli.admin reset-password --email admin@gosmart.health --password "NewEmergencyPassword123!"
+
+# Or omit --password to be prompted securely via terminal
+uv run python -m cli.admin reset-password --email admin@gosmart.health
+
+# Create a new Platform Administrator
+uv run python -m cli.admin create-admin --username emergency_admin --email emergency@gosmart.health
+
+# List all Platform Administrators and their status
+uv run python -m cli.admin list-admins
+```
+
+#### Mechanism B: Startup Force-Reset Flag (`FORCE_ADMIN_PASSWORD_RESET`)
+If running in containerized environments (Docker / Kubernetes) where running a CLI is less convenient:
+1. Update environment variables in your deployment / container config:
+   ```bash
+   GOSMART_GS_INITIAL_ADMIN_EMAIL=admin@gosmart.health
+   GOSMART_GS_INITIAL_ADMIN_PASSWORD=NewEmergencyPassword123!
+   GOSMART_GS_FORCE_ADMIN_PASSWORD_RESET=true
+   ```
+2. Restart the container. On startup, the server forces an update of the admin password hash and records a security audit log.
+3. Log in with the new password and remove `FORCE_ADMIN_PASSWORD_RESET=true`.
+
+---
+
+## 🧪 Testing & Verification
+
+### Run Tests
 
 ```bash
 uv run pytest
+```
+
+### Run Code Quality & Linting Gates
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
 ```
 
 ### 4. Interactive Notebook

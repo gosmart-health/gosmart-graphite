@@ -15,6 +15,7 @@
         "editor.formatOnSave": false
     },
     "cSpell.words": [
+        "abfs",
         "acse",
         "blackbox",
         "dcmread",
@@ -23,12 +24,17 @@
         "dimse",
         "gosmart",
         "MDICOM",
+        "Pydantic",
         "pydicom",
         "pykka",
         "pynetdicom",
+        "pyproject",
+        "pytest",
         "QIDO",
         "REASSOCIATED",
         "uids",
+        "unconfigured",
+        "Uvicorn",
         "WADO"
     ]
 }

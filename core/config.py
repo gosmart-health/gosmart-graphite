@@ -138,6 +138,28 @@ class Settings(BaseSettings):
     )
     GOOGLE_OAUTH_CLIENT_SECRET: Optional[SecretStr] = Field(default=None, description="Google OAuth2 Client Secret")
 
+    # Initial Platform Admin Bootstrapping & Recovery
+    INITIAL_ADMIN_EMAIL: Optional[str] = Field(
+        default="admin@gosmart.health",
+        description="Initial bootstrap Platform Admin email",
+    )
+    INITIAL_ADMIN_PASSWORD: Optional[SecretStr] = Field(
+        default=None,
+        description="Initial bootstrap Platform Admin password (if set, auto-creates superuser on startup)",
+    )
+    INITIAL_ADMIN_USERNAME: str = Field(
+        default="admin",
+        description="Initial bootstrap Platform Admin username",
+    )
+    INITIAL_ADMIN_DISPLAY_NAME: str = Field(
+        default="System Administrator",
+        description="Initial Platform Admin display name",
+    )
+    FORCE_ADMIN_PASSWORD_RESET: bool = Field(
+        default=False,
+        description="Force reset admin password to INITIAL_ADMIN_PASSWORD on startup if account already exists",
+    )
+
     # Audit Tracking Settings
     AUDIT_RETENTION_DAYS: int = Field(
         default=365,
