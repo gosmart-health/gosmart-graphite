@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 # Default namespace for deterministic DICOM graph entity ID derivation
 DICOM_GRAPH_NAMESPACE: uuid.UUID = uuid.uuid5(uuid.NAMESPACE_DNS, "gosmart.dicom.graph")
@@ -329,9 +329,9 @@ class TransferStatusNode(AuditableNode):
     __label__: ClassVar[str] = "TransferStatus"
 
     sender: str = Field(..., description="Sender AE Title (e.g. GOSMART_GS or remote SCU)")
-    recepient: str = Field(
+    recipient: str = Field(
         ...,
-        validation_alias="recipient",
+        validation_alias=AliasChoices("recipient", "recepient"),
         description="Recipient AE Title (e.g. MDICOM or GOSMART_GS)",
     )
     objectRef: str = Field(..., description="The URI of the raw DICOM object")
@@ -345,14 +345,6 @@ class TransferStatusNode(AuditableNode):
     direction: str = Field(default="OUTBOUND", description="Transfer direction: OUTBOUND (SCU) or INBOUND (SCP)")
     service_type: str = Field(default="C-STORE", description="DIMSE service: C-STORE, C-MOVE, etc.")
 
-    @model_validator(mode="before")
-    @classmethod
-    def handle_recepient_alias(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            if "recipient" in data and "recepient" not in data:
-                data["recepient"] = data.pop("recipient")
-        return data
-
     @model_validator(mode="after")
     def set_default_expiration(self) -> "TransferStatusNode":
         """Set ExpiresAt to 30 days from creation date if not explicitly set."""
@@ -365,7 +357,7 @@ class TransferStatusNode(AuditableNode):
         subset: Dict[str, Any] = {
             "entity": self.__label__,
             "sender": self.sender,
-            "recepient": self.recepient,
+            "recipient": self.recipient,
             "objectRef": self.objectRef,
             "created_at": self.CreatedAt.isoformat() if self.CreatedAt else "",
         }

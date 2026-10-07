@@ -126,7 +126,7 @@ def test_store_scu_actor_mock_transfer_and_audit():
         # 3. Verify standalone TransferStatus node in Neo4j
         check_query = """
         MATCH (t:TransferStatus {test_id: $test_id, sop_instance_uid: $sop_uid})
-        RETURN t.id AS id, t.sender AS sender, t.recepient AS recepient,
+        RETURN t.id AS id, t.sender AS sender, t.recipient AS recipient,
                t.statusCode AS statusCode, t.direction AS direction,
                t.transferTimeMs AS transferTimeMs, t.ExpiresAt AS ExpiresAt,
                count{(t)--()} AS degree
@@ -138,7 +138,7 @@ def test_store_scu_actor_mock_transfer_and_audit():
         assert len(records) == 1
         r = records[0]
         assert r["statusCode"] == "0x0000"
-        assert r["recepient"] == scp_aet
+        assert r["recipient"] == scp_aet
         assert r["direction"] == "OUTBOUND"
         assert r["degree"] == 0, "TransferStatus must have 0 graph edges"
         assert r["ExpiresAt"] is not None
@@ -197,7 +197,7 @@ def test_store_scu_actor_live_mdicom_push():
         # Verify audit record in Neo4j
         check_query = """
         MATCH (t:TransferStatus {test_id: $test_id, sop_instance_uid: $sop_uid})
-        RETURN t.statusCode AS statusCode, t.recepient AS recepient, t.direction AS direction
+        RETURN t.statusCode AS statusCode, t.recipient AS recipient, t.direction AS direction
         """
         driver = neo4j_client.get_sync_driver()
         with driver.session() as session:
@@ -205,7 +205,7 @@ def test_store_scu_actor_live_mdicom_push():
 
         assert len(records) == 1
         assert records[0]["statusCode"] == "0x0000"
-        assert records[0]["recepient"] == LIVE_MDICOM_AET
+        assert records[0]["recipient"] == LIVE_MDICOM_AET
         assert records[0]["direction"] == "OUTBOUND"
 
     finally:

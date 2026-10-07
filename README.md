@@ -115,6 +115,8 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_LOG_LEVEL` | `INFO` | Server logging level |
 | `GOSMART_GS_DICOM_AE_TITLE` | `GOSMART_GS` | Local DICOM Application Entity Title |
 | `GOSMART_GS_DICOM_SCP_PORT` | `11112` | DICOM C-STORE / C-ECHO SCP Port |
+| `GOSMART_GS_AUDIT_RETENTION_DAYS` | `365` | Audit log retention period in days (default: 1 year) |
+| `GOSMART_GS_AUDIT_LOG_TO_DB` | `true` | Enable Neo4j database persistence for audit logs |
 
 
 ---

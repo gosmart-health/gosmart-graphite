@@ -13,8 +13,10 @@ from pydicom.uid import (
 from pynetdicom import AE, StoragePresentationContexts
 from pynetdicom.presentation import PresentationContext, build_context
 
+from actor.audit_actor import record_audit
 from core.config import get_settings
 from core.logging import get_logger
+from model.audit import AuditAction
 from model.graph import TransferStatusNode
 from service.graph_service import graph_service
 
@@ -67,6 +69,8 @@ def build_store_contexts(datasets: List[Dataset]) -> List[PresentationContext]:
 
 class DicomStoreWorkerActor(pykka.ThreadingActor):
     """Worker actor executing a single outbound DICOM Store SCU transfer job."""
+
+    use_daemon_thread = True
 
     def __init__(self, worker_id: int) -> None:
         super().__init__()
@@ -211,12 +215,25 @@ class DicomStoreWorkerActor(pykka.ThreadingActor):
             err_msg = f"Failed to establish DICOM association with {destination_aet}@{host}:{port}"
             logger.warning("store_scu_association_failed", destination_aet=destination_aet, host=host, port=port)
 
+            record_audit(
+                action=AuditAction.DICOM_ASSOCIATION_REJECTED,
+                actor_id=f"ae:{calling_aet}",
+                actor=calling_aet,
+                target_id=f"ae:{destination_aet}",
+                target=f"{destination_aet}@{host}:{port}",
+                status_code=502,
+                status_message=err_msg,
+                severity="ERROR",
+                result="Outbound association failed",
+                test_id=test_id,
+            )
+
             # Record failure TransferStatus for each instance
             for ds, obj_ref, byte_size in resolved_items:
                 sop_uid = str(getattr(ds, "SOPInstanceUID", "")) if ds else None
                 status_node = TransferStatusNode(
                     sender=calling_aet,
-                    recepient=destination_aet,
+                    recipient=destination_aet,
                     objectRef=obj_ref,
                     transferTimeMs=0,
                     transferBytes=byte_size,
@@ -254,7 +271,7 @@ class DicomStoreWorkerActor(pykka.ThreadingActor):
                     failed += 1
                     status_node = TransferStatusNode(
                         sender=calling_aet,
-                        recepient=destination_aet,
+                        recipient=destination_aet,
                         objectRef=obj_ref,
                         transferTimeMs=0,
                         transferBytes=0,
@@ -267,6 +284,17 @@ class DicomStoreWorkerActor(pykka.ThreadingActor):
                         acted_by=acted_by,
                     )
                     graph_service.save_transfer_status_sync(status_node)
+                    record_audit(
+                        action=AuditAction.DICOM_C_STORE_FAILED,
+                        actor_id=f"ae:{calling_aet}",
+                        actor=calling_aet,
+                        target=obj_ref,
+                        status_code=400,
+                        status_message="Failed to load or parse DICOM dataset",
+                        severity="ERROR",
+                        result="Dataset unreadable",
+                        test_id=test_id,
+                    )
                     instance_results.append(
                         {
                             "objectRef": obj_ref,
@@ -309,7 +337,7 @@ class DicomStoreWorkerActor(pykka.ThreadingActor):
                 # Persist standalone TransferStatusNode to Neo4j
                 status_node = TransferStatusNode(
                     sender=calling_aet,
-                    recepient=destination_aet,
+                    recipient=destination_aet,
                     objectRef=obj_ref,
                     transferTimeMs=transfer_time_ms,
                     transferBytes=byte_size,
@@ -325,6 +353,30 @@ class DicomStoreWorkerActor(pykka.ThreadingActor):
                     graph_service.save_transfer_status_sync(status_node)
                 except Exception as ex:
                     logger.warning("save_transfer_status_failed", error=str(ex))
+
+                # Record audit
+                audit_action = (
+                    AuditAction.DICOM_C_STORE_SENT if (is_success or is_warning) else AuditAction.DICOM_C_STORE_FAILED
+                )
+                record_audit(
+                    action=audit_action,
+                    actor_id=f"ae:{calling_aet}",
+                    actor=calling_aet,
+                    target_id=f"instance:{sop_uid}",
+                    target=f"SOP Instance {sop_uid}",
+                    status_code=200 if is_success else (500 if not is_warning else 200),
+                    status_message=msg_text,
+                    severity="INFO" if is_success else ("WARNING" if is_warning else "ERROR"),
+                    result=f"C-STORE outbound transfer status {status_hex}",
+                    details={
+                        "destination_aet": destination_aet,
+                        "sop_class_uid": sop_class_uid,
+                        "transfer_syntax_uid": ts_uid,
+                        "transfer_time_ms": transfer_time_ms,
+                        "transfer_bytes": byte_size,
+                    },
+                    test_id=test_id,
+                )
 
                 instance_results.append(
                     {
@@ -356,6 +408,8 @@ class DicomStoreWorkerActor(pykka.ThreadingActor):
 
 class DicomStoreScuActor(pykka.ThreadingActor):
     """Coordinator and pool router for outbound DICOM Store SCU operations."""
+
+    use_daemon_thread = True
 
     def __init__(self, pool_size: Optional[int] = None) -> None:
         super().__init__()

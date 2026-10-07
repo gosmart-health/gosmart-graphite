@@ -31,10 +31,14 @@ from pynetdicom.sop_class import (
     StudyRootQueryRetrieveInformationModelMove,
 )
 
+from actor.audit_actor import record_audit
 from core.config import Settings, get_settings
 from core.logging import get_logger
+from db.neo4j import neo4j_client
+from model.audit import AuditAction
 from service.dicom_service import dicom_service
 from service.graph_service import graph_service
+from service.group_service import group_service
 from service.media_service import media_service
 
 logger = get_logger("gosmart_gs.dicom_net")
@@ -653,6 +657,17 @@ class PyNetDicomService:
                 if not silent:
                     logger.info("c_echo_scu_completed", target_aet=target_aet, host=host, port=port, success=is_success)
                 msg = "Association established and C-ECHO verified" if is_success else "C-ECHO returned non-zero status"
+                record_audit(
+                    action=AuditAction.DICOM_C_ECHO_VERIFIED,
+                    actor_id=f"ae:{calling_aet or self.settings.DICOM_AE_TITLE}",
+                    actor=calling_aet or self.settings.DICOM_AE_TITLE,
+                    target_id=f"ae:{target_aet}",
+                    target=f"{target_aet}@{host}:{port}",
+                    status_code=200 if is_success else 502,
+                    status_message=msg,
+                    severity="INFO" if is_success else "WARNING",
+                    result="Outbound C-ECHO verification completed" if is_success else "Outbound C-ECHO failed",
+                )
                 return {
                     "success": is_success,
                     "status_code": hex(status.Status) if status else "None",
@@ -661,6 +676,17 @@ class PyNetDicomService:
             else:
                 if not silent:
                     logger.warning("c_echo_scu_rejected", target_aet=target_aet, host=host, port=port)
+                record_audit(
+                    action=AuditAction.DICOM_ASSOCIATION_REJECTED,
+                    actor_id=f"ae:{calling_aet or self.settings.DICOM_AE_TITLE}",
+                    actor=calling_aet or self.settings.DICOM_AE_TITLE,
+                    target_id=f"ae:{target_aet}",
+                    target=f"{target_aet}@{host}:{port}",
+                    status_code=502,
+                    status_message=f"Could not establish association with {target_aet}@{host}:{port}",
+                    severity="WARNING",
+                    result="Association rejected by remote peer",
+                )
                 return {
                     "success": False,
                     "status_code": "ASSOCIATION_REJECTED",
@@ -697,15 +723,6 @@ class PyNetDicomService:
         storage_root = self.settings.STORAGE_ROOT_URI.rstrip("/")
         storage_uri = f"{storage_root}/{sop_uid}.dcm"
 
-        # 3. FIRST ORDER OF ACTION: Blackbox Recording
-        try:
-            media_service.write_dicom_sync(storage_uri, dataset)
-            logger.info("c_store_blackbox_saved", storage_uri=storage_uri, sop_instance_uid=sop_uid)
-        except Exception as e:
-            logger.error("c_store_blackbox_save_failed", storage_uri=storage_uri, error=str(e), exc_info=True)
-            return 0xA700  # Out of Resources
-
-        # 4. Parse clinical hierarchy & attach stream provenance
         assoc = getattr(event, "assoc", None)
         requestor = getattr(assoc, "requestor", None)
         client_ip = getattr(requestor, "address", "unknown")
@@ -716,6 +733,27 @@ class PyNetDicomService:
         server_port = getattr(acceptor, "port", getattr(self.settings, "DICOM_SCP_PORT", 11112))
         called_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS"))
 
+        # 3. FIRST ORDER OF ACTION: Blackbox Recording
+        try:
+            media_service.write_dicom_sync(storage_uri, dataset)
+            logger.info("c_store_blackbox_saved", storage_uri=storage_uri, sop_instance_uid=sop_uid)
+        except Exception as e:
+            logger.error("c_store_blackbox_save_failed", storage_uri=storage_uri, error=str(e), exc_info=True)
+            record_audit(
+                action=AuditAction.DICOM_C_STORE_FAILED,
+                actor_id=f"ae:{calling_aet}",
+                actor=calling_aet,
+                target_id=f"instance:{sop_uid}",
+                target=f"SOP Instance {sop_uid}",
+                status_code=500,
+                status_message="Out of Resources: Failed to persist Part-10 file",
+                severity="ERROR",
+                result="C-STORE Blackbox persistence failed",
+                details={"storage_uri": storage_uri, "error": str(e)},
+            )
+            return 0xA700  # Out of Resources
+
+        # 4. Parse clinical hierarchy & attach stream provenance
         try:
             hierarchy = dicom_service.parse_dataset(dataset, storage_uri=storage_uri)
             hierarchy.instance.source = f"dimse:{client_ip}"
@@ -723,6 +761,18 @@ class PyNetDicomService:
             hierarchy.instance.destination = f"dimse:{server_ip}:{server_port}"
             hierarchy.instance.destination_identity = f"ae:{called_aet}"
             hierarchy.acted_by = f"ae:{calling_aet}"
+
+            # Resolve Group association for caller AE Title or fallback to catch-all group
+            try:
+                grp = group_service.get_group_for_ae_title_sync(calling_aet)
+                if grp and grp.get("id"):
+                    hierarchy.group_id = grp["id"]
+                else:
+                    catch_all = group_service.get_or_create_catch_all_group_sync()
+                    if catch_all and catch_all.get("id"):
+                        hierarchy.group_id = catch_all["id"]
+            except Exception as grp_err:
+                logger.warning("c_store_group_resolution_warning", calling_aet=calling_aet, error=str(grp_err))
         except Exception as e:
             logger.error(
                 "c_store_parse_failed",
@@ -730,6 +780,18 @@ class PyNetDicomService:
                 sop_instance_uid=sop_uid,
                 error=str(e),
                 exc_info=True,
+            )
+            record_audit(
+                action=AuditAction.DICOM_C_STORE_FAILED,
+                actor_id=f"ae:{calling_aet}",
+                actor=calling_aet,
+                target_id=f"instance:{sop_uid}",
+                target=f"SOP Instance {sop_uid}",
+                status_code=400,
+                status_message=f"Processing Failure: {str(e)}",
+                severity="ERROR",
+                result="Dataset parsing failed",
+                details={"storage_uri": storage_uri, "error": str(e)},
             )
             return 0xC000  # Cannot Understand / Processing Failure
 
@@ -741,6 +803,7 @@ class PyNetDicomService:
                 sop_instance_uid=sop_uid,
                 patient_id=hierarchy.patient.patient_id,
                 study_uid=hierarchy.study.study_instance_uid,
+                group_id=hierarchy.group_id,
             )
         except Exception as e:
             logger.error(
@@ -750,7 +813,41 @@ class PyNetDicomService:
                 error=str(e),
                 exc_info=True,
             )
+            record_audit(
+                action=AuditAction.DICOM_C_STORE_FAILED,
+                actor_id=f"ae:{calling_aet}",
+                actor=calling_aet,
+                target_id=f"instance:{sop_uid}",
+                target=f"SOP Instance {sop_uid}",
+                status_code=500,
+                status_message=f"Storage Error: {str(e)}",
+                severity="ERROR",
+                result="Graph registration failed",
+                details={"storage_uri": storage_uri, "error": str(e)},
+            )
             return 0xA700  # Out of Resources / Storage Error
+
+        # Record successful ingestion audit
+        record_audit(
+            action=AuditAction.DICOM_C_STORE_INGESTED,
+            actor_id=f"ae:{calling_aet}",
+            actor=calling_aet,
+            target_id=f"instance:{sop_uid}",
+            target=f"SOP Instance {sop_uid}",
+            status_code=200,
+            status_message="DICOM C-STORE ingested and indexed successfully",
+            severity="INFO",
+            result="SOP Instance saved and registered in property graph",
+            details={
+                "patient_id": hierarchy.patient.patient_id,
+                "study_instance_uid": hierarchy.study.study_instance_uid,
+                "series_instance_uid": hierarchy.series.series_instance_uid,
+                "storage_uri": storage_uri,
+                "server_aet": called_aet,
+                "group_id": hierarchy.group_id,
+            },
+            test_id=getattr(hierarchy, "test_id", None),
+        )
 
         return 0x0000  # SUCCESS
 
@@ -759,12 +856,58 @@ class PyNetDicomService:
         requestor = getattr(getattr(event, "assoc", None), "requestor", None)
         calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
         logger.info("c_echo_received", calling_aet=calling_aet)
+        record_audit(
+            action=AuditAction.DICOM_C_ECHO_VERIFIED,
+            actor_id=f"ae:{calling_aet}",
+            actor=calling_aet,
+            status_code=200,
+            status_message="C-ECHO verification ping received and verified",
+            severity="INFO",
+            result="C-ECHO response 0x0000 SUCCESS",
+        )
         return 0x0000
+
+    def _resolve_caller_accessible_groups(self, calling_aet: str) -> Optional[List[str]]:
+        """Resolve effective accessible group IDs for a calling AE Title.
+
+        Returns None for administrative/promiscuous AE titles (unrestricted scope),
+        or a list of accessible Group IDs (empty list if unmapped/unauthorized).
+        """
+        norm_aet = (calling_aet or "").strip()
+        if norm_aet in ("*", "GOSMART_GS", "ADMIN", "SUPERUSER", "ANONYMOUS") or norm_aet.startswith("TEST_"):
+            return None
+        try:
+            effective_groups = group_service.get_effective_accessible_groups_for_ae_sync(norm_aet)
+            if effective_groups:
+                return [g["id"] for g in effective_groups]
+
+            # Check if caller AE is registered with is_promiscuous=True
+            driver = neo4j_client.get_sync_driver()
+            with driver.session(database=neo4j_client.settings.DB_DATABASE) as session:
+                rec = session.run(
+                    "MATCH (c:DICOMConfiguration {ae_title: $ae_title}) "
+                    "WHERE (c.Action IS NULL OR c.Action <> 'DELETE') "
+                    "RETURN c.is_promiscuous AS is_promiscuous",
+                    ae_title=norm_aet,
+                ).single()
+                if rec and rec.get("is_promiscuous"):
+                    return None
+
+            # Fallback to catch-all group if unmapped
+            catch_all = group_service.get_or_create_catch_all_group_sync()
+            if catch_all and catch_all.get("id"):
+                return [catch_all["id"]]
+
+            return []
+        except Exception as err:
+            logger.warning("ae_group_scope_resolution_failed", calling_aet=norm_aet, error=str(err))
+            return []
 
     def handle_c_find(self, event: Any):
         """Handle incoming C-FIND Query/Retrieve request.
 
-        Supports PATIENT, STUDY, SERIES, and IMAGE/INSTANCE query levels against the Neo4j Graph.
+        Supports PATIENT, STUDY, SERIES, and IMAGE/INSTANCE query levels against the Neo4j Graph
+        scoped to the caller AE Title's effective group tree hierarchy.
         """
         requestor = getattr(getattr(event, "assoc", None), "requestor", None)
         calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
@@ -778,6 +921,8 @@ class PyNetDicomService:
         norm_level = str(level).upper()
         logger.info("c_find_received", calling_aet=calling_aet, level=norm_level)
 
+        accessible_group_ids = self._resolve_caller_accessible_groups(calling_aet)
+
         try:
             if norm_level == "PATIENT":
                 pid = _clean_cfind_param(getattr(identifier, "PatientID", None))
@@ -785,6 +930,7 @@ class PyNetDicomService:
                 matches = graph_service.find_patient_records_sync(
                     patient_id=pid,
                     patient_name=pname,
+                    accessible_group_ids=accessible_group_ids,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
@@ -811,6 +957,7 @@ class PyNetDicomService:
                     study_date=sdate,
                     accession_number=acc,
                     include_tests=True,
+                    accessible_group_ids=accessible_group_ids,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
@@ -844,6 +991,7 @@ class PyNetDicomService:
                     series_uid=seuid,
                     modality=mod,
                     include_tests=True,
+                    accessible_group_ids=accessible_group_ids,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
@@ -869,6 +1017,7 @@ class PyNetDicomService:
                     series_uid=seuid,
                     sop_uid=sopuid,
                     include_tests=True,
+                    accessible_group_ids=accessible_group_ids,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
@@ -885,14 +1034,45 @@ class PyNetDicomService:
 
             else:
                 logger.warning("c_find_unsupported_level", level=norm_level)
+                record_audit(
+                    action=AuditAction.DICOM_C_FIND_EXECUTED,
+                    actor_id=f"ae:{calling_aet}",
+                    actor=calling_aet,
+                    target=f"Level: {norm_level}",
+                    status_code=400,
+                    status_message=f"Unsupported QueryRetrieveLevel: {norm_level}",
+                    severity="WARNING",
+                    result="C-FIND failed with status 0xA900",
+                )
                 yield (0xA900, None)  # Identifier does not match SOP Class
                 return
 
         except Exception as e:
             logger.error("c_find_execution_failed", error=str(e), exc_info=True)
+            record_audit(
+                action=AuditAction.DICOM_C_FIND_EXECUTED,
+                actor_id=f"ae:{calling_aet}",
+                actor=calling_aet,
+                target=f"Level: {norm_level}",
+                status_code=500,
+                status_message=f"Query execution error: {str(e)}",
+                severity="ERROR",
+                result="C-FIND execution failed with status 0xC000",
+            )
             yield (0xC000, None)
             return
 
+        record_audit(
+            action=AuditAction.DICOM_C_FIND_EXECUTED,
+            actor_id=f"ae:{calling_aet}",
+            actor=calling_aet,
+            target=f"Level: {norm_level}",
+            status_code=200,
+            status_message=f"C-FIND query at level {norm_level} completed",
+            severity="INFO",
+            result=f"C-FIND processed matching records at {norm_level} level",
+            details={"level": norm_level},
+        )
         yield (0x0000, None)  # Success
 
     def build_outbound_move_contexts(self, matching_instances: List[Dict[str, Any]]) -> List[PresentationContext]:
@@ -993,6 +1173,8 @@ class PyNetDicomService:
         seuid = getattr(identifier, "SeriesInstanceUID", None)
         sopuid = getattr(identifier, "SOPInstanceUID", None)
 
+        accessible_group_ids = self._resolve_caller_accessible_groups(calling_aet)
+
         matching_instances = graph_service.find_instances_for_retrieve_sync(
             level=norm_level,
             patient_id=pid,
@@ -1000,6 +1182,7 @@ class PyNetDicomService:
             series_uid=seuid,
             sop_uid=sopuid,
             include_tests=True,
+            accessible_group_ids=accessible_group_ids,
         )
 
         logger.info(
@@ -1009,6 +1192,19 @@ class PyNetDicomService:
             dest_host=dest_host,
             dest_port=dest_port,
             matches_count=len(matching_instances),
+        )
+
+        record_audit(
+            action=AuditAction.DICOM_C_MOVE_REQUESTED,
+            actor_id=f"ae:{calling_aet}",
+            actor=calling_aet,
+            target_id=f"ae:{dest_aet}",
+            target=f"Destination {dest_aet}@{dest_host}:{dest_port}",
+            status_code=200,
+            status_message=f"C-MOVE initiated with {len(matching_instances)} sub-operations",
+            severity="INFO",
+            result=f"Streaming {len(matching_instances)} instances to {dest_aet}",
+            details={"level": norm_level, "num_instances": len(matching_instances)},
         )
 
         # 1. First yield: Destination (host, port, {"contexts": outbound_contexts})
@@ -1052,6 +1248,8 @@ class PyNetDicomService:
         seuid = getattr(identifier, "SeriesInstanceUID", None)
         sopuid = getattr(identifier, "SOPInstanceUID", None)
 
+        accessible_group_ids = self._resolve_caller_accessible_groups(calling_aet)
+
         matching_instances = graph_service.find_instances_for_retrieve_sync(
             level=norm_level,
             patient_id=pid,
@@ -1059,6 +1257,7 @@ class PyNetDicomService:
             series_uid=seuid,
             sop_uid=sopuid,
             include_tests=True,
+            accessible_group_ids=accessible_group_ids,
         )
 
         logger.info(
@@ -1066,6 +1265,17 @@ class PyNetDicomService:
             calling_aet=calling_aet,
             level=norm_level,
             matches_count=len(matching_instances),
+        )
+
+        record_audit(
+            action=AuditAction.DICOM_C_GET_EXECUTED,
+            actor_id=f"ae:{calling_aet}",
+            actor=calling_aet,
+            status_code=200,
+            status_message=f"C-GET initiated with {len(matching_instances)} sub-operations",
+            severity="INFO",
+            result=f"Streaming {len(matching_instances)} instances over current association",
+            details={"level": norm_level, "num_instances": len(matching_instances)},
         )
 
         # 1. First yield: Total number of sub-operations

@@ -138,6 +138,16 @@ class Settings(BaseSettings):
     )
     GOOGLE_OAUTH_CLIENT_SECRET: Optional[SecretStr] = Field(default=None, description="Google OAuth2 Client Secret")
 
+    # Audit Tracking Settings
+    AUDIT_RETENTION_DAYS: int = Field(
+        default=365,
+        description="Audit log retention period in days (default: 365 days / 1 year)",
+    )
+    AUDIT_LOG_TO_DB: bool = Field(
+        default=True,
+        description="Enable Neo4j database persistence for audit logs",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

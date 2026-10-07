@@ -117,13 +117,10 @@ class GroupNode(AuditableNode):
         return v.strip().upper() if isinstance(v, str) else v
 
     def get_identity_subset(self) -> Dict[str, Any]:
-        subset: Dict[str, Any] = {
+        return {
             "entity": self.__label__,
             "code": self.code.upper().strip(),
         }
-        if self.test_id:
-            subset["test_id"] = self.test_id
-        return subset
 
 
 # Graph Relationships for Auth, Groups, and Tenancy
@@ -189,3 +186,9 @@ class ScopedToRelation(AuditableRelation):
     """Relationship connecting DICOMConfiguration -> Group."""
 
     __type__: ClassVar[str] = "SCOPED_TO"
+
+
+class ServesRelation(AuditableRelation):
+    """Relationship connecting DICOMConfiguration -> Group with 'SERVES' relation type."""
+
+    __type__: ClassVar[str] = "SERVES"

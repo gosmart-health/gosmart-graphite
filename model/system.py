@@ -28,6 +28,7 @@ class DICOMConfigurationResponse(BaseModel):
     dicomweb_wado_enabled: bool = Field(default=True, description="Enable WADO-RS")
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
     description: Optional[str] = Field(default=None, description="Human readable description")
+    group_id: Optional[str] = Field(default=None, description="Associated Group ID served by this configuration")
     test_id: Optional[str] = Field(default=None, description="Test identifier if ephemeral")
     action: Optional[str] = Field(default="CREATE", description="Auditable action state")
     created_at: Optional[datetime] = Field(default=None, description="Created timestamp (UTC)")
@@ -62,6 +63,7 @@ class DICOMConfigurationCreateRequest(BaseModel):
     dicomweb_wado_enabled: bool = Field(default=True, description="Enable WADO-RS")
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
     description: Optional[str] = Field(default=None, description="Human readable description")
+    group_id: Optional[str] = Field(default=None, description="Target Group ID that this DICOMConfiguration serves")
     test_id: Optional[str] = Field(default=None, description="Test identifier if ephemeral")
 
     @field_validator("test_id", mode="before")
@@ -97,6 +99,7 @@ class DICOMConfigurationUpdateRequest(BaseModel):
     dicomweb_wado_enabled: Optional[bool] = Field(default=None, description="Enable WADO-RS")
     dicomweb_stow_enabled: Optional[bool] = Field(default=None, description="Enable STOW-RS")
     description: Optional[str] = Field(default=None, description="Human readable description")
+    group_id: Optional[str] = Field(default=None, description="Target Group ID that this DICOMConfiguration serves")
 
 
 class SystemResponse(BaseModel):

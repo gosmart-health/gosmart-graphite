@@ -17,6 +17,7 @@ from model.system import (
     DICOMConfigurationUpdateRequest,
     SystemUpdateRequest,
 )
+from service.group_service import group_service
 
 logger = get_logger("gosmart_gs.system")
 
@@ -74,6 +75,7 @@ def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
         "dicomweb_wado_enabled": clean.get("dicomweb_wado_enabled", True),
         "dicomweb_stow_enabled": clean.get("dicomweb_stow_enabled", True),
         "description": clean.get("description"),
+        "group_id": clean.get("group_id"),
         "test_id": clean.get("test_id"),
         "action": clean.get("Action", "CREATE"),
         "created_at": clean.get("CreatedAt"),
@@ -184,6 +186,9 @@ class SystemService:
         """
         promiscuous_records = await self.client.execute_query(check_promiscuous_cypher, {"sys_id": sys_node.id})
 
+        # 3. Ensure resilient Catch-All Group "GoSmart Health" exists
+        catch_all_grp = await group_service.get_or_create_catch_all_group(test_id=test_id, acted_by=acted_by)
+
         promiscuous_config: Dict[str, Any] = {}
         if promiscuous_records:
             promiscuous_config = _dict_to_dicom_config(promiscuous_records[0].get("c", {}))
@@ -266,6 +271,16 @@ class SystemService:
                 promiscuous_config = _dict_to_dicom_config(created_records[0].get("c", {}))
                 logger.info("promiscuous_dicom_config_created", config_id=promiscuous_config.get("id"))
 
+        # 4. Associate promiscuous configuration with Catch-All Group
+        if promiscuous_config and catch_all_grp:
+            await group_service.associate_dicom_config_to_group(
+                config_id=promiscuous_config["id"],
+                group_id=catch_all_grp["id"],
+                test_id=test_id,
+                acted_by=acted_by,
+            )
+            promiscuous_config["group_id"] = catch_all_grp["id"]
+
         # Fetch all configurations for system response
         configs = await self.list_configurations(system_id=sys_node.id, include_tests=bool(test_id), test_id=test_id)
         sys_resp = _dict_to_system_response(raw_system, configs)
@@ -282,6 +297,7 @@ class SystemService:
             "message": "System and promiscuous DICOM configuration verified/bootstrapped successfully",
             "system": sys_resp,
             "promiscuous_config": promiscuous_config,
+            "catch_all_group": catch_all_grp,
         }
 
     async def get_system(
@@ -362,6 +378,7 @@ class SystemService:
         role: Optional[str] = None,
         is_promiscuous: Optional[bool] = None,
         is_local: Optional[bool] = None,
+        group_id: Optional[str] = None,
         include_tests: bool = False,
         test_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
@@ -376,7 +393,12 @@ class SystemService:
           AND ($role IS NULL OR $role IN c.roles)
           AND ($is_promiscuous IS NULL OR c.is_promiscuous = $is_promiscuous)
           AND ($is_local IS NULL OR c.is_local = $is_local)
-        RETURN properties(c) AS c
+        OPTIONAL MATCH (c)-[r_serves:SERVES]->(g:Group)
+        WHERE (r_serves.Action IS NULL OR r_serves.Action <> 'DELETE')
+          AND (g.Action IS NULL OR g.Action <> 'DELETE')
+        WITH c, g
+        WHERE ($group_id IS NULL OR g.id = $group_id)
+        RETURN properties(c) AS c, g.id AS group_id
         ORDER BY c.ae_title ASC
         """
         params = {
@@ -384,24 +406,37 @@ class SystemService:
             "role": role,
             "is_promiscuous": is_promiscuous,
             "is_local": is_local,
+            "group_id": group_id,
             "include_tests": include_tests,
             "test_id": test_id,
         }
         records = await self.client.execute_query(query, params)
-        return [_dict_to_dicom_config(r.get("c", {})) for r in records]
+        res_list = []
+        for r in records:
+            c_dict = r.get("c", {})
+            if r.get("group_id"):
+                c_dict["group_id"] = r["group_id"]
+            res_list.append(_dict_to_dicom_config(c_dict))
+        return res_list
 
     async def get_configuration(self, config_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve single active DICOMConfiguration by deterministic ID."""
         query = """
         MATCH (c:DICOMConfiguration {id: $config_id})
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
-        RETURN properties(c) AS c
+        OPTIONAL MATCH (c)-[r_serves:SERVES]->(g:Group)
+        WHERE (r_serves.Action IS NULL OR r_serves.Action <> 'DELETE')
+          AND (g.Action IS NULL OR g.Action <> 'DELETE')
+        RETURN properties(c) AS c, g.id AS group_id
         LIMIT 1
         """
         records = await self.client.execute_query(query, {"config_id": config_id})
         if not records:
             return None
-        return _dict_to_dicom_config(records[0].get("c", {}))
+        raw_c = records[0].get("c", {})
+        if records[0].get("group_id"):
+            raw_c["group_id"] = records[0]["group_id"]
+        return _dict_to_dicom_config(raw_c)
 
     async def create_configuration(
         self,
@@ -409,7 +444,7 @@ class SystemService:
         acted_by: str = "system",
         system_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a new DICOMConfiguration node and link to the root System."""
+        """Create a new DICOMConfiguration node, link to System, and associate to target/catch-all Group."""
         norm_test_id = _normalize_test_id(config_data.test_id)
         cfg_node = DICOMConfigurationNode(
             ae_title=config_data.ae_title,
@@ -503,6 +538,22 @@ class SystemService:
             },
         )
         raw_c = records[0].get("c", {}) if records else {}
+
+        # Resolve served group association
+        target_group_id = config_data.group_id
+        if not target_group_id:
+            catch_all = await group_service.get_or_create_catch_all_group(test_id=norm_test_id, acted_by=acted_by)
+            target_group_id = catch_all.get("id")
+
+        if target_group_id:
+            await group_service.associate_dicom_config_to_group(
+                config_id=cfg_node.id,
+                group_id=target_group_id,
+                test_id=norm_test_id,
+                acted_by=acted_by,
+            )
+            raw_c["group_id"] = target_group_id
+
         cfg_resp = _dict_to_dicom_config(raw_c)
         try:
             from service.pynetdicom_service import pynetdicom_service
@@ -518,7 +569,7 @@ class SystemService:
         update_data: DICOMConfigurationUpdateRequest,
         acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
-        """Update mutable fields of an existing DICOMConfiguration."""
+        """Update mutable fields of an existing DICOMConfiguration and its Group association."""
         query = """
         MATCH (c:DICOMConfiguration {id: $config_id})
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
@@ -572,7 +623,25 @@ class SystemService:
         records = await self.client.execute_query(query, params)
         if not records:
             return None
-        updated_cfg = _dict_to_dicom_config(records[0].get("c", {}))
+        raw_c = records[0].get("c", {})
+
+        # Handle group association update if provided
+        if update_data.group_id is not None:
+            # Associate with new target group
+            await group_service.associate_dicom_config_to_group(
+                config_id=config_id,
+                group_id=update_data.group_id,
+                test_id=raw_c.get("test_id"),
+                acted_by=acted_by,
+            )
+            raw_c["group_id"] = update_data.group_id
+        else:
+            # Retain existing group_id if present
+            existing = await self.get_configuration(config_id)
+            if existing and existing.get("group_id"):
+                raw_c["group_id"] = existing["group_id"]
+
+        updated_cfg = _dict_to_dicom_config(raw_c)
         try:
             from service.pynetdicom_service import pynetdicom_service
 

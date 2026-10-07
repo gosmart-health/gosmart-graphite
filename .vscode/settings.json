@@ -5,7 +5,7 @@
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
         // Prevents VS Code from saving mid-generation and triggering a rollback
-    "files.autoSave": "afterDelay", 
+    "files.autoSave": "off", 
     
     // Disables formatters from modifying the temporary diff buffer
     "editor.formatOnSave": false,
@@ -15,10 +15,20 @@
         "editor.formatOnSave": false
     },
     "cSpell.words": [
+        "acse",
+        "blackbox",
+        "dcmread",
         "dicom",
+        "dicomweb",
+        "dimse",
         "gosmart",
+        "MDICOM",
         "pydicom",
         "pykka",
-        "pynetdicom"
+        "pynetdicom",
+        "QIDO",
+        "REASSOCIATED",
+        "uids",
+        "WADO"
     ]
 }

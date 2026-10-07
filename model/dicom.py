@@ -76,6 +76,10 @@ class DicomHierarchy(BaseModel):
         default=None,
         description="Optional expiration timestamp for the hierarchy entities",
     )
+    group_id: Optional[str] = Field(
+        default=None,
+        description="Optional associated Group/Organization deterministic ID for ReBAC tenancy",
+    )
 
     def to_nodes(self) -> Tuple[PatientNode, StudyNode, SeriesNode, InstanceNode]:
         """Convert the hierarchy to concrete AuditableNode instances with deterministic IDs."""

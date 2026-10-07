@@ -1,3 +1,9 @@
+from model.audit import (
+    AuditAction,
+    AuditNode,
+    AuditSeverity,
+    AuditSeverityEnum,
+)
 from model.auth import (
     AuthenticatorNode,
     BelongsToRelation,
@@ -99,6 +105,10 @@ __all__ = [
     "DICOMConfigurationCreateRequest",
     "DICOMConfigurationUpdateRequest",
     "SystemBootstrapResponse",
+    "AuditNode",
+    "AuditAction",
+    "AuditSeverity",
+    "AuditSeverityEnum",
     "UserNode",
     "IdentityNode",
     "AuthenticatorNode",

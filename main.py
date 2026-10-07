@@ -7,7 +7,7 @@ import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from actor.dicom_actor import get_dicom_actor, stop_dicom_actor
+from actor import get_audit_actor, get_dicom_actor, stop_audit_actor, stop_dicom_actor
 from api.v1.router import api_v1_router
 from core.config import get_settings
 from core.logging import bind_log_context, clear_log_context, get_logger, setup_logging
@@ -41,9 +41,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     except Exception as e:
         logger.warning("neo4j_init_notice", error=str(e))
 
-    # Initialize Pykka background actor
+    # Initialize Pykka background actors
+    audit_actor_ref = get_audit_actor()
+    logger.info("audit_actor_started", actor_urn=audit_actor_ref.actor_urn)
     actor_ref = get_dicom_actor()
-    logger.info("pykka_actor_started", actor_urn=actor_ref.actor_urn)
+    logger.info("dicom_actor_started", actor_urn=actor_ref.actor_urn)
 
     # Initialize DICOM SCP Servers for active DICOM configurations
     if getattr(settings, "DICOM_SCP_ENABLED", True):
@@ -84,6 +86,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.warning("dicom_scp_stop_failed", error=str(e))
     stop_dicom_actor()
+    stop_audit_actor()
     await neo4j_client.close()
     logger.info("server_shutdown_complete")
 

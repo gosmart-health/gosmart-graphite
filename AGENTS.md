@@ -30,6 +30,13 @@ If usage changes—including command-line options, environment variables, config
   and add a test session identifier or simply a "test" or a Test Case Name. We keep the test data after a run is complete and only clear them before a test for
   post-test completion or failure manual inspections and recording.
 
+### Architectural Policies
+
+- The system uses Actor Model for multi-threaded processes like DICOM network, file or object storage, retrieval. Always use the Actor pattern where there 
+  will be background thread and blocking may occur. 
+- Strictly implement record generation idempotency using deterministic `id`
+- Most database entity structures should be derived from Auditable class which contain essential field needed for audits
+
 ## 4. Testing
 
 - If testing is looping more than 3 times without conversing to a resolution, stop the test, explain what you were going to resolve, and ask for user inputs.
