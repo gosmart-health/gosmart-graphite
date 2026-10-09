@@ -36,5 +36,18 @@
         "unconfigured",
         "Uvicorn",
         "WADO"
-    ]
+    ],
+    "rest-client.environmentVariables": {
+        "$shared": {
+            "graphServer": "http://localhost:8086",
+            "adminUsername": "admin",
+            "adminPassword": "MySecurePassword123!"
+        },
+        "local": {
+            "graphServer": "http://localhost:8000"
+        },
+        "docker": {
+            "graphServer": "http://localhost:8086"
+        }
+    }
 }

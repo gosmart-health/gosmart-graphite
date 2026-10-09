@@ -1,16 +1,17 @@
-@host = http://localhost:8086
+### ------------------------------------------------------------------------------
+### DICOM Configurations & Health Documentation
+### ------------------------------------------------------------------------------
 
-GET {{host}}/docs
+GET {{graphServer}}/docs
 
-### Clanup Test Data
-POST {{host}}/api/v1/system/test/cleanup
+### Cleanup Test Data
+POST {{graphServer}}/api/v1/system/test/cleanup
 
 ### Get DICOM Configurations
-
-GET {{host}}/api/v1/configurations/dicom
+GET {{graphServer}}/api/v1/configurations/dicom
 
 ### ADD DICOM AE CONFIGURATION
-POST {{host}}/api/v1/configurations/dicom HTTP/1.1
+POST {{graphServer}}/api/v1/configurations/dicom HTTP/1.1
 content-type: application/json
 
 {

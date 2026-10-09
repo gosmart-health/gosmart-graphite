@@ -1,21 +1,18 @@
 {
   "$schema": "https://opencode.ai/config.json",
+  "model": "vllm/Qwen/Qwen2.5-Coder-3B-Instruct-AWQ",
   "provider": {
-    "ollama-remote": {
+    "vllm": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Ollama Remote",
+      "name": "vllm Remote",
       "options": {
-        "baseURL": "http://10.200.0.103:11434/v1/"
+        "baseURL": "http://10.200.0.103:8000/v1"
       },
       "models": {
-          "qwen2.5-coder:7b": {
-            "name": "qwen2.5-coder:7b",
-	    "tools": true
-	    },
-	    "qwen2.5-coder:3b": {
-            "name": "qwen2.5-coder:3b",
-	    "tools": true
-	    }
+        "Qwen/Qwen2.5-Coder-3B-Instruct-AWQ": {
+          "name": "Qwen/Qwen2.5-Coder-3B-Instruct-AWQ",
+          "tools": true
+                }
       }
     }
   }

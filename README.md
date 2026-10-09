@@ -164,6 +164,18 @@ Interactive Swagger documentation will be available at:
 
 The server automatically bootstraps an immutable root `(:System)` node linked to a primary promiscuous DICOM entry (`ae_title = "*"`):
 
+### REST Authorizations
+
+The system accepts both API Key and JWT Access Token obtained via the login and oAuth2 calls.
+
+#### HEADER Key Variations
+
+You can use either `X-API-Key` key or as an `Authorization` Bearer Token methods. API key begins with `gs_live_` as the prefix.
+
+The use of `X-API-Key` is simpler and cleaner as you only need to supply the key or token as the value.
+
+Please read `Out-of-Band API Key Generation` section below where you can generate the API key.
+
 #### REST Endpoints:
 - `GET /api/v1/system` — Inspect System metadata (`name`, `owner`, `address`, `email`, `phone`, `serial_number`, `installed_at`) and attached configurations.
 - `PUT /api/v1/system` — Installer update of mutable System properties.
@@ -244,6 +256,165 @@ If running in containerized environments (Docker / Kubernetes) where running a C
    ```
 2. Restart the container. On startup, the server forces an update of the admin password hash and records a security audit log.
 3. Log in with the new password and remove `FORCE_ADMIN_PASSWORD_RESET=true`.
+
+---
+
+### 3. Out-of-Band API Key Generation (`cli/admin.py`)
+
+Generate scoped API keys directly via CLI for MCP agents, automation bots, and external systems:
+
+```bash
+# Generate an API key for an administrator or user
+uv run python -m cli.admin create-api-key --email admin@gosmart.health --name "Cursor Agent Key"
+
+# With custom scopes and 90-day expiration
+uv run python -m cli.admin create-api-key --email admin@gosmart.health --name "AntiGravity Agent Key" --scopes "mcp:full,graph:read" --expires-days 90
+```
+
+---
+
+## 🤖 Model Context Protocol (MCP) Server Configuration
+
+GoSmart DICOM Graph Server implements the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) exposing DICOM ingestion, C-ECHO verification, graph querying, and system administration tools.
+
+MCP can run over **SSE (Server-Sent Events HTTP)** or **STDIO**.
+
+### 1. Obtaining an API Key
+
+MCP SSE endpoints and agents require authentication. You can obtain an API key using either the **CLI** or the **REST API**.
+
+#### Option A: Via Administrative CLI (Out-of-Band)
+Run the admin CLI on the host server or container:
+
+```bash
+uv run python -m cli.admin create-api-key --email admin@gosmart.health --name "Local Agent Key"
+```
+Output:
+```text
+Successfully generated API key:
+-----------------------------------------------------------------
+  User ID:      eabebc72-5c2d-5b74-abfe-78aceb55a5fa
+  User Email:   admin@gosmart.health
+  Key Name:     Local Agent Key
+  Scopes:       ['*']
+  Expires At:   Never
+  API Key:      gs_live_0123456789abcdef0123456789abcdef...
+-----------------------------------------------------------------
+```
+
+#### Option B: Via REST API
+1. **Login as Administrator** to obtain an access token:
+   ```bash
+   curl -X POST "http://localhost:8000/api/v1/auth/login" \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "YourAdminPassword123!"}'
+   ```
+   Extract `access_token` and user `id` from the JSON response.
+
+2. **Generate the API Key**:
+   ```bash
+   curl -X POST "http://localhost:8000/api/v1/auth/api-keys" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     -d '{
+       "user_id": "<USER_ID>",
+       "name": "Cursor Agent Key",
+       "scopes": ["*"]
+     }'
+   ```
+   Save the returned `raw_api_key`.
+
+---
+
+### 2. Configuring MCP in Cursor
+
+In **Cursor**, MCP servers are configured in the user's home directory:
+
+📍 **Configuration Path:**
+- User Home Directory: `~/.cursor/mcp.json`  
+  *(Absolute path on macOS / Linux: `$HOME/.cursor/mcp.json`, Windows: `%USERPROFILE%\.cursor\mcp.json`)*
+- Or project-level: `.cursor/mcp.json` in the root of the workspace.
+
+#### Example `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gosmart-dicom-graph-server": {
+      "url": "http://127.0.0.1:8001/sse?api_key=gs_live_YOUR_API_KEY_HERE"
+    }
+  }
+}
+```
+
+> [!TIP]
+> If running MCP directly via command (STDIO) in Cursor without starting a separate HTTP process:
+> ```json
+> {
+>   "mcpServers": {
+>     "gosmart-dicom-graph-server": {
+>       "command": "uv",
+>       "args": [
+>         "run",
+>         "python",
+>         "cli.py",
+>         "mcp",
+>         "--transport",
+>         "stdio"
+>       ],
+>       "env": {
+>         "GOSMART_MCP_API_KEY": "gs_live_YOUR_API_KEY_HERE"
+>       }
+>     }
+>   }
+> }
+> ```
+
+---
+
+### 3. Configuring MCP in AntiGravity
+
+In **AntiGravity**, MCP configuration files are managed under the user's home directory within `~/.gemini/antigravity`:
+
+📍 **Configuration Paths:**
+- Global User Configuration: `~/.gemini/antigravity/mcp_config.json`  
+  *(Absolute path on macOS / Linux: `$HOME/.gemini/antigravity/mcp_config.json`, Windows: `%USERPROFILE%\.gemini\antigravity\mcp_config.json`)*
+- General Gemini CLI config fallback: `~/.gemini/config/mcp_config.json` or `~/.gemini/antigravity-cli/mcp/mcp_config.json`.
+
+#### Example `~/.gemini/antigravity/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gosmart-dicom-graph-server": {
+      "serverUrl": "http://127.0.0.1:8001/sse?api_key=gs_live_YOUR_API_KEY_HERE"
+    }
+  }
+}
+```
+
+Or using STDIO command:
+
+```json
+{
+  "mcpServers": {
+    "gosmart-dicom-graph-server": {
+      "command": "uv",
+      "args": [
+        "run",
+        "python",
+        "cli.py",
+        "mcp",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "GOSMART_MCP_API_KEY": "gs_live_YOUR_API_KEY_HERE"
+      }
+    }
+  }
+}
+```
 
 ---
 

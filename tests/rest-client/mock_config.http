@@ -1,13 +1,11 @@
 ## DICOM Mock Server Configurations
+### ------------------------------------------------------------------------------
 
 ### Get Remote Auto Push Status
-@host = http://localhost:8000
-
-GET {{host}}/api/v1/scp/auto-push
+GET {{graphServer}}/api/v1/scp/auto-push
 
 ### Configure Remote Auto Push
-
-POST {{host}}/api/v1/scp/auto-push
+POST {{graphServer}}/api/v1/scp/auto-push
 Content-Type: application/json
 
 {
@@ -18,8 +16,7 @@ Content-Type: application/json
 }
 
 ### Disable Remote Auto Push
-
-POST {{host}}/api/v1/scp/auto-push
+POST {{graphServer}}/api/v1/scp/auto-push
 Content-Type: application/json
 
 {
