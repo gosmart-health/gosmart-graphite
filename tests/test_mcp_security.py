@@ -16,7 +16,7 @@ from service.mcp_service import (
 from service.user_service import user_service
 
 LOCAL_MCP_HOST = "127.0.0.1"
-LOCAL_MCP_PORT = 8001
+LOCAL_MCP_PORT = 8086
 LOCAL_MCP_URL = f"http://{LOCAL_MCP_HOST}:{LOCAL_MCP_PORT}"
 
 

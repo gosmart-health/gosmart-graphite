@@ -1,11 +1,12 @@
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.types import Receive, Scope, Send
 
 from actor import get_audit_actor, get_dicom_actor, stop_audit_actor, stop_dicom_actor
 from api.v1.router import api_v1_router
@@ -150,6 +151,26 @@ def create_app() -> FastAPI:
     from api.v1.endpoints.dicomweb import router as dicomweb_router
 
     app.include_router(dicomweb_router)
+
+    # Mount Model Context Protocol (MCP) SSE Service
+    from service.mcp_service import get_mcp_sse_app
+
+    mcp_sse_app = get_mcp_sse_app()
+    app.mount("/mcp", mcp_sse_app)
+
+    # Allow direct root-level access for /sse and /messages (e.g. Cursor & MCP clients)
+    class _MCPRootProxyMiddleware:
+        def __init__(self, inner_app: Any, mcp_app: Any) -> None:
+            self.inner_app = inner_app
+            self.mcp_app = mcp_app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if scope["type"] == "http" and scope.get("path") in ("/sse", "/messages"):
+                await self.mcp_app(scope, receive, send)
+                return
+            await self.inner_app(scope, receive, send)
+
+    app.add_middleware(_MCPRootProxyMiddleware, mcp_app=mcp_sse_app)
 
     @app.get("/", tags=["Root"])
     async def root():

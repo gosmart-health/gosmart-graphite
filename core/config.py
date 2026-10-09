@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     APP_VERSION: str = Field(default="0.1.0", description="API Version")
     DEBUG: bool = Field(default=False, description="Debug mode flag")
     HOST: str = Field(default="0.0.0.0", description="FastAPI host binding")
-    PORT: int = Field(default=8000, description="FastAPI HTTP port")
+    PORT: int = Field(default=8086, description="FastAPI HTTP port")
     RELOAD: bool = Field(default=True, description="Uvicorn auto-reload")
     API_V1_PREFIX: str = Field(default="/api/v1", description="API v1 route prefix")
 

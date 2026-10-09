@@ -25,7 +25,7 @@ graph TD
     CLI[Headless CLI: gosmart-gs<br/>Typer & Rich] -->|Control & Query| CoreServices
     MCPAgent[AI Agents / MCP Clients] -->|SSE /mcp/sse or STDIO| MCPServer[MCP Server<br/>service/mcp_service.py]
     RemoteSCU[DICOM Modality / PACS / SCU] -->|DIMSE TCP :11112<br/>C-STORE, C-FIND, C-GET, C-MOVE, C-ECHO| PyNetDicom[PyNetDicom Service<br/>service/pynetdicom_service.py]
-    RESTClient[HTTP / REST Client] -->|FastAPI :8000 /api/v1| APIRouter[API Subsystem<br/>api/v1/router.py]
+    RESTClient[HTTP / REST Client] -->|FastAPI :8086 /api/v1| APIRouter[API Subsystem<br/>api/v1/router.py]
 
     subgraph CoreServices [Core Application Services]
         APIRouter --> StructlogMW[Request Tracing Middleware<br/>main.py]

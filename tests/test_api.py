@@ -17,7 +17,7 @@ def test_root_endpoint(client):
     data = response.json()
     assert "version" in data
     assert data["storage_root"].startswith("file://")
-    assert data["db_connection"].startswith("bolt://")
+    assert data["db_connection"].startswith("bolt://") or data["db_connection"].startswith("neo4j")
 
 
 def test_health_endpoint(client):

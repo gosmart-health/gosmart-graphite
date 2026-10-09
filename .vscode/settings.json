@@ -41,10 +41,11 @@
         "$shared": {
             "graphServer": "http://localhost:8086",
             "adminUsername": "admin",
-            "adminPassword": "MySecurePassword123!"
+            "adminPassword": "MySecurePassword123!",
+            "apiKey": "gs_live_-fg6q3Ri-E78CSvc1l7bx0r-BU29bWtWKnX-zNmblnY"
         },
         "local": {
-            "graphServer": "http://localhost:8000"
+            "graphServer": "http://localhost:8086"
         },
         "docker": {
             "graphServer": "http://localhost:8086"

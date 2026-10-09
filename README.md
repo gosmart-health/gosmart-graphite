@@ -110,7 +110,7 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI (file://, gs://, s3://, az://, azure://, \\\\unc\\share) |
 
 | `GOSMART_GS_HOST` | `0.0.0.0` | FastAPI host binding |
-| `GOSMART_GS_PORT` | `8000` | FastAPI HTTP port |
+| `GOSMART_GS_PORT` | `8086` | FastAPI HTTP port |
 | `GOSMART_GS_RELOAD` | `true` | Uvicorn auto-reload |
 | `GOSMART_GS_LOG_LEVEL` | `INFO` | Server logging level |
 | `GOSMART_GS_DICOM_AE_TITLE` | `GOSMART_GS` | Local DICOM Application Entity Title |
@@ -153,12 +153,12 @@ MATCH (n) DETACH DELETE n;
 ```bash
 uv run python main.py
 # or directly with uvicorn
-uv run uvicorn main:app --reload --port 8000
+uv run uvicorn main:app --reload --port 8086
 ```
 
 Interactive Swagger documentation will be available at:
-- **Swagger UI**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
+- **Swagger UI**: [http://localhost:8086/docs](http://localhost:8086/docs)
+- **ReDoc**: [http://localhost:8086/redoc](http://localhost:8086/redoc)
 
 ### 3. System & DICOM Configurations API & MCP
 
@@ -305,7 +305,7 @@ Successfully generated API key:
 #### Option B: Via REST API
 1. **Login as Administrator** to obtain an access token:
    ```bash
-   curl -X POST "http://localhost:8000/api/v1/auth/login" \
+   curl -X POST "http://localhost:8086/api/v1/auth/login" \
      -H "Content-Type: application/json" \
      -d '{"username": "admin", "password": "YourAdminPassword123!"}'
    ```
@@ -313,7 +313,7 @@ Successfully generated API key:
 
 2. **Generate the API Key**:
    ```bash
-   curl -X POST "http://localhost:8000/api/v1/auth/api-keys" \
+   curl -X POST "http://localhost:8086/api/v1/auth/api-keys" \
      -H "Content-Type: application/json" \
      -H "Authorization: Bearer <ACCESS_TOKEN>" \
      -d '{
@@ -341,7 +341,7 @@ In **Cursor**, MCP servers are configured in the user's home directory:
 {
   "mcpServers": {
     "gosmart-dicom-graph-server": {
-      "url": "http://127.0.0.1:8001/sse?api_key=gs_live_YOUR_API_KEY_HERE"
+      "url": "http://127.0.0.1:8086/sse?api_key=gs_live_YOUR_API_KEY_HERE"
     }
   }
 }
@@ -387,7 +387,7 @@ In **AntiGravity**, MCP configuration files are managed under the user's home di
 {
   "mcpServers": {
     "gosmart-dicom-graph-server": {
-      "serverUrl": "http://127.0.0.1:8001/sse?api_key=gs_live_YOUR_API_KEY_HERE"
+      "serverUrl": "http://127.0.0.1:8086/sse?api_key=gs_live_YOUR_API_KEY_HERE"
     }
   }
 }
