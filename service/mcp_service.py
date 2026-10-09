@@ -476,6 +476,10 @@ async def store_scu(
 # -----------------------------------------------------------------------------
 
 
+# In-memory registry of active authenticated MCP session IDs -> user dict
+_active_mcp_sessions: Dict[str, Dict[str, Any]] = {}
+
+
 class MCPAuthMiddleware:
     """ASGI Middleware enforcing Bearer JWT or API Key authentication on MCP SSE & Messages endpoints."""
 
@@ -531,6 +535,11 @@ class MCPAuthMiddleware:
             except Exception as e:
                 logger.warning("mcp_auth_api_key_failed", error=str(e))
 
+        # Check if this is a message POST carrying a known session_id from an authenticated SSE connection
+        session_id = query_params.get("session_id")
+        if not user and session_id and session_id in _active_mcp_sessions:
+            user = _active_mcp_sessions[session_id]
+
         if not user:
             response = JSONResponse(
                 {"detail": "Unauthorized: Authentication credentials required for MCP SSE service"},
@@ -540,10 +549,36 @@ class MCPAuthMiddleware:
             return
 
         token_ctx = _current_mcp_user.set(user)
-        try:
-            await self.app(scope, receive, send)
-        finally:
-            _current_mcp_user.reset(token_ctx)
+
+        # Intercept and register newly created session_ids on SSE handshake
+        path = scope.get("path", "").rstrip("/")
+        if path.endswith("/sse") and scope.get("method") == "GET":
+
+            async def send_wrapper(message: Dict[str, Any]) -> None:
+                if message["type"] == "http.response.body":
+                    body_bytes = message.get("body", b"")
+                    if b"session_id=" in body_bytes:
+                        try:
+                            # Extract session_id parameter from SSE endpoint declaration
+                            # e.g., "data: /messages/?session_id=3312638b4885427280259166c371590b"
+                            body_text = body_bytes.decode("utf-8", errors="ignore")
+                            for line in body_text.splitlines():
+                                if "session_id=" in line:
+                                    extracted_sid = line.split("session_id=")[1].strip().split("&")[0].split()[0]
+                                    _active_mcp_sessions[extracted_sid] = user
+                        except Exception:
+                            pass
+                await send(message)
+
+            try:
+                await self.app(scope, receive, send_wrapper)
+            finally:
+                _current_mcp_user.reset(token_ctx)
+        else:
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _current_mcp_user.reset(token_ctx)
 
 
 def get_mcp_sse_app(*args: Any, **kwargs: Any) -> Any:

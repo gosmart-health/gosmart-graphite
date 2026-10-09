@@ -165,9 +165,11 @@ def create_app() -> FastAPI:
             self.mcp_app = mcp_app
 
         async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-            if scope["type"] == "http" and scope.get("path") in ("/sse", "/messages"):
-                await self.mcp_app(scope, receive, send)
-                return
+            if scope["type"] == "http":
+                path = scope.get("path", "").rstrip("/")
+                if path in ("/sse", "/messages"):
+                    await self.mcp_app(scope, receive, send)
+                    return
             await self.inner_app(scope, receive, send)
 
     app.add_middleware(_MCPRootProxyMiddleware, mcp_app=mcp_sse_app)
