@@ -240,3 +240,68 @@ async def test_mcp_streamable_http_auth_and_handshake():
                 "content-type", ""
             ) or "text/event-stream" in res_auth.headers.get("content-type", "")
             assert "gosmart-dicom-graph-server" in res_auth.text
+
+
+@pytest.mark.anyio
+async def test_mcp_streamable_http_via_main_app_lifespan():
+    """Verify StreamableHTTP transport accessed via FastAPI root /mcp with lifespan."""
+    from main import create_app
+
+    test_app = create_app()
+
+    init_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "cline-test", "version": "1.0.0"},
+        },
+    }
+
+    valid_token = create_access_token(
+        data={
+            "sub": "cline_user_1",
+            "email": "cline@gosmart.health",
+            "display_name": "Cline Agent",
+            "roles": ["PLATFORM_ADMIN"],
+        }
+    )
+
+    async with test_app.router.lifespan_context(test_app):
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=test_app), base_url="http://127.0.0.1:8086"
+        ) as client:
+            # 1. Unauthenticated request rejected with 401
+            res_unauth = await client.post("/mcp", json=init_payload)
+            assert res_unauth.status_code == 401
+            assert "Unauthorized" in res_unauth.json().get("detail", "")
+
+            # 2. Authenticated initialize request on /mcp with token param
+            res_init = await client.post(
+                f"/mcp?token={valid_token}",
+                json=init_payload,
+                headers={"Accept": "application/json, text/event-stream"},
+            )
+            assert res_init.status_code == 200
+            session_id = res_init.headers.get("mcp-session-id")
+            assert session_id is not None
+            assert "gosmart-dicom-graph-server" in res_init.text
+
+            # 3. Subsequent request with mcp-session-id header (without token in query or header)
+            res_subsequent = await client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/list",
+                    "params": {},
+                },
+                headers={
+                    "mcp-session-id": session_id,
+                    "Accept": "application/json, text/event-stream",
+                },
+            )
+            assert res_subsequent.status_code == 200
+            assert "generate_mock_dicom" in res_subsequent.text

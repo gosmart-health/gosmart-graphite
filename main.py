@@ -84,10 +84,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error("dicom_scp_start_failed", error=str(e), exc_info=True)
 
     # Initialize and run MCP StreamableHTTP session manager task group
-    from service.mcp_service import get_mcp_streamable_http_app, mcp
+    from service.mcp_service import dynamic_mcp_streamable_app, mcp
 
-    # Reinitialize streamable_http_app to ensure a fresh session manager per lifespan
-    get_mcp_streamable_http_app(streamable_http_path="/")
+    # Refresh streamable_http_app to ensure an active session manager for this lifespan
+    dynamic_mcp_streamable_app.refresh(streamable_http_path="/")
     async with mcp.session_manager.run():
         yield
 
@@ -183,6 +183,7 @@ def create_app() -> FastAPI:
                 if path == "/mcp":
                     scope_copy = dict(scope)
                     scope_copy["path"] = "/"
+                    scope_copy["raw_path"] = b"/"
                     await self.streamable_app(scope_copy, receive, send)
                     return
             await self.inner_app(scope, receive, send)

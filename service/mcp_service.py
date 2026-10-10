@@ -535,8 +535,8 @@ class MCPAuthMiddleware:
             except Exception as e:
                 logger.warning("mcp_auth_api_key_failed", error=str(e))
 
-        # Check if this is a message POST carrying a known session_id from an authenticated SSE connection
-        session_id = query_params.get("session_id")
+        # Check if this is an SSE or StreamableHTTP request carrying a known session_id from an authenticated connection
+        session_id = query_params.get("session_id") or headers.get("mcp-session-id")
         if not user and session_id and session_id in _active_mcp_sessions:
             user = _active_mcp_sessions[session_id]
 
@@ -550,35 +550,63 @@ class MCPAuthMiddleware:
 
         token_ctx = _current_mcp_user.set(user)
 
-        # Intercept and register newly created session_ids on SSE handshake
-        path = scope.get("path", "").rstrip("/")
-        if path.endswith("/sse") and scope.get("method") == "GET":
-
-            async def send_wrapper(message: Dict[str, Any]) -> None:
-                if message["type"] == "http.response.body":
-                    body_bytes = message.get("body", b"")
-                    if b"session_id=" in body_bytes:
+        async def send_wrapper(message: Dict[str, Any]) -> None:
+            # 1. Capture mcp-session-id from response headers for Streamable HTTP
+            if message["type"] == "http.response.start":
+                raw_headers = message.get("headers", [])
+                for k, v in raw_headers:
+                    if k.lower() == b"mcp-session-id":
                         try:
-                            # Extract session_id parameter from SSE endpoint declaration
-                            # e.g., "data: /messages/?session_id=3312638b4885427280259166c371590b"
-                            body_text = body_bytes.decode("utf-8", errors="ignore")
-                            for line in body_text.splitlines():
-                                if "session_id=" in line:
-                                    extracted_sid = line.split("session_id=")[1].strip().split("&")[0].split()[0]
-                                    _active_mcp_sessions[extracted_sid] = user
+                            sid = v.decode("utf-8").strip()
+                            _active_mcp_sessions[sid] = user
                         except Exception:
                             pass
-                await send(message)
+            # 2. Capture session_id from SSE body declaration
+            elif message["type"] == "http.response.body":
+                body_bytes = message.get("body", b"")
+                if b"session_id=" in body_bytes:
+                    try:
+                        body_text = body_bytes.decode("utf-8", errors="ignore")
+                        for line in body_text.splitlines():
+                            if "session_id=" in line:
+                                extracted_sid = line.split("session_id=")[1].strip().split("&")[0].split()[0]
+                                _active_mcp_sessions[extracted_sid] = user
+                    except Exception:
+                        pass
+            await send(message)
 
-            try:
-                await self.app(scope, receive, send_wrapper)
-            finally:
-                _current_mcp_user.reset(token_ctx)
-        else:
-            try:
-                await self.app(scope, receive, send)
-            finally:
-                _current_mcp_user.reset(token_ctx)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            _current_mcp_user.reset(token_ctx)
+
+
+class DynamicMCPStreamableApp:
+    """Dynamic ASGI wrapper around the MCP StreamableHTTP Starlette sub-app.
+
+    Ensures that incoming requests are dispatched to the currently active session manager,
+    which is refreshed on each application lifespan startup.
+    """
+
+    def __init__(self, mcp_server: MCPServer) -> None:
+        self.mcp_server = mcp_server
+        self._current_app: Optional[Any] = None
+
+    def refresh(self, streamable_http_path: str = "/") -> Any:
+        self._current_app = self.mcp_server.streamable_http_app(streamable_http_path=streamable_http_path)
+        return self._current_app
+
+    @property
+    def current_app(self) -> Any:
+        if self._current_app is None:
+            self.refresh()
+        return self._current_app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        await self.current_app(scope, receive, send)
+
+
+dynamic_mcp_streamable_app = DynamicMCPStreamableApp(mcp)
 
 
 def get_mcp_sse_app(*args: Any, **kwargs: Any) -> Any:
@@ -589,7 +617,8 @@ def get_mcp_sse_app(*args: Any, **kwargs: Any) -> Any:
 
 def get_mcp_streamable_http_app(*args: Any, **kwargs: Any) -> Any:
     """Build and wrap the MCP StreamableHTTP Starlette app with MCPAuthMiddleware."""
-    if "streamable_http_path" not in kwargs and not args:
-        kwargs["streamable_http_path"] = "/"
-    base_app = mcp.streamable_http_app(*args, **kwargs)
-    return MCPAuthMiddleware(base_app)
+    if args or (kwargs and set(kwargs.keys()) - {"streamable_http_path"}):
+        base_app = mcp.streamable_http_app(*args, **kwargs)
+        return MCPAuthMiddleware(base_app)
+    dynamic_mcp_streamable_app.refresh(kwargs.get("streamable_http_path", "/"))
+    return MCPAuthMiddleware(dynamic_mcp_streamable_app)
