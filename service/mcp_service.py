@@ -542,7 +542,7 @@ class MCPAuthMiddleware:
 
         if not user:
             response = JSONResponse(
-                {"detail": "Unauthorized: Authentication credentials required for MCP SSE service"},
+                {"detail": "Unauthorized: Authentication credentials required for MCP service"},
                 status_code=401,
             )
             await response(scope, receive, send)
@@ -584,4 +584,12 @@ class MCPAuthMiddleware:
 def get_mcp_sse_app(*args: Any, **kwargs: Any) -> Any:
     """Build and wrap the MCP SSE Starlette app with MCPAuthMiddleware."""
     base_app = mcp.sse_app(*args, **kwargs)
+    return MCPAuthMiddleware(base_app)
+
+
+def get_mcp_streamable_http_app(*args: Any, **kwargs: Any) -> Any:
+    """Build and wrap the MCP StreamableHTTP Starlette app with MCPAuthMiddleware."""
+    if "streamable_http_path" not in kwargs and not args:
+        kwargs["streamable_http_path"] = "/"
+    base_app = mcp.streamable_http_app(*args, **kwargs)
     return MCPAuthMiddleware(base_app)

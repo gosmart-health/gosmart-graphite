@@ -336,16 +336,20 @@ def send(
 
 @cli_app.command()
 def mcp(
-    transport: str = typer.Option("sse", "--transport", "-t", help="Transport mode: sse or stdio"),
-    port: int = typer.Option(8001, "--port", "-p", help="Port for standalone SSE server"),
-    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host for standalone SSE server"),
+    transport: str = typer.Option("sse", "--transport", "-t", help="Transport mode: sse, streamable-http, or stdio"),
+    port: int = typer.Option(8001, "--port", "-p", help="Port for standalone MCP server"),
+    host: str = typer.Option("0.0.0.0", "--host", "-h", help="Host for standalone MCP server"),
 ):
-    """Run the Model Context Protocol (MCP) server directly via SSE or STDIO."""
+    """Run the Model Context Protocol (MCP) server directly via SSE, StreamableHTTP, or STDIO."""
     from service.mcp_service import mcp as mcp_instance
 
-    if transport.lower() == "stdio":
+    mode = transport.lower()
+    if mode == "stdio":
         console.print("[cyan]Running MCP Server over STDIO...[/cyan]")
         asyncio.run(mcp_instance.run_stdio_async())
+    elif mode in ("streamable-http", "http", "streamable"):
+        console.print(f"[cyan]Running standalone MCP StreamableHTTP Server on http://{host}:{port}/mcp ...[/cyan]")
+        asyncio.run(mcp_instance.run_streamable_http_async(host=host, port=port, streamable_http_path="/mcp"))
     else:
         console.print(f"[cyan]Running standalone MCP SSE Server on http://{host}:{port}/sse ...[/cyan]")
         sse_starlette_app = mcp_instance.sse_app()

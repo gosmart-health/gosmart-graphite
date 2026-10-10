@@ -372,7 +372,44 @@ In **Cursor**, MCP servers are configured in the user's home directory:
 
 ---
 
-### 3. Configuring MCP in AntiGravity
+### 3. Configuring MCP in Cline (StreamableHTTP & SSE)
+
+In **Cline**, MCP servers are configured in `cline_mcp_settings.json` (or via the Cline settings UI):
+
+📍 **Configuration Path:**
+- `~/.cline/data/settings/cline_mcp_settings.json`
+
+#### Option A: StreamableHTTP Transport (Recommended for high throughput):
+```json
+{
+  "mcpServers": {
+    "DICOM Server": {
+      "url": "http://localhost:8086/mcp?api_key=gs_live_YOUR_API_KEY_HERE",
+      "type": "streamableHttp",
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
+
+#### Option B: Server-Sent Events (SSE) Transport:
+```json
+{
+  "mcpServers": {
+    "DICOM Server": {
+      "url": "http://localhost:8086/sse?api_key=gs_live_YOUR_API_KEY_HERE",
+      "type": "sse",
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}
+```
+
+---
+
+### 4. Configuring MCP in AntiGravity
 
 In **AntiGravity**, MCP configuration files are managed under the user's home directory within `~/.gemini/antigravity`:
 

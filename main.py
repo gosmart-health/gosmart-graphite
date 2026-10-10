@@ -83,7 +83,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.error("dicom_scp_start_failed", error=str(e), exc_info=True)
 
-    yield
+    # Initialize and run MCP StreamableHTTP session manager task group
+    from service.mcp_service import get_mcp_streamable_http_app, mcp
+
+    # Reinitialize streamable_http_app to ensure a fresh session manager per lifespan
+    get_mcp_streamable_http_app(streamable_http_path="/")
+    async with mcp.session_manager.run():
+        yield
 
     # Clean shutdown
     logger.info("server_shutting_down", app_name=settings.APP_NAME)
@@ -152,27 +158,36 @@ def create_app() -> FastAPI:
 
     app.include_router(dicomweb_router)
 
-    # Mount Model Context Protocol (MCP) SSE Service
-    from service.mcp_service import get_mcp_sse_app
+    # Mount Model Context Protocol (MCP) Services (Streamable HTTP & SSE Transports)
+    from service.mcp_service import get_mcp_sse_app, get_mcp_streamable_http_app
 
+    mcp_streamable_app = get_mcp_streamable_http_app(streamable_http_path="/")
     mcp_sse_app = get_mcp_sse_app()
-    app.mount("/mcp", mcp_sse_app)
 
-    # Allow direct root-level access for /sse and /messages (e.g. Cursor & MCP clients)
+    app.mount("/mcp", mcp_streamable_app)
+
+    # Allow direct root-level access for /sse and /messages (Cursor & SSE clients)
+    # and direct /mcp (without trailing slash redirect) for Streamable HTTP clients (Cline, etc.)
     class _MCPRootProxyMiddleware:
-        def __init__(self, inner_app: Any, mcp_app: Any) -> None:
+        def __init__(self, inner_app: Any, sse_app: Any, streamable_app: Any) -> None:
             self.inner_app = inner_app
-            self.mcp_app = mcp_app
+            self.sse_app = sse_app
+            self.streamable_app = streamable_app
 
         async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
             if scope["type"] == "http":
                 path = scope.get("path", "").rstrip("/")
                 if path in ("/sse", "/messages"):
-                    await self.mcp_app(scope, receive, send)
+                    await self.sse_app(scope, receive, send)
+                    return
+                if path == "/mcp":
+                    scope_copy = dict(scope)
+                    scope_copy["path"] = "/"
+                    await self.streamable_app(scope_copy, receive, send)
                     return
             await self.inner_app(scope, receive, send)
 
-    app.add_middleware(_MCPRootProxyMiddleware, mcp_app=mcp_sse_app)
+    app.add_middleware(_MCPRootProxyMiddleware, sse_app=mcp_sse_app, streamable_app=mcp_streamable_app)
 
     @app.get("/", tags=["Root"])
     async def root():
