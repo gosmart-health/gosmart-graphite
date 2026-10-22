@@ -1,0 +1,26 @@
+---
+config:
+  theme: forest
+  themeCSS: 'background-color: #f3f4f6;'
+---
+flowchart TB
+    n1["DICOM Patient"] --> n2["DICOM Study"]
+    n2 --> n3["DICOM Series"]
+    n1 -- via PatientID --> n6["FHIR Patient"]
+    n7["Encounter"] --> n8["ServiceRequest"] & n6 & n10["Condition"] & n11["DiagnosticReport"] & n12["Observation"] & n9["ImagingStudy"]
+    n8 --> n9
+    n3 --> n5["DICOM Instances"]
+    n9 -- StudyUID --> n2
+    n9 -- SeriesUID --> n3
+    n9 -- SOP UID --> n5
+
+    n1@{ shape: rounded}
+    n6@{ shape: rounded}
+    n7@{ shape: rect}
+    style n1 fill:#D50000,color:#fbf8f8
+    style n6 fill:#D50000,color:#ffffff
+    style n7 fill:#00C853
+    style n11 fill:#FFD600
+    style n9 fill:#FF6D00
+    linkStyle 4 stroke:#FF6D00,fill:none
+    

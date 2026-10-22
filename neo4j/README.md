@@ -7,7 +7,7 @@ This directory contains Docker Compose file to get your Neo4j Graph Database run
 ## Getting Started
 
 - Download and set up Docker Desktop
-- Enable local file sharing to the Docker. The default location for the database is /usr/local/neo4j, you will need to allow write permission. Windows does not have /usr/local but you can easily create one on your drive or change the docker-compose.yaml file. Either ways, you do need to configure the virtual sharing in your docker desktop.
+- Database persistence is automatically managed via a Docker named volume (`neo4j_data`), eliminating the need for host file sharing or directory permission configurations across macOS, Linux, and Windows.
 
 ## Authentication is Disabled
 
