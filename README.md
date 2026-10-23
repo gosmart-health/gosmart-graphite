@@ -723,3 +723,81 @@ The notebook guides you through:
 4. Background Actor dispatch with `pykka` (`tell` and `ask`).
 5. Graph queries and connectivity with `neo4j`.
 6. DICOM Application Entity (AE) setup and C-ECHO SCU ping with `pynetdicom`.
+
+### 3. GoSmart Testing Ecosystem
+
+You can use our suite of testing tools to validate your GoSmart implementation. These tools include:
+
+- **GoSmart Mock Server**: A mock server to generate synthetic DICOM instances. Docker 
+  instances are available.
+- **FHIR Plugin (PRO Subscription)**: Communicate with FHIR server to test EHR record integration
+  and GraphRAG capabilities. Pro-subscribers have a combined MockServer and FHIR Plugin
+  Docker composed containers for testing.
+- **HAPI FHIR Server**: Local FHIR Server. This is Dockerized.
+- **Synthea(tm)**: Generate synthetic patients and studies for testing with the HAPI FHIR server.
+- **PACS Viewer**: On Windows we recommend MicroDICOM viewer with DICOM Q/R, and Move.
+- **Neo4J**: A database for testing your GoSmart implementation. We use Neo4j Aura Free account but
+  you can also host a Neo4j community server with a Docker.
+
+For additional information about our tools, please visit [GoSmart Health Products Page](https://gosmart.health/products/).
+
+**NOTE** If you cannot view the `mermaid` drawings on VS Code, try `Markdown Preview Enhanced` plug-in.
+
+```mermaid
+flowchart LR
+    n2["GoSmart Mock Server<br>API: 8000<br>DICOM:11114<br>GOSMART_SCP"] -- REST 8088 --> n3["FHIR PLUGIN<br>API: 8088"]
+    n2 -- "REST/FHIR 8087" --> n4["HAPI FHIR Server<br>Remote:8087"]
+    n1["GoSmart Graph PACS<br>API:8086<br>DICOM: 11112<br>GOSMART_GS"] -- REST 8088 --> n3
+    n2 -- "DCM C-STORE 11112" --> n1
+    n3 --> n4
+    n2 <--> n5["PACS Viewer"]
+    n2 --> n6["Neo4J<br>7687"]
+
+    n2@{ shape: rounded}
+    n1@{ shape: rounded}
+    linkStyle default stroke:#00C853
+```
+
+### FHIR Process Sequence Diagram
+
+This diagram shows how the FHIR Plug-In interacts with the HAPI FHIR Server and the GoSmart Mock Server to generate images and push them to the Graph PACS. The Graph PACS then registers the patient, practitioner, organization, and other resources in the FHIR Server.
+Some GET operations are assumed to return value so omitted the return arrows.
+
+```mermaid
+---
+config:
+  theme: neo
+  themeVariables:
+    signalColor: '#32CD32'
+    actorLineColor: '#32CD32'
+    textColor: '#FF8C00'
+    actorTextColor: '#FF8C00'
+    signalTextColor: '#FF8C00'
+    labelTextColor: '#FF8C00'
+    loopTextColor: '#FF8C00'
+    noteTextColor: '#FF8C00'
+    sequenceNumberColor: '#FF8C00'
+  sequence:
+    mirrorActors: false
+---
+sequenceDiagram
+    participant FHIR as FHIR Server (HAPI)
+    participant PLUG as FHIR Plug-In
+    participant MOCK as Mock Server
+    participant PACS as Graph PACS
+    autonumber
+
+    PLUG->>FHIR: Get Imaging+Patient
+    FHIR->>PLUG: Send I+P Bundle
+    PLUG->>MOCK: Generate Images and Push to PACS
+    MOCK->>PACS: Push SOPs
+    PACS->>FHIR: Get Full FHIR Bundle via Study UID
+    FHIR->>PACS: Provide the Full FHIR Bundle
+    PACS->>PACS: Register Patient /Link
+    PACS->>FHIR: Get Practioner
+    PACS->>PACS: Register Practioner
+    PACS->>FHIR: Get Organization
+    PACS->>PACS: Register Organization
+    PACS->>PACS: Register Other Resources
+    PACS->>PACS: Vectorize Diagnostic Reports, Study Reasons
+```
