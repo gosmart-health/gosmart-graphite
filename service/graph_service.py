@@ -6,6 +6,7 @@ from db.neo4j import Neo4jClient, neo4j_client
 from model.audit import AuditNode
 from model.auth import BelongsToRelation, PerformedAtRelation
 from model.dicom import DicomHierarchy
+from model.fhir import FHIR_ALL_SCHEMA_DDL
 from model.graph import (
     TransferStatusNode,
     generate_deterministic_id,
@@ -532,6 +533,7 @@ class GraphService:
             "CREATE CONSTRAINT group_sys_id_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.id IS UNIQUE",
             "CREATE CONSTRAINT group_code_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.code IS UNIQUE",
             "CREATE CONSTRAINT audit_log_sys_id_unique IF NOT EXISTS FOR (a:AuditLog) REQUIRE a.id IS UNIQUE",
+            *FHIR_ALL_SCHEMA_DDL,
         ]
         if not await self.client.verify_connectivity():
             logger.warning(
