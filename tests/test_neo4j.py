@@ -1,6 +1,7 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from neo4j import NotificationDisabledClassification, NotificationMinimumSeverity
 from neo4j.exceptions import ServiceUnavailable
 
 from db.neo4j import Neo4jClient
@@ -44,3 +45,29 @@ async def test_verify_connectivity_real_client():
         assert isinstance(result, bool)
     finally:
         await client.close()
+
+
+@pytest.mark.anyio
+async def test_driver_notification_suppression_config():
+    """Verify that both async and sync drivers configure notification suppression for schema notices."""
+    client = Neo4jClient()
+    mock_async_driver = AsyncMock()
+    mock_sync_driver = MagicMock()
+
+    with patch("db.neo4j.AsyncGraphDatabase.driver", return_value=mock_async_driver) as mock_async_factory:
+        await client.connect()
+        _, async_kwargs = mock_async_factory.call_args
+        assert async_kwargs.get("notifications_min_severity") == NotificationMinimumSeverity.WARNING
+        assert async_kwargs.get("notifications_disabled_classifications") == [
+            NotificationDisabledClassification.SCHEMA
+        ]
+
+    with patch("db.neo4j.GraphDatabase.driver", return_value=mock_sync_driver) as mock_sync_factory:
+        client.get_sync_driver()
+        _, sync_kwargs = mock_sync_factory.call_args
+        assert sync_kwargs.get("notifications_min_severity") == NotificationMinimumSeverity.WARNING
+        assert sync_kwargs.get("notifications_disabled_classifications") == [
+            NotificationDisabledClassification.SCHEMA
+        ]
+
+    await client.close()

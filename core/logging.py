@@ -11,6 +11,16 @@ from structlog.stdlib import BoundLogger, LoggerFactory, ProcessorFormatter
 from core.config import Settings, get_settings
 
 
+class Neo4jAlreadyExistsLogFilter(logging.Filter):
+    """Filter out noisy Neo4j notifications when schema constraints or indexes already exist."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if "already exists" in message or "00NA0" in message:
+            return False
+        return True
+
+
 def setup_logging(settings: Optional[Settings] = None) -> None:
     """Configure industrial-strength structured logging with structlog and 7-day file auto-rotation."""
     cfg = settings or get_settings()
@@ -110,6 +120,11 @@ def setup_logging(settings: Optional[Settings] = None) -> None:
         sub_logger = logging.getLogger(logger_name)
         sub_logger.handlers.clear()
         sub_logger.propagate = True
+
+    # Quiet Neo4j DBMS informational notifications (such as "already exists" schema notices)
+    neo4j_notif_logger = logging.getLogger("neo4j.notifications")
+    neo4j_notif_logger.setLevel(logging.WARNING)
+    neo4j_notif_logger.addFilter(Neo4jAlreadyExistsLogFilter())
 
 
 def get_logger(name: Optional[str] = None) -> BoundLogger:

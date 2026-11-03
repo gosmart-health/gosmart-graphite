@@ -550,6 +550,7 @@ class GraphService:
                 logger.warning("Failed to apply constraint '%s': %s", constraint, e)
 
         self._constraints_initialized = True
+        logger.info("schema_constraints_verified", total_statements=len(constraints))
 
     async def search_studies_qido(
         self,

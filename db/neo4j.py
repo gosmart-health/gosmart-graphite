@@ -2,7 +2,14 @@ import logging
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from core.config import Settings, get_settings
-from neo4j import AsyncDriver, AsyncGraphDatabase, Driver, GraphDatabase
+from neo4j import (
+    AsyncDriver,
+    AsyncGraphDatabase,
+    Driver,
+    GraphDatabase,
+    NotificationDisabledClassification,
+    NotificationMinimumSeverity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +37,8 @@ class Neo4jClient:
                 auth=auth,
                 max_connection_lifetime=self.settings.DB_MAX_CONNECTION_LIFETIME,
                 max_connection_pool_size=self.settings.DB_MAX_CONNECTION_POOL_SIZE,
+                notifications_min_severity=NotificationMinimumSeverity.WARNING,
+                notifications_disabled_classifications=[NotificationDisabledClassification.SCHEMA],
             )
             import asyncio
 
@@ -52,6 +61,8 @@ class Neo4jClient:
                 auth=auth,
                 max_connection_lifetime=self.settings.DB_MAX_CONNECTION_LIFETIME,
                 max_connection_pool_size=self.settings.DB_MAX_CONNECTION_POOL_SIZE,
+                notifications_min_severity=NotificationMinimumSeverity.WARNING,
+                notifications_disabled_classifications=[NotificationDisabledClassification.SCHEMA],
             )
         return self._sync_driver
 

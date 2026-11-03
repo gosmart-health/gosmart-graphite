@@ -5,7 +5,13 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
 from core.config import Settings
-from core.logging import bind_log_context, clear_log_context, get_logger, setup_logging
+from core.logging import (
+    Neo4jAlreadyExistsLogFilter,
+    bind_log_context,
+    clear_log_context,
+    get_logger,
+    setup_logging,
+)
 
 
 def test_logging_setup_and_7_day_rotation():
@@ -87,3 +93,32 @@ def test_structlog_json_values_and_context():
         assert last_log["dicom_metadata"]["tags"] == ["head", "contrast", "axial"]
         assert "timestamp" in last_log
         assert "level" in last_log
+
+
+def test_neo4j_already_exists_notification_filter():
+    """Verify that verbose Neo4j schema 'already exists' notifications are suppressed."""
+    filter_instance = Neo4jAlreadyExistsLogFilter()
+
+    # Record with 'already exists' note
+    record_already_exists = logging.LogRecord(
+        name="neo4j.notifications",
+        level=logging.INFO,
+        pathname="result.py",
+        lineno=346,
+        msg="Received notification from DBMS server: <GqlStatusObject gql_status='00NA0', status_description=\"note: successful completion - index or constraint already exists.\">",
+        args=(),
+        exc_info=None,
+    )
+    assert filter_instance.filter(record_already_exists) is False
+
+    # Record without 'already exists' note
+    record_normal_warning = logging.LogRecord(
+        name="neo4j.notifications",
+        level=logging.WARNING,
+        pathname="result.py",
+        lineno=346,
+        msg="Received notification from DBMS server: <GqlStatusObject gql_status='01000', status_description=\"warning: query plan sub-optimal\">",
+        args=(),
+        exc_info=None,
+    )
+    assert filter_instance.filter(record_normal_warning) is True
