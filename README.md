@@ -172,6 +172,12 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_DB_DATABASE` | `neo4j` | Neo4j Database Name |
 | `GOSMART_GS_DB_MAX_CONNECTION_POOL_SIZE` | `50` | Neo4j max connection pool size |
 | `GOSMART_GS_DB_MAX_CONNECTION_LIFETIME` | `3600` | Neo4j max connection lifetime (seconds) |
+| ** FHIR ** | | |
+| `GOSMART_GS_FHIR_BASE_URL` | `` | FHIR URL root. Empty disables FHIR |
+| `GOSMART_GS_FHIR_POLL_SEC` | 120 | FHIR polling interval to check for DiagnosticReport |
+| `GOSMART_GS_FHIR_ACCESSION_SYSTEM` | "" | System for the Acccession Number |
+| `GOSMART_GS_FHIR_PATIENT_ID_SYSTEM` | "urn:oid:2.16.840.1.113883.4.3.25" | System for the Patient ID/ MRN |
+
 | **Storage** | | |
 | `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI (file://, gs://, s3://, az://, \\\\unc\\share) |
 | **Server** | | |
