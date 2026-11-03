@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     DB_MAX_CONNECTION_LIFETIME: int = Field(default=3600, description="Max connection lifetime in seconds")
     DB_MAX_CONNECTION_POOL_SIZE: int = Field(default=50, description="Max connection pool size")
 
+    # FHIR Integration Settings
+    FHIR_BASE_URL: str = Field(default="", description="FHIR URL root. Empty disables FHIR")
+    FHIR_POLL_SEC: int = Field(default=120, description="FHIR polling interval to check for DiagnosticReport")
+    FHIR_ACCESSION_SYSTEM: str = Field(
+        default="",
+        description="System for the Accession Number",
+    )
+    FHIR_PATIENT_ID_SYSTEM: str = Field(
+        default="urn:oid:2.16.840.1.113883.4.3.25",
+        description="System for the Patient ID/ MRN",
+    )
+
     # Storage Root URI
     STORAGE_ROOT_URI: str = Field(
         default="file:///tmp/gosmart_dicom_storage",
