@@ -15,6 +15,7 @@ from fhir.resources.R4B.imagingstudy import ImagingStudy
 from fhir.resources.R4B.observation import Observation
 from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.procedure import Procedure
+from fhir.resources.R4B.servicerequest import ServiceRequest
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.config import get_settings
@@ -60,6 +61,7 @@ class EncounterContext(BaseModel):
     imaging_studies: list[dict[str, Any]] = Field(default_factory=list)
     observations: list[dict[str, Any]] = Field(default_factory=list)
     procedures: list[dict[str, Any]] = Field(default_factory=list)
+    serviceRequests: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 
@@ -75,6 +77,7 @@ class EncRelevantResources(BaseModel):
     imaging_studies: list[ImagingStudy] = Field(default_factory=list)
     observations: list[Observation] = Field(default_factory=list)
     procedures: list[Procedure] = Field(default_factory=list)
+    serviceRequests: list[ServiceRequest] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 
@@ -198,6 +201,7 @@ class FHIRBatchFetcher:
             "imaging_studies": self.fetch_resource_bundle("ImagingStudy", {"encounter": enc_id}),
             "observations": self.fetch_resource_bundle("Observation", {"encounter": enc_id}),
             "procedures": self.fetch_resource_bundle("Procedure", {"encounter": enc_id}),
+            "serviceRequests": self.fetch_resource_bundle("ServiceRequest", {"encounter": enc_id}),
         }
 
         if patient_ref:
@@ -216,6 +220,7 @@ class FHIRBatchFetcher:
             "imaging_studies": [],
             "observations": [],
             "procedures": [],
+            "serviceRequests": [],
         }
         errors: list[str] = []
 
@@ -353,6 +358,7 @@ class FhirService:
         imaging_studies = [ImagingStudy.model_validate(z) for z in resources.imaging_studies]
         observations = [Observation.model_validate(z) for z in resources.observations]
         procedures = [Procedure.model_validate(z) for z in resources.procedures]
+        service_requests = [ServiceRequest.model_validate(z) for z in resources.serviceRequests]
 
         return EncRelevantResources(
             encounter=enc,
@@ -362,6 +368,7 @@ class FhirService:
             imaging_studies=imaging_studies,
             observations=observations,
             procedures=procedures,
+            serviceRequests=service_requests,
             errors=resources.errors,
         )
 
