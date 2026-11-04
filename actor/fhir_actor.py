@@ -32,14 +32,21 @@ class FhirActor(pykka.ThreadingActor):
             logger.warning("fhir_actor_unsupported_message_type", msg_type=type(message).__name__)
             return
 
-        patient_id = message.get("patient_id")
-        accession_number = message.get("accession_number")
+        patient_id = message.get("patient_id", "")
+        accession_number = message.get("accession_number", "")
+        study_uid = message.get("study_uid", "")
 
         logger.debug(
             "fhir_actor_message_received",
             patient_id=patient_id,
             accession_number=accession_number,
+            study_uid=study_uid,
         )
+
+        if study_uid:
+            pass
+        else:
+            pass
 
         self.processed_count += 1
         self.last_status = "IDLE"
@@ -68,7 +75,7 @@ def stop_fhir_actor() -> None:
         _fhir_actor_ref = None
 
 
-def notify_fhir(patient_id: str, accession_number: str) -> None:
+def notify_fhir(patient_id: str, accession_number: str = "", study_uid: str = "") -> None:
     """Convenience fire-and-forget helper to send patient_id and accession_number to FhirActor."""
     try:
         actor_ref = get_fhir_actor()
@@ -76,6 +83,7 @@ def notify_fhir(patient_id: str, accession_number: str) -> None:
             {
                 "patient_id": str(patient_id),
                 "accession_number": str(accession_number),
+                "study_uid": str(study_uid),
             }
         )
     except Exception as e:
