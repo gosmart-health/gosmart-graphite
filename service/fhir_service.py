@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
-import inspect
 from typing import Any, Optional, Union
 
 import httpx
@@ -13,8 +11,8 @@ from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.imagingstudy import ImagingStudy
 from fhir.resources.R4B.observation import Observation
-from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.procedure import Procedure
+from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.servicerequest import ServiceRequest
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,31 +20,6 @@ from core.config import get_settings
 from core.logging import get_logger
 
 logger = get_logger("gosmart_gs.fhir_service")
-
-
-class _HybridMethod:
-    """Descriptor allowing a method to be called cleanly on either the class or an instance."""
-
-    def __init__(self, func: Any) -> None:
-        self.func = func
-        functools.update_wrapper(self, func)
-
-    def __get__(self, instance: Any, owner: Optional[type] = None) -> Any:
-        target = instance if instance is not None else owner
-        if inspect.iscoroutinefunction(self.func):
-
-            @functools.wraps(self.func)
-            async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return await self.func(target, *args, **kwargs)
-
-            return async_wrapper
-        else:
-
-            @functools.wraps(self.func)
-            def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-                return self.func(target, *args, **kwargs)
-
-            return sync_wrapper
 
 
 class EncounterContext(BaseModel):
@@ -236,115 +209,75 @@ class FHIRBatchFetcher:
 class FhirService:
     """High-level FHIR domain service for DICOM and clinical encounter workflows."""
 
-    fetcher: FHIRBatchFetcher = FHIRBatchFetcher()
-
     def __init__(self, fetcher: Optional[FHIRBatchFetcher] = None) -> None:
-        if fetcher is not None:
-            self.fetcher = fetcher
+        self.fetcher: FHIRBatchFetcher = fetcher if fetcher is not None else FHIRBatchFetcher()
 
-    def _resolve_fetcher(self) -> FHIRBatchFetcher:
-        return getattr(self, "fetcher", None) or FhirService.fetcher
-
-    @_HybridMethod
-    async def fetch_imaging_study(self_or_cls: Any, study_uid: str) -> Optional[ImagingStudy]:
-        """Fetch an ImagingStudy by DICOM Study Instance UID or FHIR ID."""
+    async def fetch_imaging_studies(self, study_uid: str) -> list[ImagingStudy]:
+        """Fetch all ImagingStudies matching a DICOM Study Instance UID or FHIR ID."""
         if not study_uid:
-            return None
-
-        fetcher = (
-            self_or_cls._resolve_fetcher()
-            if isinstance(self_or_cls, FhirService)
-            else getattr(self_or_cls, "fetcher", FhirService.fetcher)
-        )
+            return []
 
         bare_uid = study_uid.replace("urn:oid:", "").strip()
         search_val = f"{bare_uid},urn:oid:{bare_uid}"
 
-        bundle = await fetcher.fetch_resource_bundle("ImagingStudy", {"identifier": search_val})
+        bundle = await self.fetcher.fetch_resource_bundle("ImagingStudy", {"identifier": search_val})
         if not bundle:
             # Fallback to direct ID search if identifier query returned nothing
-            bundle = await fetcher.fetch_resource_bundle("ImagingStudy", {"_id": bare_uid})
+            bundle = await self.fetcher.fetch_resource_bundle("ImagingStudy", {"_id": bare_uid})
 
-        if not bundle:
-            return None
+        return [ImagingStudy.model_validate(r) for r in bundle]
 
-        return ImagingStudy.model_validate(bundle[0])
+    async def fetch_imaging_study(self, study_uid: str) -> Optional[ImagingStudy]:
+        """Fetch an ImagingStudy by DICOM Study Instance UID or FHIR ID."""
+        studies = await self.fetch_imaging_studies(study_uid)
+        return studies[0] if studies else None
 
-    @_HybridMethod
-    async def fetch_encounter(self_or_cls: Any, encounter_id: str) -> Optional[Encounter]:
+    async def fetch_encounter(self, encounter_id: str) -> Optional[Encounter]:
         """Fetch an Encounter resource by ID."""
         if not encounter_id:
             return None
 
-        fetcher = (
-            self_or_cls._resolve_fetcher()
-            if isinstance(self_or_cls, FhirService)
-            else getattr(self_or_cls, "fetcher", FhirService.fetcher)
-        )
-
         clean_id = encounter_id.strip("/").split("/")[-1]
-        bundle = await fetcher.fetch_resource_bundle("Encounter", {"_id": clean_id})
+        bundle = await self.fetcher.fetch_resource_bundle("Encounter", {"_id": clean_id})
         if not bundle:
             return None
 
         return Encounter.model_validate(bundle[0])
 
-    @_HybridMethod
-    async def fetch_patient(self_or_cls: Any, patient_id_or_ref: str) -> Optional[Patient]:
+    async def fetch_patient(self, patient_id_or_ref: str) -> Optional[Patient]:
         """Fetch a Patient resource by ID or reference string."""
         if not patient_id_or_ref:
             return None
 
-        fetcher = (
-            self_or_cls._resolve_fetcher()
-            if isinstance(self_or_cls, FhirService)
-            else getattr(self_or_cls, "fetcher", FhirService.fetcher)
-        )
-
-        data = await fetcher.fetch_by_reference(patient_id_or_ref)
+        data = await self.fetcher.fetch_by_reference(patient_id_or_ref)
         if not data:
             return None
 
         return Patient.model_validate(data)
 
-    @_HybridMethod
-    async def fetch_enc_diagnostic_reports(self_or_cls: Any, encounter_id: str) -> list[DiagnosticReport]:
+    async def fetch_enc_diagnostic_reports(self, encounter_id: str) -> list[DiagnosticReport]:
         """Fetch all DiagnosticReports associated with an encounter."""
         if not encounter_id:
             return []
 
-        fetcher = (
-            self_or_cls._resolve_fetcher()
-            if isinstance(self_or_cls, FhirService)
-            else getattr(self_or_cls, "fetcher", FhirService.fetcher)
-        )
-
         clean_id = encounter_id.strip("/").split("/")[-1]
-        bundle = await fetcher.fetch_resource_bundle("DiagnosticReport", {"encounter": clean_id})
+        bundle = await self.fetcher.fetch_resource_bundle("DiagnosticReport", {"encounter": clean_id})
         return [DiagnosticReport.model_validate(r) for r in bundle]
 
-    @_HybridMethod
-    async def fetch_enc_diagnostic_report(self_or_cls: Any, encounter_id: str) -> Optional[DiagnosticReport]:
+    async def fetch_enc_diagnostic_report(self, encounter_id: str) -> Optional[DiagnosticReport]:
         """Fetch the primary DiagnosticReport associated with an encounter."""
-        reports = await self_or_cls.fetch_enc_diagnostic_reports(encounter_id)
+        reports = await self.fetch_enc_diagnostic_reports(encounter_id)
         return reports[0] if reports else None
 
-    @_HybridMethod
-    async def fetch_enc_relevant_resources(self_or_cls: Any, enc: Union[Encounter, str]) -> EncRelevantResources:
+    async def fetch_enc_relevant_resources(self, enc: Union[Encounter, str]) -> EncRelevantResources:
         """Fetch all relevant resources for an encounter graph."""
         if isinstance(enc, str):
-            encounter_obj = await self_or_cls.fetch_encounter(enc)
+            encounter_obj = await self.fetch_encounter(enc)
             if encounter_obj is None:
                 raise ValueError(f"Encounter not found for ID: {enc}")
             enc = encounter_obj
 
-        fetcher = (
-            self_or_cls._resolve_fetcher()
-            if isinstance(self_or_cls, FhirService)
-            else getattr(self_or_cls, "fetcher", FhirService.fetcher)
-        )
-
-        resources = await fetcher.fetch_encounter_graph(encounter=enc)
+        resources = await self.fetcher.fetch_encounter_graph(encounter=enc)
 
         patient_obj: Optional[Patient] = None
         if resources.patient:
@@ -372,6 +305,47 @@ class FhirService:
             errors=resources.errors,
         )
 
+    async def fetch_relevant_resources_of_study(
+        self, study_uid: str
+    ) -> EncRelevantResources:
+        """Fetch all relevant clinical resources for an Encounter associated with a DICOM study UID."""
+        if not study_uid:
+            return EncRelevantResources(errors=["failed_to_fetch_imaging_study: empty study_uid"])
 
-fhir_batch_fetcher = FHIRBatchFetcher()
-fhir_service = FhirService()
+        imaging_studies = await self.fetch_imaging_studies(study_uid=study_uid)
+        if not imaging_studies:
+            return EncRelevantResources(errors=[f"failed_to_fetch_imaging_study: {study_uid}"])
+
+        errors: list[str] = []
+        count = len(imaging_studies)
+        if count != 1:
+            errors.append(f"{count} imaging studies, expected 1: {study_uid}")
+
+        imaging: ImagingStudy = imaging_studies[0]
+        enc_id: Optional[str] = None
+        if getattr(imaging, "encounter", None):
+            if getattr(imaging.encounter, "reference", None):
+                enc_id = imaging.encounter.reference.strip("/").split("/")[-1]
+            elif getattr(imaging.encounter, "id", None):
+                enc_id = imaging.encounter.id
+
+        if not enc_id:
+            errors.append(f"failed_to_fetch_encounter ref: {study_uid}")
+            return EncRelevantResources(imaging_studies=imaging_studies, errors=errors)
+
+        encounter = await self.fetch_encounter(encounter_id=enc_id)
+        if not encounter:
+            errors.append(f"failed_to_fetch_encounter: {enc_id}")
+            return EncRelevantResources(imaging_studies=imaging_studies, errors=errors)
+
+        result = await self.fetch_enc_relevant_resources(enc=encounter)
+        if errors:
+            result.errors = errors + result.errors
+
+        # Ensure the fetched imaging studies are present in result.imaging_studies
+        existing_ids = {getattr(s, "id", None) for s in result.imaging_studies}
+        for st in imaging_studies:
+            if getattr(st, "id", None) not in existing_ids:
+                result.imaging_studies.append(st)
+
+        return result
