@@ -89,7 +89,7 @@ def stop_fhir_actor() -> None:
         _fhir_actor_ref = None
 
 
-def notify_fhir(patient_id: str, accession_number: str = "", study_uid: str = "") -> None:
+def notify_fhir(patient_id: str = "", accession_number: str = "", study_uid: str = "") -> None:
     """Convenience fire-and-forget helper to send patient_id and accession_number to FhirActor."""
     try:
         actor_ref = get_fhir_actor()
