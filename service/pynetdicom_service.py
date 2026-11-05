@@ -18,8 +18,10 @@ from pynetdicom import (
     ALL_TRANSFER_SYNTAXES,
     StoragePresentationContexts,
     VerificationPresentationContexts,
-    evt,
+    evt
 )
+from pynetdicom.association import Association
+from pynetdicom.ae import ApplicationEntity
 from pynetdicom.presentation import PresentationContext, build_context
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
@@ -31,6 +33,7 @@ from pynetdicom.sop_class import (
     StudyRootQueryRetrieveInformationModelMove,
 )
 
+from actor import notify_fhir
 from actor.audit_actor import record_audit
 from core.config import Settings, get_settings
 from core.logging import get_logger
@@ -107,7 +110,12 @@ class SCPInstance:
         if self.server is not None and hasattr(self.server, "active_associations"):
             try:
                 return self.server.active_associations
-            except Exception:
+            except Exception as why:
+                logger.warning(
+                    "scp_active_associations_error",
+                    config_id=self.config_id,
+                    error=str(why),
+                )
                 return []
         return []
 
@@ -125,6 +133,7 @@ class SCPInstance:
                     port=self.port,
                     active_associations=len(self.active_associations),
                 )
+                # noinspection unresolved-references
                 self.server.shutdown()
             except Exception as e:
                 logger.warning("scp_server_shutdown_error", config_id=self.config_id, error=str(e))
@@ -169,10 +178,16 @@ def is_local_address(host: str) -> bool:
         local_ips = {addr[4][0] for addr in socket.getaddrinfo(socket.gethostname(), None)}
         local_ips.update({"127.0.0.1", "0.0.0.0", "::1"})
         return host in local_ips
-    except Exception:
+    except Exception as why:
+        logger.error(
+            "is_local_address_error",
+            host=host,
+            error=str(why),
+        )
         return False
 
 
+# noinspection bad-assignment,bad-argument-type
 class PyNetDicomService:
     """Manages DICOM VNA network operations and dynamic multi-SCP instances."""
 
@@ -192,11 +207,11 @@ class PyNetDicomService:
         return None
 
     @property
-    def _ae(self) -> AE:
+    def _ae(self) -> AE | None:
         """Backward-compatibility: return client AE."""
         return self.get_ae()
 
-    def get_ae(self) -> AE:
+    def get_ae(self) -> AE | None:
         """Get or initialize Application Entity configured for client/outbound SCU operations."""
         if self._client_ae is None:
             ae = AE(ae_title=self.settings.DICOM_AE_TITLE)
@@ -244,8 +259,8 @@ class PyNetDicomService:
 
         return self._client_ae
 
+    @staticmethod
     def build_presentation_contexts(
-        self,
         dicom_services: Optional[List[str]] = None,
         transfer_syntaxes: Optional[List[str]] = None,
     ) -> List[PresentationContext]:
@@ -318,7 +333,7 @@ class PyNetDicomService:
         port = int(config.get("port") or getattr(self.settings, "DICOM_SCP_PORT", 11112))
         is_promiscuous = bool(config.get("is_promiscuous", ae_title == "*"))
 
-        # Skip local socket binding for remote hosts (e.g. external SCP configurations)
+        # Skip local socket binding for remote hosts (e.g., external SCP configurations)
         if config.get("is_local") is False or not is_local_address(host):
             logger.info("skip_scp_start_remote_host", config_id=config_id, host=host, port=port)
             return None
@@ -343,7 +358,7 @@ class PyNetDicomService:
             )
 
         # Build negotiated Presentation Contexts strictly honoring configuration
-        contexts = self.build_presentation_contexts(
+        contexts = PyNetDicomService.build_presentation_contexts(
             dicom_services=config.get("dicom_services"),
             transfer_syntaxes=config.get("transfer_syntaxes"),
         )
@@ -357,21 +372,23 @@ class PyNetDicomService:
         ]
 
         # Setup TLS if configured
-        ssl_context = None
+        ssl_context: ssl.SSLContext | None = None
         if config.get("tls_enabled"):
             try:
                 cert_path = config.get("tls_cert_path")
-                key_path = config.get("tls_key_path")
+                key_path: str | None = config.get("tls_key_path")
                 ca_path = config.get("tls_ca_path")
                 ciphers = config.get("tls_ciphers")
 
                 ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
                 if cert_path and key_path:
+                    # noinspection bad-argument-type
                     ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
                 if ca_path:
                     ctx.load_verify_locations(cafile=ca_path)
                     ctx.verify_mode = ssl.CERT_REQUIRED
                 if ciphers:
+                    # noinspection bad-argument-type
                     ctx.set_ciphers(":".join(ciphers))
                 ssl_context = ctx
             except Exception as e:
@@ -448,8 +465,11 @@ class PyNetDicomService:
             return instance
 
     def on_configuration_added(self, config: Dict[str, Any]) -> Optional[SCPInstance]:
-        """Handle Added SCP configuration: Instantiate and launch a new SCP instance."""
-        config_id = config.get("id")
+        """Handle Added SCP configuration: Instantiate and launch a new SCP instance.
+        :type config: Dict[str, Any]
+        """
+        # noinspection bad-assignment
+        config_id: str = config.get("id")
         if not config_id:
             return None
         roles = [r.upper() for r in config.get("roles", [])]
@@ -457,8 +477,9 @@ class PyNetDicomService:
             return None
 
         with self._lock:
-            existing = self._instances.get(config_id)
-        if existing and existing.status == "RUNNING":
+            existing: str | None = self._instances.get(config_id)
+            the_status: str = getattr(existing, "status") if existing else ""
+        if the_status == "RUNNING":
             return self.on_configuration_changed(config_id, config)
 
         return self.start_scp_for_config(config)
@@ -511,6 +532,8 @@ class PyNetDicomService:
 
     def stop_scp_for_config(self, config_id: str, graceful: bool = True) -> Optional[SCPInstance]:
         """Stop an SCP instance for a given configuration ID."""
+        if graceful:
+            logger.warn("Graceful stop is not yet implemented.")
         return self.on_configuration_removed(config_id)
 
     def cleanup_drained_instances(self) -> None:
@@ -546,7 +569,7 @@ class PyNetDicomService:
                 if not existing or existing.status != "RUNNING":
                     self.start_scp_for_config(cfg)
 
-        # Stop instances that are no longer active
+        # Stop instances that are no longer active.
         with self._lock:
             current_ids = list(self._instances.keys())
         for cid in current_ids:
@@ -554,7 +577,7 @@ class PyNetDicomService:
                 self.on_configuration_removed(cid)
 
     def stop_all(self) -> None:
-        """Stop all active and draining SCP instances (e.g. during application shutdown)."""
+        """Stop all active and draining SCP instances (e.g., during application shutdown)."""
         with self._lock:
             all_instances = list(self._instances.values()) + list(self._draining_instances)
             self._instances.clear()
@@ -599,7 +622,7 @@ class PyNetDicomService:
         port: Optional[int] = None,
         block: bool = False,
         ae_title: Optional[str] = None,
-        contexts: Optional[List[PresentationContext]] = None,
+        # contexts: Optional[List[PresentationContext]] = None,
     ) -> Any:
         """Backward-compatible helper to start an ad-hoc or default SCP server."""
         bind_host = host or getattr(self.settings, "DICOM_SCP_HOST", "0.0.0.0")
@@ -634,14 +657,14 @@ class PyNetDicomService:
         """Send C-ECHO verification request to a remote DICOM SCP."""
         import logging as py_logging
 
-        ae = self.get_ae()
+        ae: ApplicationEntity | None = self.get_ae()
         if calling_aet:
             ae.ae_title = calling_aet
         else:
             ae.ae_title = self.settings.DICOM_AE_TITLE
         target_aet = called_aet or "ANY_SCP"
 
-        # Suppress noisy transport connection errors if probing silently (e.g. CI/CD test skip checks)
+        # Suppress noisy transport connection errors if probing silently (e.g., CI/CD test skip checks)
         pydicom_loggers = [py_logging.getLogger("pynetdicom"), py_logging.getLogger("pynetdicom.transport")]
         prev_levels = [pylogger.level for pylogger in pydicom_loggers]
         if silent:
@@ -649,8 +672,8 @@ class PyNetDicomService:
                 pylogger.setLevel(py_logging.CRITICAL)
 
         try:
-            assoc = ae.associate(host, port, ae_title=target_aet)
-            if assoc.is_established:
+            assoc: Association = ae.associate(host, port, ae_title=target_aet) if ae else None
+            if assoc and assoc.is_established:
                 status = assoc.send_c_echo()
                 assoc.release()
                 is_success = bool(status and status.Status == 0x0000)
@@ -724,6 +747,7 @@ class PyNetDicomService:
         storage_uri = f"{storage_root}/{sop_uid}.dcm"
 
         assoc = getattr(event, "assoc", None)
+
         requestor = getattr(assoc, "requestor", None)
         client_ip = getattr(requestor, "address", "unknown")
         calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
@@ -849,9 +873,30 @@ class PyNetDicomService:
             test_id=getattr(hierarchy, "test_id", None),
         )
 
+        # Capture a unique Study UIDs in this association then
+        # if it is new then we will try to fetch related FHIR resources
+        # for this Imaging Study
+
+        if assoc is not None:
+            seen = getattr(assoc, "_seen_study_uids", None)
+
+            if seen is None:
+                seen = set()
+                setattr(assoc, "_seen_study_uids", seen)
+
+            study_uid = hierarchy.study.study_instance_uid
+            if study_uid and study_uid not in seen:
+                seen.add(study_uid)
+                notify_fhir(
+                    patient_id=hierarchy.patient.patient_id,
+                    accession_number=hierarchy.study.accession_number,
+                    study_uid=study_uid,
+                )
+
         return 0x0000  # SUCCESS
 
-    def handle_c_echo(self, event: Any) -> int:
+    @staticmethod
+    def handle_c_echo(event: Any) -> int:
         """Handle incoming C-ECHO verification ping."""
         requestor = getattr(getattr(event, "assoc", None), "requestor", None)
         calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
@@ -867,7 +912,18 @@ class PyNetDicomService:
         )
         return 0x0000
 
-    def _resolve_caller_accessible_groups(self, calling_aet: str) -> Optional[List[str]]:
+    @staticmethod
+    def _extract_query_identifiers(identifier) -> Dict[str, Optional[str]]:
+        return {
+            "level": getattr(identifier, "QueryRetrieveLevel", "STUDY"),
+            "patient_id": getattr(identifier, "PatientID", None),
+            "study_instance_uid": getattr(identifier, "StudyInstanceUID", None),
+            "series_instance_uid": getattr(identifier, "SeriesInstanceUID", None),
+            "sop_instance_uid": getattr(identifier, "SOPInstanceUID", None),
+        }
+
+    @staticmethod
+    def _resolve_caller_accessible_groups(calling_aet: str) -> Optional[List[str]]:
         """Resolve effective accessible group IDs for a calling AE Title.
 
         Returns None for administrative/promiscuous AE titles (unrestricted scope),
@@ -914,7 +970,7 @@ class PyNetDicomService:
         identifier = getattr(event, "identifier", None)
         if identifier is None:
             logger.warning("c_find_no_identifier", calling_aet=calling_aet)
-            yield (0xC000, None)
+            yield 0xC000, None
             return
 
         level = getattr(identifier, "QueryRetrieveLevel", "STUDY")
@@ -926,15 +982,15 @@ class PyNetDicomService:
         try:
             if norm_level == "PATIENT":
                 pid = _clean_cfind_param(getattr(identifier, "PatientID", None))
-                pname = _clean_cfind_param(getattr(identifier, "PatientName", None))
+                patient_name = _clean_cfind_param(getattr(identifier, "PatientName", None))
                 matches = graph_service.find_patient_records_sync(
                     patient_id=pid,
-                    patient_name=pname,
+                    patient_name=patient_name,
                     accessible_group_ids=accessible_group_ids,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
-                        yield (0xFE00, None)
+                        yield 0xFE00, None
                         return
                     ds = Dataset()
                     ds.QueryRetrieveLevel = "PATIENT"
@@ -942,17 +998,17 @@ class PyNetDicomService:
                     ds.PatientName = rec.get("patient_name") or ""
                     ds.PatientBirthDate = rec.get("patient_birth_date") or ""
                     ds.PatientSex = rec.get("patient_sex") or ""
-                    yield (0xFF00, ds)
+                    yield 0xFF00, ds
 
             elif norm_level == "STUDY":
                 pid = _clean_cfind_param(getattr(identifier, "PatientID", None))
-                pname = _clean_cfind_param(getattr(identifier, "PatientName", None))
+                patient_name = _clean_cfind_param(getattr(identifier, "PatientName", None))
                 suid = _clean_cfind_param(getattr(identifier, "StudyInstanceUID", None))
                 sdate = _clean_cfind_param(getattr(identifier, "StudyDate", None))
                 acc = _clean_cfind_param(getattr(identifier, "AccessionNumber", None))
                 matches = graph_service.search_studies_qido_sync(
                     patient_id=pid,
-                    patient_name=pname,
+                    patient_name=patient_name,
                     study_uid=suid,
                     study_date=sdate,
                     accession_number=acc,
@@ -961,7 +1017,7 @@ class PyNetDicomService:
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
-                        yield (0xFE00, None)
+                        yield 0xFE00, None
                         return
                     ds = Dataset()
                     ds.QueryRetrieveLevel = "STUDY"
@@ -980,22 +1036,22 @@ class PyNetDicomService:
                         ds.ModalitiesInStudy = "\\".join(mods)
                     ds.NumberOfStudyRelatedSeries = int(rec.get("num_series", 0))
                     ds.NumberOfStudyRelatedInstances = int(rec.get("num_instances", 0))
-                    yield (0xFF00, ds)
+                    yield 0xFF00, ds
 
             elif norm_level == "SERIES":
                 suid = _clean_cfind_param(getattr(identifier, "StudyInstanceUID", None))
-                seuid = _clean_cfind_param(getattr(identifier, "SeriesInstanceUID", None))
+                series_uid = _clean_cfind_param(getattr(identifier, "SeriesInstanceUID", None))
                 mod = _clean_cfind_param(getattr(identifier, "Modality", None))
                 matches = graph_service.search_series_qido_sync(
                     study_uid=suid,
-                    series_uid=seuid,
+                    series_uid=series_uid,
                     modality=mod,
                     include_tests=True,
                     accessible_group_ids=accessible_group_ids,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
-                        yield (0xFE00, None)
+                        yield 0xFE00, None
                         return
                     ds = Dataset()
                     ds.QueryRetrieveLevel = "SERIES"
@@ -1006,22 +1062,22 @@ class PyNetDicomService:
                     ds.SeriesDescription = rec.get("series_description") or ""
                     ds.BodyPartExamined = rec.get("body_part_examined") or ""
                     ds.NumberOfSeriesRelatedInstances = int(rec.get("num_instances", 0))
-                    yield (0xFF00, ds)
+                    yield 0xFF00, ds
 
             elif norm_level in ("IMAGE", "INSTANCE"):
                 suid = _clean_cfind_param(getattr(identifier, "StudyInstanceUID", None))
-                seuid = _clean_cfind_param(getattr(identifier, "SeriesInstanceUID", None))
-                sopuid = _clean_cfind_param(getattr(identifier, "SOPInstanceUID", None))
+                series_uid = _clean_cfind_param(getattr(identifier, "SeriesInstanceUID", None))
+                sop_uid = _clean_cfind_param(getattr(identifier, "SOPInstanceUID", None))
                 matches = graph_service.search_instances_qido_sync(
                     study_uid=suid,
-                    series_uid=seuid,
-                    sop_uid=sopuid,
+                    series_uid=series_uid,
+                    sop_uid=sop_uid,
                     include_tests=True,
                     accessible_group_ids=accessible_group_ids,
                 )
                 for rec in matches:
                     if getattr(event, "is_cancelled", False):
-                        yield (0xFE00, None)
+                        yield 0xFE00, None
                         return
                     ds = Dataset()
                     ds.QueryRetrieveLevel = "IMAGE"
@@ -1030,7 +1086,7 @@ class PyNetDicomService:
                     ds.SOPInstanceUID = rec.get("sop_instance_uid") or ""
                     ds.SOPClassUID = rec.get("sop_class_uid") or ""
                     ds.InstanceNumber = int(rec.get("instance_number") or 1)
-                    yield (0xFF00, ds)
+                    yield 0xFF00, ds
 
             else:
                 logger.warning("c_find_unsupported_level", level=norm_level)
@@ -1044,7 +1100,7 @@ class PyNetDicomService:
                     severity="WARNING",
                     result="C-FIND failed with status 0xA900",
                 )
-                yield (0xA900, None)  # Identifier does not match SOP Class
+                yield 0xA900, None  # Identifier does not match SOP Class
                 return
 
         except Exception as e:
@@ -1059,7 +1115,7 @@ class PyNetDicomService:
                 severity="ERROR",
                 result="C-FIND execution failed with status 0xC000",
             )
-            yield (0xC000, None)
+            yield 0xC000, None
             return
 
         record_audit(
@@ -1073,9 +1129,10 @@ class PyNetDicomService:
             result=f"C-FIND processed matching records at {norm_level} level",
             details={"level": norm_level},
         )
-        yield (0x0000, None)  # Success
+        yield 0x0000, None  # Success
 
-    def build_outbound_move_contexts(self, matching_instances: List[Dict[str, Any]]) -> List[PresentationContext]:
+    @staticmethod
+    def build_outbound_move_contexts(matching_instances: List[Dict[str, Any]]) -> List[PresentationContext]:
         """Build optimized presentation contexts for outbound C-MOVE C-STORE sub-operations.
 
         Proposes dedicated presentation contexts for each matching instance's native transfer
@@ -1086,7 +1143,7 @@ class PyNetDicomService:
         seen = set()
 
         for inst in matching_instances:
-            sop_class = inst.get("sop_class_uid")
+            sop_class: str = inst.get("sop_class_uid", "")
             ts_uid = inst.get("transfer_syntax_uid")
             if not sop_class:
                 continue
@@ -1097,8 +1154,8 @@ class PyNetDicomService:
                     try:
                         ds = media_service.read_dicom_sync(storage_uri)
                         ts_uid = getattr(getattr(ds, "file_meta", None), "TransferSyntaxUID", None)
-                    except Exception:
-                        pass
+                    except Exception as why:
+                        logger.error(f"Failed to read DICOM file from storage URI {storage_uri}: {why}")
 
             if sop_class and ts_uid:
                 key = (str(sop_class), str(ts_uid))
@@ -1125,14 +1182,14 @@ class PyNetDicomService:
 
         Queries matching instances and orchestrates secondary C-STORE sub-operations to destination AE.
         """
-        dest_aet = getattr(event, "move_destination", None)
+        dest_aet: str = getattr(event, "move_destination", "")
         requestor = getattr(getattr(event, "assoc", None), "requestor", None)
         calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
         identifier = getattr(event, "identifier", None)
 
         if not dest_aet or identifier is None:
             logger.warning("c_move_missing_parameters", dest_aet=dest_aet)
-            yield (None, None)
+            yield None, None
             return
 
         # HAZ-009 Loop Protection: Destination cannot be local SCP AE title
@@ -1140,7 +1197,7 @@ class PyNetDicomService:
         local_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS"))
         if dest_aet.strip() == local_aet.strip():
             logger.warning("c_move_loop_detected", dest_aet=dest_aet, local_aet=local_aet)
-            yield (None, None)
+            yield None, None
             return
 
         # Resolve destination AE in Neo4j
@@ -1153,7 +1210,7 @@ class PyNetDicomService:
                 dest_port = 11113
             else:
                 logger.warning("c_move_destination_unknown", dest_aet=dest_aet)
-                yield (None, None)  # Signals 0xA801 Move Destination Unknown
+                yield None, None  # Signals 0xA801 Move Destination Unknown
                 return
         else:
             dest_host = dest_info["host"]
@@ -1166,21 +1223,15 @@ class PyNetDicomService:
                 logger.info("c_move_reroute_to_remote_requestor", dest_aet=dest_aet, dest_host=requestor_address)
                 dest_host = requestor_address
 
-        level = getattr(identifier, "QueryRetrieveLevel", "STUDY")
-        norm_level = str(level).upper()
-        pid = getattr(identifier, "PatientID", None)
-        suid = getattr(identifier, "StudyInstanceUID", None)
-        seuid = getattr(identifier, "SeriesInstanceUID", None)
-        sopuid = getattr(identifier, "SOPInstanceUID", None)
-
+        query = self._extract_query_identifiers(identifier)
         accessible_group_ids = self._resolve_caller_accessible_groups(calling_aet)
 
         matching_instances = graph_service.find_instances_for_retrieve_sync(
-            level=norm_level,
-            patient_id=pid,
-            study_uid=suid,
-            series_uid=seuid,
-            sop_uid=sopuid,
+            level=query["level"],
+            patient_id=query["patient_id"],
+            study_uid=query["study_instance_uid"],
+            series_uid=query["series_instance_uid"],
+            sop_uid=query["sop_instance_uid"],
             include_tests=True,
             accessible_group_ids=accessible_group_ids,
         )
@@ -1204,28 +1255,28 @@ class PyNetDicomService:
             status_message=f"C-MOVE initiated with {len(matching_instances)} sub-operations",
             severity="INFO",
             result=f"Streaming {len(matching_instances)} instances to {dest_aet}",
-            details={"level": norm_level, "num_instances": len(matching_instances)},
+            details={"level": query["level"], "num_instances": len(matching_instances)},
         )
 
         # 1. First yield: Destination (host, port, {"contexts": outbound_contexts})
         outbound_contexts = self.build_outbound_move_contexts(matching_instances)
-        yield (dest_host, dest_port, {"contexts": outbound_contexts})
+        yield dest_host, dest_port, {"contexts": outbound_contexts}
 
         # 2. Second yield: Number of C-STORE sub-operations
-        num_subops = len(matching_instances)
-        yield num_subops
+        num_sub_operations = len(matching_instances)
+        yield num_sub_operations
 
         # 3. Stream each instance to destination Storage SCP
         for inst in matching_instances:
             if getattr(event, "is_cancelled", False):
-                yield (0xFE00, None)
+                yield 0xFE00, None
                 return
             storage_uri = inst.get("storage_uri")
             if not storage_uri:
                 continue
             try:
                 ds = media_service.read_dicom_sync(storage_uri)
-                yield (0xFF00, ds)
+                yield 0xFF00, ds
             except Exception as read_err:
                 logger.error("c_move_instance_read_failed", storage_uri=storage_uri, error=str(read_err))
 
@@ -1241,21 +1292,15 @@ class PyNetDicomService:
             yield 0
             return
 
-        level = getattr(identifier, "QueryRetrieveLevel", "STUDY")
-        norm_level = str(level).upper()
-        pid = getattr(identifier, "PatientID", None)
-        suid = getattr(identifier, "StudyInstanceUID", None)
-        seuid = getattr(identifier, "SeriesInstanceUID", None)
-        sopuid = getattr(identifier, "SOPInstanceUID", None)
-
+        query = self._extract_query_identifiers(identifier)
         accessible_group_ids = self._resolve_caller_accessible_groups(calling_aet)
 
         matching_instances = graph_service.find_instances_for_retrieve_sync(
-            level=norm_level,
-            patient_id=pid,
-            study_uid=suid,
-            series_uid=seuid,
-            sop_uid=sopuid,
+            level=query["level"],
+            patient_id=query["patient_id"],
+            study_uid=query["study_instance_uid"],
+            series_uid=query["series_instance_uid"],
+            sop_uid=query["sop_instance_uid"],
             include_tests=True,
             accessible_group_ids=accessible_group_ids,
         )
@@ -1263,7 +1308,7 @@ class PyNetDicomService:
         logger.info(
             "c_get_started",
             calling_aet=calling_aet,
-            level=norm_level,
+            level=query["level"],
             matches_count=len(matching_instances),
         )
 
@@ -1275,24 +1320,24 @@ class PyNetDicomService:
             status_message=f"C-GET initiated with {len(matching_instances)} sub-operations",
             severity="INFO",
             result=f"Streaming {len(matching_instances)} instances over current association",
-            details={"level": norm_level, "num_instances": len(matching_instances)},
+            details={"level": query["level"], "num_instances": len(matching_instances)},
         )
 
         # 1. First yield: Total number of sub-operations
-        num_subops = len(matching_instances)
-        yield num_subops
+        num_sub_operations = len(matching_instances)
+        yield num_sub_operations
 
         # 2. Stream instances across current association
         for inst in matching_instances:
             if getattr(event, "is_cancelled", False):
-                yield (0xFE00, None)
+                yield 0xFE00, None
                 return
             storage_uri = inst.get("storage_uri")
             if not storage_uri:
                 continue
             try:
                 ds = media_service.read_dicom_sync(storage_uri)
-                yield (0xFF00, ds)
+                yield 0xFF00, ds
             except Exception as read_err:
                 logger.error("c_get_instance_read_failed", storage_uri=storage_uri, error=str(read_err))
 
