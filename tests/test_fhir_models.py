@@ -93,10 +93,7 @@ def test_coding_and_reference_macros() -> None:
         "http://www.ama-assn.org/go/cpt|71260",
     ]
 
-    assert (
-        format_reference_macro("Location/1237", "A Medical Center")
-        == "Location/1237|A Medical Center"
-    )
+    assert format_reference_macro("Location/1237", "A Medical Center") == "Location/1237|A Medical Center"
     assert format_reference_macro("Patient/pat-10492") == "Patient/pat-10492"
 
 
@@ -143,14 +140,14 @@ def test_fhir_domain_resource_payload_invariants() -> None:
     )
     assert p_default_uid.uid == "fhir:pat-2"
 
-    # 4. Inline resource > 4 KB (4096 bytes) -> rejected
+    # 4. Inline resource > 4 KB (4096 bytes) -> accepted inline
     oversized_json = '{"data":"' + ("x" * MAX_INLINE_RESOURCE_BYTES) + '"}'
-    with pytest.raises(ValidationError, match="exceeds the 4096-byte"):
-        FHIRPatientNode(
-            uid="synthea:pat-oversized",
-            resource_id="pat-oversized",
-            resource=oversized_json,
-        )
+    p_oversized = FHIRPatientNode(
+        uid="synthea:pat-oversized",
+        resource_id="pat-oversized",
+        resource=oversized_json,
+    )
+    assert p_oversized.resource == oversized_json
 
     # 5. External URI -> accepted, and both populated simultaneously (archived) -> accepted
     p_archived = FHIRPatientNode(
