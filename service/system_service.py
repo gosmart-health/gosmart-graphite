@@ -794,7 +794,7 @@ class SystemService:
             from service.pynetdicom_service import pynetdicom_service
 
             for inst in list(pynetdicom_service._instances.values()):
-                if _normalize_test_id(inst.config.get("test_id")) == clean_test_id:
+                if _normalize_test_id(inst.all_configs.get("test_id")) == clean_test_id:
                     pynetdicom_service.on_configuration_removed(inst.config_id)
         except Exception:
             pass
@@ -831,7 +831,7 @@ class SystemService:
             from service.pynetdicom_service import pynetdicom_service
 
             for inst in list(pynetdicom_service._instances.values()):
-                inst_test_id = _normalize_test_id(inst.config.get("test_id"))
+                inst_test_id = _normalize_test_id(inst.all_configs.get("test_id"))
                 if inst_test_id and (clean_test_id is None or inst_test_id == clean_test_id):
                     pynetdicom_service.on_configuration_removed(inst.config_id)
         except Exception as e:
