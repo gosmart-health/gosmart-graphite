@@ -1,8 +1,10 @@
+import asyncio
 from typing import Any, Dict, Optional
 
 import pykka
 
 from core.logging import get_logger
+from service import FhirService
 
 logger = get_logger("gosmart_gs.fhir_actor")
 
@@ -19,12 +21,19 @@ class FhirActor(pykka.ThreadingActor):
         super().__init__()
         self.processed_count: int = 0
         self.last_status: str = "INITIALIZED"
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
 
     def on_start(self) -> None:
         logger.info("fhir_actor_started", actor_urn=self.actor_ref.actor_urn)
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+
 
     def on_stop(self) -> None:
         logger.info("fhir_actor_stopped", actor_urn=self.actor_ref.actor_urn)
+        if self._loop and not self._loop.is_closed():
+            self._loop.close()
+
 
     def on_receive(self, message: Any) -> None:
         """Handle incoming fire-and-forget message containing patient_id and accession_number."""
@@ -43,10 +52,15 @@ class FhirActor(pykka.ThreadingActor):
             study_uid=study_uid,
         )
 
-        if study_uid:
-            pass
-        else:
-            pass
+        if study_uid and self._loop:
+            fhir = FhirService()
+            resources = self._loop.run_until_complete(fhir.fetch_relevant_resources_of_study(study_uid))
+            if resources:
+                # Pass this on to Graph registration
+                # self._loop.run_until_complete(self.register_graph(resources))
+                logger.info(f"Got the FHIR resources for Study: {study_uid}")
+            else:
+                logger.info(f"Did not get the FHIR resources for Study: {study_uid}")
 
         self.processed_count += 1
         self.last_status = "IDLE"
