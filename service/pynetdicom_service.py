@@ -33,7 +33,7 @@ from pynetdicom.sop_class import (
     StudyRootQueryRetrieveInformationModelMove,
 )
 
-from actor import notify_fhir
+from actor.fhir_actor import notify_fhir
 from actor.audit_actor import record_audit
 from core.config import Settings, get_settings
 from core.logging import get_logger
