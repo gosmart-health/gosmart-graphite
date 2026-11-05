@@ -12,7 +12,6 @@ from service.fhir_service import (
     EncRelevantResources,
     FHIRBatchFetcher,
     FhirService,
-    fhir_service,
 )
 
 
@@ -479,6 +478,126 @@ async def test_fhir_service_fetch_enc_relevant_resources_by_str_id():
             await svc.fetch_enc_relevant_resources("missing-enc")
 
 
+@pytest.mark.anyio
+async def test_fhir_service_fetch_imaging_studies_mocked():
+    """Verify fetch_imaging_studies returns all matched imaging studies."""
+    raw_study1 = {
+        "resourceType": "ImagingStudy",
+        "id": "study-1",
+        "status": "available",
+        "subject": {"reference": "Patient/p-1"},
+    }
+    raw_study2 = {
+        "resourceType": "ImagingStudy",
+        "id": "study-2",
+        "status": "available",
+        "subject": {"reference": "Patient/p-1"},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        if "identifier" in params and "1.2.3.4" in params["identifier"]:
+            return httpx.Response(
+                200,
+                json={
+                    "resourceType": "Bundle",
+                    "entry": [{"resource": raw_study1}, {"resource": raw_study2}],
+                },
+            )
+        return httpx.Response(200, json={"resourceType": "Bundle", "entry": []})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        fetcher = FHIRBatchFetcher(base_url="http://mock-fhir/fhir/r4", client=client)
+        svc = FhirService(fetcher=fetcher)
+
+        studies = await svc.fetch_imaging_studies("1.2.3.4")
+        assert len(studies) == 2
+        assert studies[0].id == "study-1"
+        assert studies[1].id == "study-2"
+
+        # fetch_imaging_study returns first
+        study = await svc.fetch_imaging_study("1.2.3.4")
+        assert study is not None
+        assert study.id == "study-1"
+
+        # Empty UID returns empty list
+        assert await svc.fetch_imaging_studies("") == []
+
+
+@pytest.mark.anyio
+async def test_fetch_relevant_resources_of_study_mocked():
+    """Verify fetch_relevant_resources_of_study error paths and complete graph resolution."""
+    raw_study = {
+        "resourceType": "ImagingStudy",
+        "id": "study-100",
+        "status": "available",
+        "subject": {"reference": "Patient/pat-100"},
+        "encounter": {"reference": "Encounter/enc-100"},
+    }
+    raw_enc = {
+        "resourceType": "Encounter",
+        "id": "enc-100",
+        "status": "finished",
+        "class": {
+            "system": "http://terminology.hl7.org/CodeSystem/v3-ActCode",
+            "code": "AMB",
+        },
+        "subject": {"reference": "Patient/pat-100"},
+    }
+    raw_pat = {"resourceType": "Patient", "id": "pat-100"}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = request.url.params
+        if "/ImagingStudy" in path and "1.2.3.99" in params.get("identifier", ""):
+            return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": raw_study}]})
+        elif "/ImagingStudy" in path and "no-enc" in params.get("identifier", ""):
+            no_enc_study = dict(raw_study)
+            no_enc_study.pop("encounter", None)
+            return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": no_enc_study}]})
+        elif "/ImagingStudy" in path and "missing-enc" in params.get("identifier", ""):
+            miss_enc_study = dict(raw_study)
+            miss_enc_study["encounter"] = {"reference": "Encounter/nonexistent"}
+            return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": miss_enc_study}]})
+        elif "/Encounter" in path and params.get("_id") == "enc-100":
+            return httpx.Response(200, json={"resourceType": "Bundle", "entry": [{"resource": raw_enc}]})
+        elif "/Patient/pat-100" in path:
+            return httpx.Response(200, json=raw_pat)
+        return httpx.Response(200, json={"resourceType": "Bundle", "entry": []})
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        fetcher = FHIRBatchFetcher(base_url="http://mock-fhir/fhir/r4", client=client)
+        svc = FhirService(fetcher=fetcher)
+
+        # 1. Empty study_uid
+        empty_res = await svc.fetch_relevant_resources_of_study("")
+        assert "empty study_uid" in empty_res.errors[0]
+
+        # 2. Study not found
+        not_found_res = await svc.fetch_relevant_resources_of_study("not-found")
+        assert "failed_to_fetch_imaging_study" in not_found_res.errors[0]
+
+        # 3. Study found but missing encounter reference
+        no_enc_res = await svc.fetch_relevant_resources_of_study("no-enc")
+        assert any("failed_to_fetch_encounter ref" in e for e in no_enc_res.errors)
+
+        # 4. Encounter reference present but encounter resource missing
+        miss_enc_res = await svc.fetch_relevant_resources_of_study("missing-enc")
+        assert any("failed_to_fetch_encounter: nonexistent" in e for e in miss_enc_res.errors)
+
+        # 5. Full successful resolution
+        full_res = await svc.fetch_relevant_resources_of_study("1.2.3.99")
+        assert full_res.encounter is not None
+        assert full_res.encounter.id == "enc-100"
+        assert full_res.patient is not None
+        assert full_res.patient.id == "pat-100"
+        assert len(full_res.imaging_studies) >= 1
+        assert full_res.imaging_studies[0].id == "study-100"
+        assert full_res.errors == []
+
+
 # =====================================================================
 # Live Integration Tests (against running FHIR proxy)
 # =====================================================================
@@ -488,7 +607,8 @@ async def test_fhir_service_fetch_enc_relevant_resources_by_str_id():
 @pytest.mark.anyio
 async def test_live_fetch_encounter():
     """Fetch live encounter 3033 from HAPI FHIR proxy and validate fields."""
-    enc = await FhirService.fetch_encounter("3033")
+    svc = FhirService()
+    enc = await svc.fetch_encounter("3033")
     assert enc is not None
     assert enc.id == "3033"
     assert enc.status == "finished"
@@ -500,7 +620,8 @@ async def test_live_fetch_encounter():
 @pytest.mark.anyio
 async def test_live_fetch_patient():
     """Fetch live Patient 2977 from HAPI FHIR proxy."""
-    patient = await FhirService.fetch_patient("Patient/2977")
+    svc = FhirService()
+    patient = await svc.fetch_patient("Patient/2977")
     assert patient is not None
     assert patient.id == "2977"
 
@@ -509,16 +630,17 @@ async def test_live_fetch_patient():
 @pytest.mark.anyio
 async def test_live_fetch_imaging_study_by_uid():
     """Fetch live ImagingStudy using DICOM Study Instance UID and urn:oid prefix."""
+    svc = FhirService()
     study_uid = "1.2.840.99999999.89216092.1553055938354"
 
     # 1. Bare UID
-    study = await FhirService.fetch_imaging_study(study_uid)
+    study = await svc.fetch_imaging_study(study_uid)
     assert study is not None
     assert study.id == "3051"
     assert study.status == "available"
 
     # 2. With urn:oid: prefix
-    study_urn = await FhirService.fetch_imaging_study(f"urn:oid:{study_uid}")
+    study_urn = await svc.fetch_imaging_study(f"urn:oid:{study_uid}")
     assert study_urn is not None
     assert study_urn.id == "3051"
 
@@ -527,7 +649,8 @@ async def test_live_fetch_imaging_study_by_uid():
 @pytest.mark.anyio
 async def test_live_fetch_diagnostic_report():
     """Fetch live DiagnosticReport for encounter 3033."""
-    report = await FhirService.fetch_enc_diagnostic_report("3033")
+    svc = FhirService()
+    report = await svc.fetch_enc_diagnostic_report("3033")
     assert report is not None
     assert report.id == "3052"
     assert report.status == "final"
@@ -539,7 +662,8 @@ async def test_live_fetch_diagnostic_report():
 @pytest.mark.anyio
 async def test_live_fetch_enc_relevant_resources_3033():
     """Fetch entire encounter 3033 resource graph concurrently from proxy."""
-    resources = await FhirService.fetch_enc_relevant_resources("3033")
+    svc = FhirService()
+    resources = await svc.fetch_enc_relevant_resources("3033")
 
     assert resources.encounter is not None
     assert resources.encounter.id == "3033"
@@ -560,7 +684,8 @@ async def test_live_fetch_enc_relevant_resources_3033():
 @pytest.mark.anyio
 async def test_live_fetch_enc_relevant_resources_12144():
     """Fetch encounter 12144 with observations, conditions, and reports."""
-    resources = await fhir_service.fetch_enc_relevant_resources("12144")
+    svc = FhirService()
+    resources = await svc.fetch_enc_relevant_resources("12144")
 
     assert resources.encounter is not None
     assert resources.encounter.id == "12144"
