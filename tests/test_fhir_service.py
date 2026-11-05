@@ -1,18 +1,39 @@
-"""Unit and integration tests for FHIR service and batch fetcher."""
+"""Unit and integration tests for FHIR service, batch fetcher, and Neo4j graph upsert."""
+
+import os
+from typing import Optional
 
 import httpx
 import pytest
 from fhir.resources.R4B.condition import Condition
+from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.encounter import Encounter
+from fhir.resources.R4B.imagingstudy import ImagingStudy
+from fhir.resources.R4B.observation import Observation
 from fhir.resources.R4B.patient import Patient
+from fhir.resources.R4B.procedure import Procedure
+from fhir.resources.R4B.servicerequest import ServiceRequest
 
 from core.config import get_settings
+from db.neo4j import neo4j_client
+from model.dicom import DicomHierarchy, InstanceModel, PatientModel, SeriesModel, StudyModel
 from service.fhir_service import (
     EncounterContext,
     EncRelevantResources,
     FHIRBatchFetcher,
     FhirService,
 )
+from service.graph_service import graph_service
+
+# Set to False (or export GOSMART_DISABLE_FHIR_CLEANUP=1) to temporarily disable post-test
+# cleanup so that upserted FHIR nodes and relationships can be inspected in Neo4j.
+ENABLE_FHIR_TEST_CLEANUP: bool = os.getenv("GOSMART_DISABLE_FHIR_CLEANUP", "0").strip().lower() not in (
+    "1",
+    "true",
+    "yes",
+)
+
+LIVE_TEST_STUDY_UID = "1.2.840.99999999.40196652.790735190745"
 
 
 def _is_fhir_proxy_live() -> bool:
@@ -30,6 +51,27 @@ def _is_fhir_proxy_live() -> bool:
 
 
 FHIR_PROXY_LIVE = _is_fhir_proxy_live()
+
+
+async def cleanup_fhir_test_graph(
+    svc: FhirService,
+    test_id: Optional[str] = None,
+    node_ids: Optional[list[str]] = None,
+    relationship_ids: Optional[list[str]] = None,
+    enabled: bool = ENABLE_FHIR_TEST_CLEANUP,
+) -> dict[str, int]:
+    """Separate disposal helper to clean up FHIR nodes and relationships created by a test.
+
+    Can be temporarily disabled by setting ``ENABLE_FHIR_TEST_CLEANUP = False`` or
+    ``GOSMART_DISABLE_FHIR_CLEANUP=1`` to inspect the graph in Neo4j after test runs.
+    """
+    if not enabled:
+        return {"deleted_nodes": 0, "deleted_relationships": 0}
+    return await svc.cleanup_upserted_resources(
+        test_id=test_id,
+        node_ids=node_ids,
+        relationship_ids=relationship_ids,
+    )
 
 
 # =====================================================================
@@ -94,6 +136,150 @@ def test_enc_relevant_resources_model():
     assert resources.imaging_studies == []
     assert resources.observations == []
     assert resources.procedures == []
+
+
+def test_convert_relevant_resources_and_relations():
+    """Verify conversion of all 8 FHIR resource types into graph nodes and intra-FHIR relationships."""
+    pat = Patient.model_validate(
+        {
+            "resourceType": "Patient",
+            "id": "pat-10",
+            "active": True,
+            "gender": "female",
+            "birthDate": "1980-05-15",
+            "identifier": [{"system": "http://hospital.example.org/mrn", "value": "MRN-10"}],
+            "name": [{"prefix": ["Ms."], "given": ["Jane"], "family": "Doe"}],
+        }
+    )
+    enc = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-10",
+            "status": "finished",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+            "subject": {"reference": "Patient/pat-10"},
+        }
+    )
+    cond = Condition.model_validate(
+        {
+            "resourceType": "Condition",
+            "id": "cond-10",
+            "clinicalStatus": {
+                "coding": [{"system": "http://terminology.hl7.org/CodeSystem/condition-clinical", "code": "active"}]
+            },
+            "code": {"coding": [{"system": "http://snomed.info/sct", "code": "399261000", "display": "History"}]},
+            "subject": {"reference": "Patient/pat-10"},
+            "encounter": {"reference": "Encounter/enc-10"},
+        }
+    )
+    sr = ServiceRequest.model_validate(
+        {
+            "resourceType": "ServiceRequest",
+            "id": "sr-10",
+            "status": "active",
+            "intent": "order",
+            "identifier": [{"system": "http://hospital.example.org/acc", "value": "ACC-10"}],
+            "code": {"coding": [{"system": "http://loinc.org", "code": "24627-2"}], "text": "CT Chest"},
+            "subject": {"reference": "Patient/pat-10"},
+            "encounter": {"reference": "Encounter/enc-10"},
+        }
+    )
+    img = ImagingStudy.model_validate(
+        {
+            "resourceType": "ImagingStudy",
+            "id": "is-10",
+            "status": "available",
+            "identifier": [{"system": "urn:ietf:rfc:3986", "value": "urn:oid:1.2.840.10008.10"}],
+            "subject": {"reference": "Patient/pat-10"},
+            "encounter": {"reference": "Encounter/enc-10"},
+            "basedOn": [{"reference": "ServiceRequest/sr-10"}],
+            "series": [
+                {
+                    "uid": "1.2.840.10008.10.1",
+                    "modality": {"system": "http://dicom.nema.org/resources/ontology/DCM", "code": "CR"},
+                    "instance": [
+                        {
+                            "uid": "1.2.840.10008.10.1.1",
+                            "sopClass": {"system": "urn:ietf:rfc:3986", "code": "urn:oid:1.2.840.10008.5.1.4.1.1.1"},
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    obs_parent = Observation.model_validate(
+        {
+            "resourceType": "Observation",
+            "id": "obs-parent-10",
+            "status": "final",
+            "code": {"coding": [{"system": "http://loinc.org", "code": "85354-9", "display": "Blood pressure"}]},
+            "subject": {"reference": "Patient/pat-10"},
+            "encounter": {"reference": "Encounter/enc-10"},
+            "basedOn": [{"reference": "ServiceRequest/sr-10"}],
+            "hasMember": [{"reference": "Observation/obs-child-10"}],
+        }
+    )
+    obs_child = Observation.model_validate(
+        {
+            "resourceType": "Observation",
+            "id": "obs-child-10",
+            "status": "final",
+            "code": {"coding": [{"system": "http://loinc.org", "code": "8480-6", "display": "Systolic BP"}]},
+            "subject": {"reference": "Patient/pat-10"},
+            "encounter": {"reference": "Encounter/enc-10"},
+            "valueQuantity": {"value": 120.0, "unit": "mmHg", "system": "http://unitsofmeasure.org", "code": "mm[Hg]"},
+        }
+    )
+    dr = DiagnosticReport.model_validate(
+        {
+            "resourceType": "DiagnosticReport",
+            "id": "dr-10",
+            "status": "final",
+            "code": {"coding": [{"system": "http://loinc.org", "code": "24627-2"}]},
+            "subject": {"reference": "Patient/pat-10"},
+            "encounter": {"reference": "Encounter/enc-10"},
+            "basedOn": [{"reference": "ServiceRequest/sr-10"}],
+            "imagingStudy": [{"reference": "ImagingStudy/is-10"}],
+            "result": [{"reference": "Observation/obs-parent-10"}, {"reference": "Observation/obs-child-10"}],
+        }
+    )
+    proc = Procedure.model_validate(
+        {
+            "resourceType": "Procedure",
+            "id": "proc-10",
+            "status": "completed",
+            "code": {"coding": [{"system": "http://snomed.info/sct", "code": "399208008"}]},
+            "subject": {"reference": "Patient/pat-10"},
+            "encounter": {"reference": "Encounter/enc-10"},
+            "basedOn": [{"reference": "ServiceRequest/sr-10"}],
+        }
+    )
+
+    bundle = EncRelevantResources(
+        patient=pat,
+        encounter=enc,
+        conditions=[cond],
+        serviceRequests=[sr],
+        imaging_studies=[img],
+        observations=[obs_parent, obs_child],
+        diagnostic_reports=[dr],
+        procedures=[proc],
+    )
+
+    svc = FhirService()
+    nodes, relations = svc.convert_relevant_resources(bundle, test_id="unit_test_conv", acted_by="tester")
+
+    assert len(nodes) == 9
+    rel_types = {r.__type__ for r in relations}
+    assert {
+        "SUBJECT",
+        "PERFORMED_IN",
+        "HAS_ENCOUNTER",
+        "BASED_ON",
+        "BASED_ON_STUDY",
+        "SUPPORTS_REPORT",
+        "CONTAINS",
+    }.issubset(rel_types)
 
 
 # =====================================================================
@@ -599,6 +785,158 @@ async def test_fetch_relevant_resources_of_study_mocked():
 
 
 # =====================================================================
+# Neo4j Upsert & Cleanup Integration Tests
+# =====================================================================
+
+
+@pytest.mark.anyio
+async def test_upsert_relevant_resources_with_cross_domain_and_cleanup_toggle():
+    """Verify FHIR upsert (CREATE then UPDATE), cross-domain DICOM linking, and cleanup toggle."""
+    if not await neo4j_client.verify_connectivity():
+        pytest.skip(f"Neo4j database is not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
+
+    test_id = "test_fhir_cross_domain_upsert"
+    svc = FhirService()
+
+    # Clean up any leftover data before the test starts
+    await svc.cleanup_upserted_resources(test_id=test_id)
+    await graph_service.cleanup_test_data(test_id)
+
+    # Seed a DICOM hierarchy so cross-domain links (:SAME_AS, :REFERENCES_*, :FULFILLED_BY) are tested
+    dicom_hierarchy = DicomHierarchy(
+        patient=PatientModel(patient_id="MRN-CROSS-001", patient_name="CROSS^JANE"),
+        study=StudyModel(
+            study_instance_uid="1.2.840.99999999.777.1",
+            accession_number="ACC-CROSS-001",
+            study_description="Chest X-Ray",
+        ),
+        series=SeriesModel(
+            series_instance_uid="1.2.840.99999999.777.1.1",
+            modality="CR",
+        ),
+        instance=InstanceModel(
+            sop_instance_uid="1.2.840.99999999.777.1.1.1",
+            sop_class_uid="1.2.840.10008.5.1.4.1.1.1",
+        ),
+        test_id=test_id,
+        acted_by="pytest",
+    )
+    await graph_service.save_hierarchy(dicom_hierarchy)
+
+    resources = EncRelevantResources(
+        patient=Patient.model_validate(
+            {
+                "resourceType": "Patient",
+                "id": "pat-cross-1",
+                "active": True,
+                "identifier": [{"system": "http://hospital.example.org/mrn", "value": "MRN-CROSS-001"}],
+                "name": [{"given": ["Jane"], "family": "Cross"}],
+            }
+        ),
+        encounter=Encounter.model_validate(
+            {
+                "resourceType": "Encounter",
+                "id": "enc-cross-1",
+                "status": "finished",
+                "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+                "subject": {"reference": "Patient/pat-cross-1"},
+            }
+        ),
+        serviceRequests=[
+            ServiceRequest.model_validate(
+                {
+                    "resourceType": "ServiceRequest",
+                    "id": "sr-cross-1",
+                    "status": "active",
+                    "intent": "order",
+                    "identifier": [{"system": "http://hospital.example.org/acc", "value": "ACC-CROSS-001"}],
+                    "code": {"coding": [{"system": "http://loinc.org", "code": "24627-2"}]},
+                    "subject": {"reference": "Patient/pat-cross-1"},
+                    "encounter": {"reference": "Encounter/enc-cross-1"},
+                }
+            )
+        ],
+        imaging_studies=[
+            ImagingStudy.model_validate(
+                {
+                    "resourceType": "ImagingStudy",
+                    "id": "is-cross-1",
+                    "status": "available",
+                    "identifier": [{"system": "urn:ietf:rfc:3986", "value": "urn:oid:1.2.840.99999999.777.1"}],
+                    "subject": {"reference": "Patient/pat-cross-1"},
+                    "encounter": {"reference": "Encounter/enc-cross-1"},
+                    "basedOn": [{"reference": "ServiceRequest/sr-cross-1"}],
+                    "series": [
+                        {
+                            "uid": "1.2.840.99999999.777.1.1",
+                            "modality": {"system": "http://dicom.nema.org/resources/ontology/DCM", "code": "CR"},
+                            "instance": [
+                                {
+                                    "uid": "1.2.840.99999999.777.1.1.1",
+                                    "sopClass": {
+                                        "system": "urn:ietf:rfc:3986",
+                                        "code": "urn:oid:1.2.840.10008.5.1.4.1.1.1",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            )
+        ],
+    )
+
+    try:
+        # Pass 1: INSERT (CREATE)
+        res1 = await svc.upsert_relevant_resources(resources, test_id=test_id, acted_by="pytest_pass1")
+        assert len(res1["nodes"]) == 4
+        assert all(n["action"] == "CREATE" for n in res1["nodes"])
+        assert all(r["action"] == "CREATE" for r in res1["relationships"])
+
+        rel_types = {r["type"] for r in res1["relationships"]}
+        assert {
+            "SUBJECT",
+            "PERFORMED_IN",
+            "BASED_ON",
+            "SAME_AS",
+            "REFERENCES_STUDY",
+            "REFERENCES_SERIES",
+            "REFERENCES_INSTANCE",
+            "FULFILLED_BY",
+        }.issubset(rel_types)
+
+        # Pass 2: UPDATE
+        res2 = await svc.upsert_relevant_resources(resources, test_id=test_id, acted_by="pytest_pass2")
+        assert res2["node_ids"] == res1["node_ids"]
+        assert res2["relationship_ids"] == res1["relationship_ids"]
+        assert all(n["action"] == "UPDATE" for n in res2["nodes"])
+        assert all(r["action"] == "UPDATE" for r in res2["relationships"])
+
+        # Verify cleanup disabled leaves nodes in DB
+        no_op = await cleanup_fhir_test_graph(
+            svc,
+            test_id=test_id,
+            node_ids=res2["node_ids"],
+            relationship_ids=res2["relationship_ids"],
+            enabled=False,
+        )
+        assert no_op["deleted_nodes"] == 0
+
+        # Verify cleanup enabled removes created FHIR nodes and relationships
+        cleaned = await cleanup_fhir_test_graph(
+            svc,
+            test_id=test_id,
+            node_ids=res2["node_ids"],
+            relationship_ids=res2["relationship_ids"],
+            enabled=True,
+        )
+        assert cleaned["deleted_nodes"] >= 4
+        assert cleaned["deleted_relationships"] >= len(res2["relationship_ids"])
+    finally:
+        await graph_service.cleanup_test_data(test_id)
+
+
+# =====================================================================
 # Live Integration Tests (against running FHIR proxy)
 # =====================================================================
 
@@ -694,3 +1032,111 @@ async def test_live_fetch_enc_relevant_resources_12144():
     assert len(resources.diagnostic_reports) > 0
     assert len(resources.procedures) > 0
     assert resources.errors == []
+
+
+@pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
+@pytest.mark.anyio
+async def test_live_fetch_and_upsert_study_790735190745_twice(caplog):
+    """Fetch live study 1.2.840.99999999.40196652.790735190745 and upsert twice (CREATE then UPDATE)."""
+    if not await neo4j_client.verify_connectivity():
+        pytest.skip(f"Neo4j database is not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
+
+    test_id = "test_fhir_study_790735190745"
+    fhir = FhirService()
+
+    # Ensure clean slate prior to test run
+    await fhir.cleanup_upserted_resources(test_id=test_id)
+
+    resources = await fhir.fetch_relevant_resources_of_study(LIVE_TEST_STUDY_UID)
+    assert resources.encounter is not None
+    assert resources.patient is not None
+    assert len(resources.imaging_studies) >= 1
+    assert len(resources.diagnostic_reports) >= 1
+    assert len(resources.observations) >= 1
+    assert len(resources.procedures) >= 1
+
+    upserted_node_ids: list[str] = []
+    upserted_rel_ids: list[str] = []
+
+    try:
+        # 1. First pass: Inserting (Action == "CREATE")
+        first_result = await fhir.upsert_relevant_resources(
+            resources,
+            test_id=test_id,
+            acted_by="pytest_first_pass",
+        )
+        upserted_node_ids = first_result["node_ids"]
+        upserted_rel_ids = first_result["relationship_ids"]
+
+        assert len(upserted_node_ids) > 0
+        assert len(upserted_rel_ids) > 0
+        assert all(n["action"] == "CREATE" for n in first_result["nodes"])
+        assert all(r["action"] == "CREATE" for r in first_result["relationships"])
+
+        # Verify nodes exist in Neo4j with Action == "CREATE" and CreatedAt set
+        db_create_check = await neo4j_client.execute_query(
+            """
+            MATCH (n {test_id: $test_id})
+            RETURN count(n) AS cnt,
+                   collect(distinct n.Action) AS actions,
+                   count(n.CreatedAt) AS created_cnt
+            """,
+            {"test_id": test_id},
+        )
+        assert db_create_check[0]["cnt"] == len(upserted_node_ids)
+        assert db_create_check[0]["actions"] == ["CREATE"]
+        assert db_create_check[0]["created_cnt"] == len(upserted_node_ids)
+
+        # 2. Second pass: Updating (Action == "UPDATE")
+        second_result = await fhir.upsert_relevant_resources(
+            resources,
+            test_id=test_id,
+            acted_by="pytest_second_pass",
+        )
+        assert second_result["node_ids"] == upserted_node_ids
+        assert second_result["relationship_ids"] == upserted_rel_ids
+        assert all(n["action"] == "UPDATE" for n in second_result["nodes"])
+        assert all(r["action"] == "UPDATE" for r in second_result["relationships"])
+
+        # Verify in Neo4j that no duplicates were created and Action == "UPDATE", UpdatedAt set
+        db_update_check = await neo4j_client.execute_query(
+            """
+            MATCH (n {test_id: $test_id})
+            RETURN count(n) AS cnt,
+                   collect(distinct n.Action) AS actions,
+                   count(n.UpdatedAt) AS updated_cnt
+            """,
+            {"test_id": test_id},
+        )
+        assert db_update_check[0]["cnt"] == len(upserted_node_ids)
+        assert db_update_check[0]["actions"] == ["UPDATE"]
+        assert db_update_check[0]["updated_cnt"] == len(upserted_node_ids)
+
+        rel_update_check = await neo4j_client.execute_query(
+            """
+            MATCH ()-[r {test_id: $test_id}]->()
+            RETURN count(r) AS cnt,
+                   collect(distinct r.Action) AS actions,
+                   count(r.UpdatedAt) AS updated_cnt
+            """,
+            {"test_id": test_id},
+        )
+        assert rel_update_check[0]["cnt"] == len(upserted_rel_ids)
+        assert rel_update_check[0]["actions"] == ["UPDATE"]
+        assert rel_update_check[0]["updated_cnt"] == len(upserted_rel_ids)
+    finally:
+        # Separate disposal function (can be disabled via ENABLE_FHIR_TEST_CLEANUP = False)
+        cleanup_stats = await cleanup_fhir_test_graph(
+            fhir,
+            test_id=test_id,
+            node_ids=upserted_node_ids,
+            relationship_ids=upserted_rel_ids,
+            enabled=ENABLE_FHIR_TEST_CLEANUP,
+        )
+        if ENABLE_FHIR_TEST_CLEANUP:
+            assert cleanup_stats["deleted_nodes"] == len(upserted_node_ids)
+            remaining = await neo4j_client.execute_query(
+                "MATCH (n {test_id: $test_id}) RETURN count(n) AS cnt",
+                {"test_id": test_id},
+            )
+            assert remaining[0]["cnt"] == 0
