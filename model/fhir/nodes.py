@@ -3,7 +3,6 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 
 from pydantic import AliasChoices, Field, model_validator
 
-from model.fhir.macros import MAX_INLINE_RESOURCE_BYTES
 from model.graph import AuditableNode
 
 
@@ -15,8 +14,8 @@ class FHIRDomainResourceNode(AuditableNode):
     - ``uid``: Internal unique ID (typically ``ingestion-source:resource-id``)
     - ``resource_id``: Source FHIR system resource ID
     - ``status``: Lifecycle status of the resource
-    - ``resource``: Inline raw FHIR JSON string (for payloads <= 4 KB)
-    - ``resourceUri``: External storage URI (``file://``, ``s3://``, ``gs://``) for payloads > 4 KB
+    - ``resource``: Inline raw FHIR JSON string
+    - ``resourceUri``: External storage URI (``file://``, ``s3://``, ``gs://``)
     """
 
     __label__: ClassVar[str] = "FHIRDomainResource"
@@ -39,7 +38,7 @@ class FHIRDomainResourceNode(AuditableNode):
     )
     resource: Optional[str] = Field(
         default=None,
-        description="Inline raw FHIR JSON string when payload is 4 KB (4096 bytes) or less",
+        description="Inline raw FHIR JSON string",
     )
     resourceUri: Optional[str] = Field(
         default=None,
@@ -52,27 +51,21 @@ class FHIRDomainResourceNode(AuditableNode):
         if isinstance(data, dict):
             uid = data.get("uid")
             res_id = data.get("resource_id") or data.get("fhir_id")
+            test_id = data.get("test_id")
+            if isinstance(test_id, str):
+                test_id = test_id.strip() or None
             if not uid and res_id:
-                data["uid"] = f"fhir:{res_id}"
+                data["uid"] = f"fhir:{test_id}:{res_id}" if test_id else f"fhir:{res_id}"
         return data
 
     @model_validator(mode="after")
     def validate_resource_storage_invariants(self) -> "FHIRDomainResourceNode":
         if not self.uid and self.resource_id:
-            object.__setattr__(self, "uid", f"fhir:{self.resource_id}")
+            suffix = f"{self.test_id}:{self.resource_id}" if self.test_id else self.resource_id
+            object.__setattr__(self, "uid", f"fhir:{suffix}")
 
         if self.resource is None and self.resourceUri is None:
-            raise ValueError(
-                "At least one of 'resource' or 'resourceUri' must be non-null on a FHIR node."
-            )
-
-        if self.resource is not None:
-            encoded_len = len(self.resource.encode("utf-8"))
-            if encoded_len > MAX_INLINE_RESOURCE_BYTES:
-                raise ValueError(
-                    f"Inline 'resource' JSON payload ({encoded_len} bytes) exceeds the "
-                    f"{MAX_INLINE_RESOURCE_BYTES}-byte (4 KB) limit; store externally via 'resourceUri'."
-                )
+            raise ValueError("At least one of 'resource' or 'resourceUri' must be non-null on a FHIR node.")
         return self
 
     def get_identity_subset(self) -> Dict[str, Any]:
@@ -413,7 +406,7 @@ class ObservationNode(FHIRDomainResourceNode):
         provided = [x for x in (self.codes, self.numericValues, self.units) if x is not None]
         if provided:
             lengths = {len(x) for x in provided}
-            if len( provided) != 3 or len(lengths) > 1:
+            if len(provided) != 3 or len(lengths) > 1:
                 raise ValueError(
                     "ObservationNode 'codes', 'numericValues', and 'units' must all be provided "
                     "with identical array lengths when using the Coded Value Macro."
