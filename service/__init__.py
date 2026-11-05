@@ -4,8 +4,6 @@ from service.fhir_service import (
     EncRelevantResources,
     FHIRBatchFetcher,
     FhirService,
-    fhir_batch_fetcher,
-    fhir_service,
 )
 from service.graph_service import GraphService, graph_service
 from service.group_service import GroupService, group_service
@@ -20,8 +18,6 @@ __all__ = [
     "EncounterContext",
     "FHIRBatchFetcher",
     "FhirService",
-    "fhir_batch_fetcher",
-    "fhir_service",
     "GraphService",
     "graph_service",
     "MediaService",
