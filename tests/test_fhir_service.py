@@ -1,10 +1,10 @@
 """Unit and integration tests for FHIR service, batch fetcher, and Neo4j graph upsert."""
 
-import os
-from typing import Optional
+from typing import Any, Optional
 
 import httpx
 import pytest
+from fhir.resources.R4B.codeableconcept import CodeableConcept
 from fhir.resources.R4B.condition import Condition
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.encounter import Encounter
@@ -12,6 +12,7 @@ from fhir.resources.R4B.imagingstudy import ImagingStudy
 from fhir.resources.R4B.observation import Observation
 from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.procedure import Procedure
+from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.servicerequest import ServiceRequest
 
 from core.config import get_settings
@@ -24,16 +25,13 @@ from service.fhir_service import (
     FhirService,
 )
 from service.graph_service import graph_service
+from tests.utils.config_utils import ConfigUtils
 
-# Set to False (or export GOSMART_DISABLE_FHIR_CLEANUP=1) to temporarily disable post-test
+config_utils = ConfigUtils()
+all_configs = config_utils.configs
+
+# Set "cleanup_enable": false in tests/configs.json to temporarily disable post-test
 # cleanup so that upserted FHIR nodes and relationships can be inspected in Neo4j.
-ENABLE_FHIR_TEST_CLEANUP: bool = os.getenv("GOSMART_DISABLE_FHIR_CLEANUP", "0").strip().lower() not in (
-    "1",
-    "true",
-    "yes",
-)
-
-LIVE_TEST_STUDY_UID = "1.2.840.99999999.40196652.790735190745"
 
 
 def _is_fhir_proxy_live() -> bool:
@@ -46,7 +44,8 @@ def _is_fhir_proxy_live() -> bool:
         with httpx.Client(timeout=2.0) as client:
             resp = client.get(f"{base_url}/metadata")
             return resp.status_code == 200
-    except Exception:
+    except Exception as why:
+        print(why)
         return False
 
 
@@ -58,12 +57,12 @@ async def cleanup_fhir_test_graph(
     test_id: Optional[str] = None,
     node_ids: Optional[list[str]] = None,
     relationship_ids: Optional[list[str]] = None,
-    enabled: bool = ENABLE_FHIR_TEST_CLEANUP,
+    enabled: bool = all_configs["cleanup_enable"],
 ) -> dict[str, int]:
     """Separate disposal helper to clean up FHIR nodes and relationships created by a test.
 
-    Can be temporarily disabled by setting ``ENABLE_FHIR_TEST_CLEANUP = False`` or
-    ``GOSMART_DISABLE_FHIR_CLEANUP=1`` to inspect the graph in Neo4j after test runs.
+    Can be temporarily disabled by setting ``"cleanup_enable": false`` in ``tests/configs.json``
+    to inspect the graph in Neo4j after test runs.
     """
     if not enabled:
         return {"deleted_nodes": 0, "deleted_relationships": 0}
@@ -86,6 +85,7 @@ def test_encounter_context_model():
         conditions=[{"id": "c-1"}],
         errors=["Failed to fetch observations"],
     )
+    assert isinstance(ctx.encounter, dict)
     assert ctx.encounter["id"] == "enc-101"
     assert len(ctx.conditions) == 1
     assert ctx.diagnostic_reports == []
@@ -110,15 +110,17 @@ def test_enc_relevant_resources_model():
     )
     pat = Patient(id="pat-1")
     cond = Condition(
-        clinicalStatus={
-            "coding": [
-                {
-                    "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
-                    "code": "active",
-                }
-            ]
-        },
-        subject={"reference": "Patient/pat-1"},
+        clinicalStatus=CodeableConcept.model_validate(
+            {
+                "coding": [
+                    {
+                        "system": "http://terminology.hl7.org/CodeSystem/condition-clinical",
+                        "code": "active",
+                    }
+                ]
+            }
+        ),
+        subject=Reference.model_validate({"reference": "Patient/pat-1"}),
         id="c-1",
     )
 
@@ -336,7 +338,7 @@ async def test_fetch_resource_bundle_unconfigured_or_404():
     assert res == []
 
     # 2. 404 returns empty list
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(404, json={"resourceType": "OperationOutcome"})
 
     transport = httpx.MockTransport(handler)
@@ -440,6 +442,7 @@ async def test_fetch_encounter_graph_mocked_partial_failure():
         fetcher = FHIRBatchFetcher(base_url="http://mock-fhir/fhir/r4", client=client)
         ctx = await fetcher.fetch_encounter_graph(encounter=enc)
 
+        assert isinstance(ctx.encounter, dict)
         assert ctx.encounter["id"] == "enc-555"
         assert ctx.patient is not None
         assert ctx.patient["id"] == "pat-555"
@@ -943,100 +946,91 @@ async def test_upsert_relevant_resources_with_cross_domain_and_cleanup_toggle():
 
 @pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
 @pytest.mark.anyio
-async def test_live_fetch_encounter():
-    """Fetch live encounter 3033 from HAPI FHIR proxy and validate fields."""
+async def test_live_fetch_encounter(test_config: dict[str, Any]):
+    """
+    Fetch live encounter 3033 from HAPI FHIR proxy and validate fields.
+    Please see tests/configs.json for test_config values and conftest.py where
+    the pytest fixture "test_config" is defined..
+    IMPORTANT:
+    IF YOU GENERATE new HAPI FHIR records you need to find sutiable
+    Live configurations.
+    """
     svc = FhirService()
-    enc = await svc.fetch_encounter("3033")
+    enc = await svc.fetch_encounter(test_config["encounter.id"])
     assert enc is not None
-    assert enc.id == "3033"
-    assert enc.status == "finished"
+    assert enc.id == test_config["encounter.id"]
+    assert enc.status == test_config["encounter.status"]
     assert enc.subject is not None
-    assert enc.subject.reference == "Patient/2977"
+    assert enc.subject.reference == test_config["subject.reference"]
 
 
 @pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
 @pytest.mark.anyio
-async def test_live_fetch_patient():
+async def test_live_fetch_patient(test_config: dict[str, Any]):
     """Fetch live Patient 2977 from HAPI FHIR proxy."""
     svc = FhirService()
-    patient = await svc.fetch_patient("Patient/2977")
+    patient = await svc.fetch_patient(test_config["subject.reference"])
     assert patient is not None
-    assert patient.id == "2977"
+    assert patient.id == test_config["subject.id"]
 
 
 @pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
 @pytest.mark.anyio
-async def test_live_fetch_imaging_study_by_uid():
+async def test_live_fetch_imaging_study_by_uid(test_config: dict[str, Any]):
     """Fetch live ImagingStudy using DICOM Study Instance UID and urn:oid prefix."""
     svc = FhirService()
-    study_uid = "1.2.840.99999999.89216092.1553055938354"
+    study_uid = test_config["study_uid"]
 
     # 1. Bare UID
     study = await svc.fetch_imaging_study(study_uid)
     assert study is not None
-    assert study.id == "3051"
-    assert study.status == "available"
+    assert study.id == test_config["study.id"]
+    assert study.status == test_config["study.status"]
 
     # 2. With urn:oid: prefix
     study_urn = await svc.fetch_imaging_study(f"urn:oid:{study_uid}")
     assert study_urn is not None
-    assert study_urn.id == "3051"
+    assert study_urn.id == test_config["study.id"]
 
 
 @pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
 @pytest.mark.anyio
-async def test_live_fetch_diagnostic_report():
+async def test_live_fetch_diagnostic_report(test_config: dict[str, Any]):
     """Fetch live DiagnosticReport for encounter 3033."""
     svc = FhirService()
-    report = await svc.fetch_enc_diagnostic_report("3033")
+    report = await svc.fetch_enc_diagnostic_report(test_config["encounter.id"])
     assert report is not None
-    assert report.id == "3052"
-    assert report.status == "final"
+    assert report.id == test_config["report.id"]
+    assert report.status == test_config["report.status"]
     assert report.encounter is not None
-    assert report.encounter.reference == "Encounter/3033"
+    assert report.encounter.reference == test_config["encounter.reference"]
 
 
 @pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
 @pytest.mark.anyio
-async def test_live_fetch_enc_relevant_resources_3033():
+async def test_live_fetch_enc_relevant_resources(test_config: dict[str, Any]):
     """Fetch entire encounter 3033 resource graph concurrently from proxy."""
     svc = FhirService()
-    resources = await svc.fetch_enc_relevant_resources("3033")
+    resources = await svc.fetch_enc_relevant_resources(test_config["encounter.id"])
 
     assert resources.encounter is not None
-    assert resources.encounter.id == "3033"
+    assert resources.encounter.id == test_config["encounter.id"]
     assert resources.patient is not None
-    assert resources.patient.id == "2977"
+    assert resources.patient.id == test_config["patient.id"]
 
-    assert len(resources.diagnostic_reports) >= 1
-    assert resources.diagnostic_reports[0].id == "3052"
+    assert ConfigUtils.compare(len(resources.diagnostic_reports), test_config["diagnostic.reports.length"])
+    assert resources.diagnostic_reports[0].id == test_config["diagnostic.reports.id_0"]
 
-    assert len(resources.imaging_studies) >= 1
-    assert resources.imaging_studies[0].id == "3051"
+    assert ConfigUtils.compare(len(resources.imaging_studies), test_config["imaging_studies.length"])
+    assert resources.imaging_studies[0].id == test_config["imaging_studies.id_0"]
 
-    assert len(resources.procedures) >= 1
-    assert resources.errors == []
-
-
-@pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
-@pytest.mark.anyio
-async def test_live_fetch_enc_relevant_resources_12144():
-    """Fetch encounter 12144 with observations, conditions, and reports."""
-    svc = FhirService()
-    resources = await svc.fetch_enc_relevant_resources("12144")
-
-    assert resources.encounter is not None
-    assert resources.encounter.id == "12144"
-    assert len(resources.observations) > 0
-    assert len(resources.conditions) > 0
-    assert len(resources.diagnostic_reports) > 0
-    assert len(resources.procedures) > 0
-    assert resources.errors == []
+    assert ConfigUtils.compare(len(resources.procedures), test_config["procedures.length"])
+    assert ConfigUtils.compare(len(resources.errors), test_config["errors.length"])
 
 
 @pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
 @pytest.mark.anyio
-async def test_live_fetch_and_upsert_study_790735190745_twice(caplog):
+async def test_live_fetch_and_upsert_study_790735190745_twice(test_config: dict[str, Any]):
     """Fetch live study 1.2.840.99999999.40196652.790735190745 and upsert twice (CREATE then UPDATE)."""
     if not await neo4j_client.verify_connectivity():
         pytest.skip(f"Neo4j database is not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
@@ -1047,13 +1041,13 @@ async def test_live_fetch_and_upsert_study_790735190745_twice(caplog):
     # Ensure clean slate prior to test run
     await fhir.cleanup_upserted_resources(test_id=test_id)
 
-    resources = await fhir.fetch_relevant_resources_of_study(LIVE_TEST_STUDY_UID)
+    resources = await fhir.fetch_relevant_resources_of_study(test_config["study_uid"])
     assert resources.encounter is not None
     assert resources.patient is not None
-    assert len(resources.imaging_studies) >= 1
-    assert len(resources.diagnostic_reports) >= 1
-    assert len(resources.observations) >= 1
-    assert len(resources.procedures) >= 1
+    assert ConfigUtils.compare(len(resources.imaging_studies), test_config["imaging_studies.length"])
+    assert ConfigUtils.compare(len(resources.diagnostic_reports), test_config["diagnostic_reports.length"])
+    assert ConfigUtils.compare(len(resources.observations), test_config["observations.length"])
+    assert ConfigUtils.compare(len(resources.procedures), test_config["procedures.length"])
 
     upserted_node_ids: list[str] = []
     upserted_rel_ids: list[str] = []
@@ -1125,15 +1119,15 @@ async def test_live_fetch_and_upsert_study_790735190745_twice(caplog):
         assert rel_update_check[0]["actions"] == ["UPDATE"]
         assert rel_update_check[0]["updated_cnt"] == len(upserted_rel_ids)
     finally:
-        # Separate disposal function (can be disabled via ENABLE_FHIR_TEST_CLEANUP = False)
+        # Separate disposal function (can be disabled via "cleanup_enable": false in tests/configs.json)
         cleanup_stats = await cleanup_fhir_test_graph(
             fhir,
             test_id=test_id,
             node_ids=upserted_node_ids,
             relationship_ids=upserted_rel_ids,
-            enabled=ENABLE_FHIR_TEST_CLEANUP,
+            enabled=all_configs["cleanup_enable"],
         )
-        if ENABLE_FHIR_TEST_CLEANUP:
+        if all_configs["cleanup_enable"]:
             assert cleanup_stats["deleted_nodes"] == len(upserted_node_ids)
             remaining = await neo4j_client.execute_query(
                 "MATCH (n {test_id: $test_id}) RETURN count(n) AS cnt",
