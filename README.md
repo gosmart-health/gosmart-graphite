@@ -18,6 +18,7 @@ A high-performance DICOM Knowledge Graph backend server powered by **Python 3.14
 - **Dynamic DICOM SCP Lifecycle**: Runtime-configurable SCP instances with presentation context enforcement, service class negotiation, and graceful draining of active associations.
 - **Authentication & Authorization**: JWT access/refresh tokens, API key authentication (`gs_live_` prefix), Google OAuth2 / OIDC federated login, scoped RBAC with DICOM-level authorization, and Argon2 password hashing.
 - **Model Context Protocol (MCP)**: Built-in MCP server with SSE, StreamableHTTP, and STDIO transports for AI agent integration (Cursor, Cline, AntiGravity).
+- **Vector Embedding Computation Service**: Unified text embedding generation (`VectorService`) powered by **Genkit** (`genkit-ollama` and `genkit-google-genai`) supporting both local/network Ollama models (e.g., `nomic-embed-text:latest`) and Google Vertex AI embedding models with L2 vector normalization.
 - **Audit Trail**: Structured audit logging with configurable retention, Neo4j persistence, and background `AuditActor` for non-blocking audit writes.
 - **Docker & Docker Compose**: Multi-stage Dockerfile with full-stack `docker compose` orchestration (Graph Server + Neo4j), health checks, named volumes, and unprivileged runtime user.
 - **CLI Management Tool**: Typer-based CLI (`cli.py`) with `start`, `health`, `echo`, `send`, `mcp`, and `admin` commands for server operation and administration.
@@ -35,6 +36,7 @@ gosmart-dicom-py-graph-server/
 │   ├── __init__.py
 │   ├── audit_actor.py           # Background audit logging actor
 │   ├── dicom_actor.py           # DICOM ingestion & processing actor
+│   ├── fhir_actor.py            # Background FHIR fetching & graph registration actor
 │   └── store_scu_actor.py       # Outbound C-STORE SCU transfer actor
 ├── api/                         # FastAPI routes & endpoints
 │   ├── __init__.py
@@ -65,6 +67,7 @@ gosmart-dicom-py-graph-server/
 │   ├── audit.py                 # Audit log and audit trail models
 │   ├── auth.py                  # JWT token, API key, OAuth request/response models
 │   ├── dicom.py                 # Patient, Study, Series, Instance models
+│   ├── fhir/                    # FHIR R4B graph node and relationship models
 │   ├── graph.py                 # Cypher and graph schema models
 │   ├── health.py                # Health response models
 │   ├── media.py                 # StorageScheme, ParsedStorageUri, MediaMetadata
@@ -78,13 +81,15 @@ gosmart-dicom-py-graph-server/
 │   ├── __init__.py
 │   ├── dicom_service.py         # pydicom parsing, mock generation, storage save
 │   ├── dicomweb_service.py      # DICOMweb STOW-RS, WADO-RS, QIDO-RS implementations
-│   ├── graph_service.py         # Cypher queries for DICOM hierarchy
+│   ├── fhir_service.py          # FHIR R4B batch fetching and Neo4j graph upsert
+│   ├── graph_service.py         # Cypher queries for DICOM & FHIR hierarchy
 │   ├── group_service.py         # Organization and group management
 │   ├── mcp_service.py           # MCP server (SSE, StreamableHTTP, STDIO transports)
 │   ├── media_service.py         # Storage-agnostic async media (Local, UNC, GCS, S3, Azure)
 │   ├── pynetdicom_service.py    # Dynamic SCP lifecycle, C-STORE/C-ECHO, network AE
 │   ├── system_service.py        # System bootstrap, DICOM configuration management
-│   └── user_service.py          # User CRUD, admin bootstrapping, password management
+│   ├── user_service.py          # User CRUD, admin bootstrapping, password management
+│   └── vector_service.py        # Genkit vector embedding computation (Ollama & Vertex AI)
 ├── main.py                      # FastAPI application factory & Uvicorn entrypoint
 ├── start.sh                     # Shell script shortcut for local development launch
 ├── pyproject.toml               # Project metadata, dependencies (uv/hatchling)
@@ -104,11 +109,14 @@ gosmart-dicom-py-graph-server/
     ├── test_audit.py
     ├── test_auth_api.py
     ├── test_auth_graph_models.py
+    ├── test_config.py
     ├── test_dicom_store_scp.py
     ├── test_dicomweb.py
     ├── test_dicomweb_audit.py
     ├── test_dimse_qr.py
     ├── test_endpoint_security.py
+    ├── test_fhir_models.py
+    ├── test_fhir_service.py
     ├── test_graph_service.py
     ├── test_group_service.py
     ├── test_live_mdicom_move.py
@@ -127,7 +135,8 @@ gosmart-dicom-py-graph-server/
     ├── test_system_mcp.py
     ├── test_system_service.py
     ├── test_transfer_syntax_preservation.py
-    └── test_user_service.py
+    ├── test_user_service.py
+    └── test_vector_service.py
 ```
 
 ---
@@ -172,12 +181,18 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_DB_DATABASE` | `neo4j` | Neo4j Database Name |
 | `GOSMART_GS_DB_MAX_CONNECTION_POOL_SIZE` | `50` | Neo4j max connection pool size |
 | `GOSMART_GS_DB_MAX_CONNECTION_LIFETIME` | `3600` | Neo4j max connection lifetime (seconds) |
-| ** FHIR ** | | |
+| **FHIR** | | |
 | `GOSMART_GS_FHIR_BASE_URL` | `` | FHIR URL root. Empty disables FHIR |
-| `GOSMART_GS_FHIR_POLL_SEC` | 120 | FHIR polling interval to check for DiagnosticReport |
-| `GOSMART_GS_FHIR_ACCESSION_SYSTEM` | "" | System for the Acccession Number |
-| `GOSMART_GS_FHIR_PATIENT_ID_SYSTEM` | "urn:oid:2.16.840.1.113883.4.3.25" | System for the Patient ID/ MRN |
-
+| `GOSMART_GS_FHIR_POLL_SEC` | `120` | FHIR polling interval to check for DiagnosticReport |
+| `GOSMART_GS_FHIR_ACCESSION_SYSTEM` | `""` | System for the Accession Number |
+| `GOSMART_GS_FHIR_PATIENT_ID_SYSTEM` | `"urn:oid:2.16.840.1.113883.4.3.25"` | System for the Patient ID/ MRN |
+| **Vector Embedding** | | |
+| `GOSMART_GS_VECTOR_EMBED_PROVIDER` | `""` | Vector embedding provider (`ollama` or `vertexai`; empty disables) |
+| `GOSMART_GS_VECTOR_EMBED_SERVER_URL` | `""` | Base URL for local/network Ollama server (e.g. `http://10.200.0.103:11434`) |
+| `GOSMART_GS_VECTOR_EMBED_MODEL` | `""` | Embedding model name (e.g. `nomic-embed-text:latest` or `gemini-embedding-001`) |
+| `GOSMART_GS_VECTOR_EMBED_DIMENSIONS` | *(None)* | Expected / target vector dimensionality (e.g. `768`) |
+| `GOSMART_GS_VERTEX_AI_API_KEY` | *(None)* | API key for Google Vertex AI (Express Mode) / Gemini API (`VERTEX_AI_API_KEY`, `GOOGLE_API_KEY`, or `GEMINI_API_KEY`) |
+| `GOSMART_GS_VERTEX_AI_LOCATION` | `us-central1` | Google Cloud region for Vertex AI embeddings |
 | **Storage** | | |
 | `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI (file://, gs://, s3://, az://, \\\\unc\\share) |
 | **Server** | | |
