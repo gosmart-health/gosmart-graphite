@@ -57,6 +57,43 @@ class Settings(BaseSettings):
         description="System for the Patient ID/ MRN",
     )
 
+    # Vector Embedding Settings (Genkit: Ollama or Google Vertex AI)
+    VECTOR_EMBED_PROVIDER: str = Field(
+        default="",
+        description="Vector embedding provider: 'ollama' or 'vertexai' (empty disables vector embedding)",
+    )
+    VECTOR_EMBED_MODEL: str = Field(
+        default="",
+        description="Vector embedding model name (e.g. 'nomic-embed-text:latest' or 'gemini-embedding-001')",
+    )
+    VECTOR_EMBED_SERVER_URL: str = Field(
+        default="",
+        description="Base URL for the local/network Ollama server (e.g. 'http://10.200.0.103:11434')",
+    )
+    VECTOR_EMBED_DIMENSIONS: Optional[int] = Field(
+        default=None,
+        description="Expected or target output vector dimensionality (e.g. 768 for nomic-embed-text:latest)",
+    )
+    VERTEX_AI_API_KEY: Optional[SecretStr] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VERTEX_AI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+            "GOSMART_GS_VERTEX_AI_API_KEY",
+        ),
+        description="API key for Google Vertex AI (Express Mode) / Gemini API authentication",
+    )
+    VERTEX_AI_LOCATION: str = Field(
+        default="us-central1",
+        validation_alias=AliasChoices(
+            "VERTEX_AI_LOCATION",
+            "GOOGLE_CLOUD_LOCATION",
+            "GOSMART_GS_VERTEX_AI_LOCATION",
+        ),
+        description="Google Cloud region for Vertex AI embeddings (default: us-central1)",
+    )
+
     # Storage Root URI
     STORAGE_ROOT_URI: str = Field(
         default="file:///tmp/gosmart_dicom_storage",

@@ -10,6 +10,17 @@ from service.group_service import GroupService, group_service
 from service.media_service import MediaService, media_service
 from service.pynetdicom_service import PyNetDicomService, pynetdicom_service
 from service.user_service import UserService, user_service
+from service.vector_service import (
+    SimilarityMetric,
+    VectorService,
+    compute_cosine_scores,
+    compute_dot_product_scores,
+    compute_euclidean_scores,
+    compute_manhattan_scores,
+    compute_similarity_scores,
+    normalize_vector,
+    vector_service,
+)
 
 __all__ = [
     "DicomService",
@@ -28,4 +39,13 @@ __all__ = [
     "group_service",
     "UserService",
     "user_service",
+    "SimilarityMetric",
+    "VectorService",
+    "compute_cosine_scores",
+    "compute_dot_product_scores",
+    "compute_euclidean_scores",
+    "compute_manhattan_scores",
+    "compute_similarity_scores",
+    "normalize_vector",
+    "vector_service",
 ]
