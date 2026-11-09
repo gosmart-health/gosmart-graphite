@@ -34,16 +34,59 @@ class Settings(BaseSettings):
     # Graph Database (Neo4j)
     DB_CONNECTION_URI: str = Field(
         default="bolt://localhost:7687",
+        validation_alias=AliasChoices(
+            "GOSMART_GS_DB_CONNECTION_URI",
+            "NEO4J_URI",
+        ),
         description="Neo4j connection URI (e.g. bolt://localhost:7687 or neo4j://...)",
     )
-    DB_USER: str = Field(default="neo4j", description="Neo4j username")
+    DB_USER: str = Field(
+        default="neo4j",
+        validation_alias=AliasChoices(
+            "GOSMART_GS_DB_USER",
+            "NEO4J_USERNAME",
+        ),
+        description="Neo4j username",
+    )
     #
     # NOTE: To read SecretStr from environment variables, use .get_secret_value() method,
     # e.g. os.environ.get("GOSMART_GS_DB_PASSWORD").get_secret_value()
-    DB_PASSWORD: SecretStr = Field(default="password", description="Neo4j password")
-    DB_DATABASE: str = Field(default="neo4j", description="Neo4j database name")
+    DB_PASSWORD: SecretStr = Field(
+        default="password",
+        validation_alias=AliasChoices(
+            "GOSMART_GS_DB_PASSWORD",
+            "NEO4J_PASSWORD",
+        ),
+        description="Neo4j password",
+    )
+    DB_DATABASE: str = Field(
+        default="neo4j",
+        validation_alias=AliasChoices(
+            "GOSMART_GS_DB_DATABASE",
+            "NEO4J_DATABASE",
+        ),
+        description="Neo4j database name",
+    )
     DB_MAX_CONNECTION_LIFETIME: int = Field(default=3600, description="Max connection lifetime in seconds")
     DB_MAX_CONNECTION_POOL_SIZE: int = Field(default=50, description="Max connection pool size")
+    DB_AURA_INSTANCE_ID: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOSMART_GS_DB_AURA_INSTANCE_ID",
+            "GOSMART_GS_AURA_INSTANCEID",
+            "AURA_INSTANCEID",
+        ),
+        description="Neo4j Aura Instance ID (optional metadata)",
+    )
+    DB_AURA_INSTANCE_NAME: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "GOSMART_GS_DB_AURA_INSTANCE_NAME",
+            "GOSMART_GS_AURA_INSTANCENAME",
+            "AURA_INSTANCENAME",
+        ),
+        description="Neo4j Aura Instance Name (optional metadata)",
+    )
 
     # FHIR Integration Settings
     FHIR_BASE_URL: str = Field(default="", description="FHIR URL root. Empty disables FHIR")
