@@ -867,9 +867,9 @@ class PyNetDicomService:
             test_id=getattr(hierarchy, "test_id", None),
         )
 
-        # Capture a unique Study UIDs in this association then
+        # Capture unique Study + Series UID combinations in this association then
         # if it is new then we will try to fetch related FHIR resources
-        # for this Imaging Study
+        # for this Imaging Study and update cross-domain Series/Instance edges
 
         if assoc is not None:
             seen = getattr(assoc, "_seen_study_uids", None)
@@ -879,12 +879,15 @@ class PyNetDicomService:
                 setattr(assoc, "_seen_study_uids", seen)
 
             study_uid = hierarchy.study.study_instance_uid
-            if study_uid and study_uid not in seen:
-                seen.add(study_uid)
+            series_uid = hierarchy.series.series_instance_uid
+            study_series_key = f"{study_uid}:{series_uid}" if study_uid and series_uid else study_uid
+            if study_uid and study_series_key not in seen:
+                seen.add(study_series_key)
                 notify_fhir(
                     patient_id=hierarchy.patient.patient_id,
                     accession_number=hierarchy.study.accession_number,
                     study_uid=study_uid,
+                    series_uid=series_uid,
                 )
 
         return 0x0000  # SUCCESS

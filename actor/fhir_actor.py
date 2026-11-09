@@ -12,7 +12,7 @@ logger = get_logger("gosmart_gs.fhir_actor")
 class FhirActor(pykka.ThreadingActor):
     """Pykka Actor for handling FHIR operations asynchronously (fire-and-forget).
 
-    Receives patient_id, accession_number, and study_uid strings, fetches the
+    Receives patient_id, accession_number, study_uid, and series_uid strings, fetches the
     associated FHIR encounter resource bundle, and registers nodes and
     relationships into Neo4j.
     """
@@ -73,7 +73,7 @@ class FhirActor(pykka.ThreadingActor):
         )
 
     def on_receive(self, message: Any) -> Any:
-        """Handle incoming message containing patient_id, accession_number, and study_uid."""
+        """Handle incoming message containing patient_id, accession_number, study_uid, and series_uid."""
         if not isinstance(message, dict):
             logger.warning("fhir_actor_unsupported_message_type", msg_type=type(message).__name__)
             return {"success": False, "error": f"Unsupported message type: {type(message).__name__}"}
@@ -90,6 +90,7 @@ class FhirActor(pykka.ThreadingActor):
         patient_id = message.get("patient_id", "")
         accession_number = message.get("accession_number", "")
         study_uid = message.get("study_uid", "")
+        series_uid = message.get("series_uid", "")
         test_id = message.get("test_id")
         acted_by = message.get("acted_by") or "fhir_actor"
 
@@ -98,6 +99,7 @@ class FhirActor(pykka.ThreadingActor):
             patient_id=patient_id,
             accession_number=accession_number,
             study_uid=study_uid,
+            series_uid=series_uid,
         )
 
         upsert_result: Optional[Dict[str, Any]] = None
@@ -109,6 +111,7 @@ class FhirActor(pykka.ThreadingActor):
                     logger.info(
                         f"Got the FHIR resources for Study: {study_uid}",
                         study_uid=study_uid,
+                        series_uid=series_uid,
                         encounter_id=getattr(resources.encounter, "id", None),
                         patient_id=getattr(resources.patient, "id", None),
                         imaging_studies=len(resources.imaging_studies),
@@ -130,6 +133,7 @@ class FhirActor(pykka.ThreadingActor):
                     logger.info(
                         "fhir_graph_registered",
                         study_uid=study_uid,
+                        series_uid=series_uid,
                         nodes_count=len(upsert_result.get("node_ids", [])),
                         relationships_count=len(upsert_result.get("relationship_ids", [])),
                     )
@@ -138,6 +142,7 @@ class FhirActor(pykka.ThreadingActor):
                     logger.info(
                         f"Did not get the FHIR resources for Study: {study_uid}",
                         study_uid=study_uid,
+                        series_uid=series_uid,
                         errors=resources.errors if resources else [],
                     )
                     self.last_status = "NOT_FOUND"
@@ -145,12 +150,13 @@ class FhirActor(pykka.ThreadingActor):
                 logger.error(
                     "fhir_actor_processing_failed",
                     study_uid=study_uid,
+                    series_uid=series_uid,
                     error=str(e),
                     exc_info=True,
                 )
                 self.last_status = f"ERROR: {str(e)}"
                 self.processed_count += 1
-                return {"success": False, "study_uid": study_uid, "error": str(e)}
+                return {"success": False, "study_uid": study_uid, "series_uid": series_uid, "error": str(e)}
             finally:
                 if self._fhir_service is None:
                     try:
@@ -164,6 +170,7 @@ class FhirActor(pykka.ThreadingActor):
         return {
             "success": True,
             "study_uid": study_uid,
+            "series_uid": series_uid,
             "status": self.last_status,
             "upsert_result": upsert_result,
         }
@@ -193,10 +200,11 @@ def notify_fhir(
     patient_id: str = "",
     accession_number: str = "",
     study_uid: str = "",
+    series_uid: str = "",
     test_id: Optional[str] = None,
     acted_by: str = "fhir_actor",
 ) -> None:
-    """Convenience fire-and-forget helper to send patient_id, accession_number, and study_uid to FhirActor."""
+    """Convenience fire-and-forget helper to send patient_id, accession_number, study_uid, and series_uid to FhirActor."""
     try:
         actor_ref = get_fhir_actor()
         actor_ref.tell(
@@ -204,6 +212,7 @@ def notify_fhir(
                 "patient_id": str(patient_id),
                 "accession_number": str(accession_number),
                 "study_uid": str(study_uid),
+                "series_uid": str(series_uid),
                 "test_id": test_id,
                 "acted_by": acted_by,
             }
