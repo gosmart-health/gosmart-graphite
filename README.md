@@ -729,7 +729,13 @@ uv run ruff check .
 uv run ruff format --check .
 ```
 
-### 3. Interactive Notebook
+### 3. Use `devop-scripts`
+
+GitHub Configurations of secrets and variable, and performing pre and post
+integration test data can be done [using the scripts in](./devop-scripts)
+folder. Please find the `README.md` file there for further information.
+
+### 4. Interactive Notebook
 
 Open and execute [notebooks/exploration.ipynb](./notebooks/exploration.ipynb) in your editor or start Jupyter:
 

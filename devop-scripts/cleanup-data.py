@@ -15,10 +15,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from neo4j.exceptions import DriverError  # noqa: E402
+
 from core.config import Settings, get_settings  # noqa: E402
 from core.logging import get_logger  # noqa: E402
 from db.neo4j import Neo4jClient  # noqa: E402
-from neo4j.exceptions import DriverError  # noqa: E402
 from service.media_service import MediaService  # noqa: E402
 
 logger = get_logger("gosmart_gs.devop.cleanup")
@@ -431,7 +432,7 @@ class CleanupData:
         if hasattr(self, "driver") and self.driver:
             try:
                 self.driver.close()
-            except (DriverError, Exception):
+            except DriverError, Exception:
                 pass
 
     def __enter__(self) -> "CleanupData":

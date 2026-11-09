@@ -19,9 +19,10 @@ PRESERVED_CONFIGURATION_LABELS = cleanup_data_mod.PRESERVED_CONFIGURATION_LABELS
 @pytest.fixture
 def mock_cleanup():
     """Create a CleanupData instance with mocked Neo4j driver and session."""
-    with patch.object(cleanup_data_mod, "Neo4jClient") as mock_client_cls, patch.object(
-        cleanup_data_mod, "MediaService"
-    ) as mock_ms_cls:
+    with (
+        patch.object(cleanup_data_mod, "Neo4jClient") as mock_client_cls,
+        patch.object(cleanup_data_mod, "MediaService") as mock_ms_cls,
+    ):
         mock_client = MagicMock()
         mock_driver = MagicMock()
         mock_session = MagicMock()
