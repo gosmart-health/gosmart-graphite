@@ -1,10 +1,10 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from neo4j import NotificationDisabledClassification, NotificationMinimumSeverity
 from neo4j.exceptions import ServiceUnavailable
 
 from db.neo4j import Neo4jClient
+from neo4j import NotificationDisabledClassification, NotificationMinimumSeverity
 
 
 @pytest.mark.anyio
@@ -58,16 +58,12 @@ async def test_driver_notification_suppression_config():
         await client.connect()
         _, async_kwargs = mock_async_factory.call_args
         assert async_kwargs.get("notifications_min_severity") == NotificationMinimumSeverity.WARNING
-        assert async_kwargs.get("notifications_disabled_classifications") == [
-            NotificationDisabledClassification.SCHEMA
-        ]
+        assert async_kwargs.get("notifications_disabled_classifications") == [NotificationDisabledClassification.SCHEMA]
 
     with patch("db.neo4j.GraphDatabase.driver", return_value=mock_sync_driver) as mock_sync_factory:
         client.get_sync_driver()
         _, sync_kwargs = mock_sync_factory.call_args
         assert sync_kwargs.get("notifications_min_severity") == NotificationMinimumSeverity.WARNING
-        assert sync_kwargs.get("notifications_disabled_classifications") == [
-            NotificationDisabledClassification.SCHEMA
-        ]
+        assert sync_kwargs.get("notifications_disabled_classifications") == [NotificationDisabledClassification.SCHEMA]
 
     await client.close()

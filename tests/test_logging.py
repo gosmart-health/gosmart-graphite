@@ -105,7 +105,10 @@ def test_neo4j_already_exists_notification_filter():
         level=logging.INFO,
         pathname="result.py",
         lineno=346,
-        msg="Received notification from DBMS server: <GqlStatusObject gql_status='00NA0', status_description=\"note: successful completion - index or constraint already exists.\">",
+        msg=(
+            "Received notification from DBMS server: <GqlStatusObject gql_status='00NA0', "
+            'status_description="note: successful completion - index or constraint already exists.">'
+        ),
         args=(),
         exc_info=None,
     )
@@ -117,7 +120,10 @@ def test_neo4j_already_exists_notification_filter():
         level=logging.WARNING,
         pathname="result.py",
         lineno=346,
-        msg="Received notification from DBMS server: <GqlStatusObject gql_status='01000', status_description=\"warning: query plan sub-optimal\">",
+        msg=(
+            "Received notification from DBMS server: <GqlStatusObject gql_status='01000', "
+            'status_description="warning: query plan sub-optimal">'
+        ),
         args=(),
         exc_info=None,
     )
