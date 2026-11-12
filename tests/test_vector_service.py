@@ -92,6 +92,23 @@ def test_similarity_metrics_0_to_1_scores() -> None:
         compute_similarity_scores(query, targets, "invalid_metric")  # type: ignore[arg-type]
 
 
+def test_prefix_by_model() -> None:
+    # nomic-embed-text
+    assert VectorService.prefix_by_model("nomic-embed-text", "search") == "search_query: "
+    assert VectorService.prefix_by_model("nomic-embed-text", "document") == "search_document: "
+    assert VectorService.prefix_by_model("ollama/nomic-embed-text:latest", "search") == "search_query: "
+    assert VectorService.prefix_by_model("ollama/nomic-embed-text:latest", "document") == "search_document: "
+
+    # qwen3-embedding
+    assert "Query:" in VectorService.prefix_by_model("qwen3-embedding", "search")
+    assert VectorService.prefix_by_model("qwen3-embedding", "document") == ""
+
+    # Empty / None / Unsupported models
+    assert VectorService.prefix_by_model(None, "search") == ""
+    assert VectorService.prefix_by_model("", "search") == ""
+    assert VectorService.prefix_by_model("text-embedding-004", "search") == ""
+
+
 def test_vector_service_ollama_mock() -> None:
     with patch.dict(os.environ, {}, clear=True):
         settings = Settings(
@@ -110,12 +127,23 @@ def test_vector_service_ollama_mock() -> None:
     assert svc.resolve_provider() == "ollama"
     assert svc.resolve_embedder_name() == "ollama/nomic-embed-text:latest"
 
+    # Document embedding (default is_query=False)
     vec = svc.embed_text("Patient presents with acute onset dyspnea and denies chest pain.")
     assert len(vec) == 4
     assert np.isclose(np.linalg.norm(vec), 1.0)
     mock_ai.embed.assert_awaited_once_with(
         embedder="ollama/nomic-embed-text:latest",
-        content="Patient presents with acute onset dyspnea and denies chest pain.",
+        content="search_document: Patient presents with acute onset dyspnea and denies chest pain.",
+        config=None,
+    )
+
+    # Query embedding (is_query=True)
+    mock_ai.embed.reset_mock()
+    vec_q = svc.embed_text("acute onset dyspnea", is_query=True)
+    assert len(vec_q) == 4
+    mock_ai.embed.assert_awaited_once_with(
+        embedder="ollama/nomic-embed-text:latest",
+        content="search_query: acute onset dyspnea",
         config=None,
     )
 

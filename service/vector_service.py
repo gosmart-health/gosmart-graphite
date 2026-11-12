@@ -17,6 +17,26 @@ from core.logging import get_logger
 
 logger = get_logger("gosmart_gs.vector_service")
 
+INSTRUCTION_PREFIXES: dict[str, dict[str, Any]] = {
+    "nomic-embed-text": {
+        "search": "search_query: ",
+        "document": "search_document: ",
+        "parameterStyle": "",
+    },
+    "qwen3-embedding": {
+        "search": "Given the search query, retrieve relevant passages that answer the query\nQuery: ",
+        "document": "",
+        "is_parametric": False,
+        "parameterStyle": "",
+    },
+    "quen3-embedding": {
+        "search": "Given the search query, retrieve relevant passages that answer the query\nQuery: ",
+        "document": "",
+        "is_parametric": False,
+        "parameterStyle": "",
+    },
+}
+
 
 class SimilarityMetric(StrEnum):
     """Supported vector similarity and distance metrics mapped to a [0.0, 1.0] score."""
@@ -218,16 +238,16 @@ class VectorService:
             return True
         return False
 
-    def resolve_provider(self) -> str:
-        """Determine the active provider ('ollama', 'googleai', or 'vertexai') from settings."""
+    def resolve_provider(self, model: Optional[str] = None) -> str:
+        """Determine the active provider ('ollama', 'googleai', or 'vertexai') from settings or model."""
+        target_model = (model or self.settings.VECTOR_EMBED_MODEL or "").strip()
         provider = (self.settings.VECTOR_EMBED_PROVIDER or "").strip().lower()
-        model = (self.settings.VECTOR_EMBED_MODEL or "").strip()
 
-        if model.startswith("ollama/"):
+        if target_model.startswith("ollama/"):
             return "ollama"
-        if model.startswith("googleai/"):
+        if target_model.startswith("googleai/"):
             return "googleai"
-        if model.startswith("vertexai/"):
+        if target_model.startswith("vertexai/"):
             if self._get_api_key() and not self.settings.GOOGLE_CLOUD_PROJECT:
                 return "googleai"
             return "vertexai"
@@ -246,20 +266,20 @@ class VectorService:
 
         return provider
 
-    def resolve_embedder_name(self) -> str:
+    def resolve_embedder_name(self, model: Optional[str] = None) -> str:
         """Return the fully-qualified Genkit embedder identifier (e.g. 'ollama/nomic-embed-text:latest')."""
-        model = (self.settings.VECTOR_EMBED_MODEL or "").strip()
-        if not model:
+        target_model = (model or self.settings.VECTOR_EMBED_MODEL or "").strip()
+        if not target_model:
             raise ValueError("GOSMART_GS_VECTOR_EMBED_MODEL is not configured.")
 
         for prefix in ("ollama/", "googleai/", "vertexai/"):
-            if model.startswith(prefix):
-                model = model[len(prefix) :]
+            if target_model.startswith(prefix):
+                target_model = target_model[len(prefix) :]
                 break
 
-        provider = self.resolve_provider()
+        provider = self.resolve_provider(model=target_model)
         if provider in ("ollama", "googleai", "vertexai"):
-            return f"{provider}/{model}"
+            return f"{provider}/{target_model}"
 
         raise ValueError(
             f"Unsupported or missing vector embedding provider '{self.settings.VECTOR_EMBED_PROVIDER}'. "
@@ -306,6 +326,8 @@ class VectorService:
     async def embed_text_async(
         self,
         text: str,
+        model: Optional[str] = None,
+        is_query: bool = False,
         *,
         config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
@@ -313,9 +335,14 @@ class VectorService:
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Input text for vector embedding must be a non-empty string.")
 
-        embedder_name = self.resolve_embedder_name()
-        provider = self.resolve_provider()
+        target_model = model or self.settings.VECTOR_EMBED_MODEL
+        embedder_name = self.resolve_embedder_name(model=target_model)
+        provider = self.resolve_provider(model=target_model)
         dimensions = self.settings.VECTOR_EMBED_DIMENSIONS
+
+        mode: Literal["search", "document"] = "search" if is_query else "document"
+        prefix = self.prefix_by_model(target_model, mode)
+        content = f"{prefix}{text}" if prefix else text
 
         embed_config: dict[str, Any] = dict(config) if config else {}
         if provider in ("vertexai", "googleai") and dimensions and "output_dimensionality" not in embed_config:
@@ -323,7 +350,7 @@ class VectorService:
 
         response = await self.ai.embed(
             embedder=embedder_name,
-            content=text,
+            content=content,
             config=embed_config if embed_config else None,
         )
         if not response or not response[0].embedding:
@@ -335,6 +362,8 @@ class VectorService:
     def embed_text(
         self,
         text: str,
+        model: Optional[str] = None,
+        is_query: bool = False,
         *,
         config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
@@ -352,11 +381,11 @@ class VectorService:
             with ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
                     asyncio.run,
-                    self.embed_text_async(text, config=config),
+                    self.embed_text_async(text, model=model, is_query=is_query, config=config),
                 )
                 return future.result()
 
-        return asyncio.run(self.embed_text_async(text, config=config))
+        return asyncio.run(self.embed_text_async(text, model=model, is_query=is_query, config=config))
 
     @staticmethod
     def cosine_scores(
@@ -398,6 +427,30 @@ class VectorService:
     ) -> list[float]:
         """Compare query_vector against target_vectors using the specified metric and return [0.0, 1.0] scores."""
         return compute_similarity_scores(query_vector, target_vectors, metric=metric)
+
+    @staticmethod
+    def prefix_by_model(model: Optional[str], mode: Literal["search", "document"]) -> str:
+        """Return the instruction prefix for a given embedding model and mode ('search' or 'document')."""
+        if not model or not model.strip():
+            return ""
+
+        model_lc = model.strip().lower()
+        if "/" in model_lc:
+            model_lc = model_lc.split("/")[-1]
+
+        for key, instruction in INSTRUCTION_PREFIXES.items():
+            if model_lc.startswith(key):
+                prefix = instruction.get(mode)
+                if prefix is not None:
+                    return prefix
+                break
+
+        logger.warning(
+            "unsupported_model_or_mode_prefix",
+            model=model,
+            mode=mode,
+        )
+        return ""
 
 
 vector_service = VectorService()

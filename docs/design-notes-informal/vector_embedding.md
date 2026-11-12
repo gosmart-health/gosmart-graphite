@@ -53,6 +53,20 @@ similarity comparisons. Mixing models and parameter size version can lead to
 inconsistent results and 
 may negatively impact the effectiveness of vector-based similarity search and 
 retrieval tasks.
+ 
+### Be aware of Asymmetric Embedding - Feed Texts with Prefixes
+
+When feeding texts to vector embedding models, be aware that it is recommended 
+to use 
+appropriate instruction prefixes based on the model and mode ('search' or 
+'document'). This helps ensure that the model interprets the input text 
+correctly and produces meaningful embeddings. See "Instruction Prefixes" for 
+more details.
+
+For example, `nomic-embed-text` model users `search_query:` prefix for search 
+mode and `search_document: ` for encoding the target strings.
+
+For example with the ``
 
 ### Normalize The Vectors
 
@@ -188,3 +202,8 @@ The meaning of the score:
 * 1.0: The most similar node to the query vector.
 * 0.0: The least similar node to the query vector.
 * -1.0: The node has the "exactly opposite" similarity to the query vector.
+
+## Schema Design Pattern
+
+Please continue to [Decoupled Vector Index Graph Pattern Design](./decoupled_vec_index_graph.md)
+
