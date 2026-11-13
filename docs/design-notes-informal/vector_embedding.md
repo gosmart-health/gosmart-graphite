@@ -1,5 +1,16 @@
 # Vector Embedding Notes
 
+## Terminology
+
+In category theory, an embedding is a specific type of functor that places one
+category inside another without losing its structural identity.
+
+**Vector Embedding** Refers to the method or process of mapping discrete 
+objects.
+
+**Embeddings** (With plural) Usually refer to the derived vectors in our case.
+
+
 ## Models
 
 Clinical texts present unique challenges: dense jargon, abbreviations 
@@ -167,16 +178,60 @@ vector = model.encode(
 
 ## Cypher Examples
 
+### Add a Vector in Node or Relation
+
+It is just a matter of adding a floating point array to a node or relation property.
+
+```python
+# 1. Generate embedding locally
+text = f"{movie['title']}: {movie['plot']}"
+embedding_vector = local_model.encode(text).tolist()  # list of 1536 floats
+
+# 2. Save it directly to the node
+query = """
+MATCH (m:Movie {id: $id})
+SET m.embedding = $embedding
+"""
+
+session.run(query, id=movie["id"], embedding=embedding_vector)
+```
+
 ### Define the Index with `cosine`
 
-```cypher
-from sentence_transformers import SentenceTransformer
+#### Similarity Functions Supported
+`cosine` or `euclidian` can be assigned to `vector.similarity_function` option.
 
-model = SentenceTransformer("michiyasunaga/BioLinkBERT-base")
-vector = model.encode(
-    "Patient presents with acute onset dyspnea and denies chest pain.",
-    normalize_embeddings=True,
-)
+```
+CREATE VECTOR INDEX moviePlots IF NOT EXISTS
+FOR (m:Movie)
+ON m.embedding
+OPTIONS { indexConfig: {
+`vector.dimensions`: 1536,
+`vector.similarity_function`: 'cosine'
+}}
+
+```
+
+Another example here from the Neo4j Documentation is worth a understanding.
+
+**What This Means**
+
+For every Movie and Actor node that has an already-existing 1536-dimensional 
+vector stored in n.embedding, create a vector search index using cosine similarity. 
+Along with each indexed vector, store copies of title, plot, name, and born 
+(if they exist on the node) so they can be returned quickly alongside search
+results without extra database lookups
+
+``` cypher
+CREATE VECTOR INDEX multiLabelAdditionalProperties IF NOT EXISTS
+FOR (n:Movie|Actor)
+ON n.embedding
+WITH [n.title, n.plot, n.name, n.born]
+OPTIONS { indexConfig: {
+`vector.dimensions`: 1536,
+`vector.similarity_function`: 'cosine'
+}}
+
 ```
 
 ### Searching with the cypher

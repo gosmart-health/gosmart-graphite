@@ -69,5 +69,41 @@ type and decode the Base64 encoded data to get the actual text of the report.
 Next we will find sections with the following headings (we need to later
 consider multiple languages, for now, we will try this in English):
 
+## Per-Resource Vector Nodes: Granular Vector Nodes Per Resource
 
+I will be using the `Observation` as an example to describe the approach.
 
+> ### Why Concatenating Strings of all observations is not a good idea?
+> - Semantic Dilution & "Lost in the Middle": An encounter with 30 observations 
+> (labs, vitals, social history, findings) dilutes specific signals. 
+> A query for "elevated diastolic pressure" gets drowned out by unrelated lab panels and notes.
+> - Loss of Granular Clinical Context: An Observation is not just text—it 
+> contains status (e.g. preliminary, amended), interpretation (e.g. HIGH, 
+> CRITICAL), 
+> values with units (150 mmHg), and timestamps. Simple concatenation strips 
+> these semantics.
+> Update Costs: If a single new lab or observation is added or amended 
+> to an Encounter, you have to re-read all observations and regenerate the 
+> entire concatenated embedding.
+
+Text to Embed: Form a structured sentence rather than raw pipe concatenation: 
+"Observation: Blood Pressure. Value: 150/95 mmHg. Interpretation: High. 
+Note: Patient reports morning dizziness."
+
+```text
+(:Patient)-[:HAS_ENCOUNTER]->(:Encounter)-[:HAS_OBSERVATION]->(:Observation)
+                                                                   ▲
+                                                                   │ :INDEXES
+                                                    (:ObservationVectorIndex)
+```
+
+#### Query Example to Return Related Encounters given Observation Search
+
+```cyper
+CALL db.index.vector.queryNodes('observation_vector_index', 10, $queryVector)
+     YIELD node AS vecNode, score
+     MATCH (vecNode)<-[:INDEXES]-(obs:Observation)<-[:HAS_OBSERVATION]-(enc:Encounter)<-[:HAS_ENCOUNTER]-(p:Patient)
+     RETURN p.id, enc.id, obs.codeText, obs.valueString, score
+```
+
+- We may need to de-dupe results by patient and encounter.

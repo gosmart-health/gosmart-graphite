@@ -206,7 +206,7 @@ def normalize_vector(vector: Sequence[float], dimensions: Optional[int] = None) 
     return arr.tolist()
 
 
-class VectorService:
+class EmbeddingService:
     """Computes L2-normalized text embeddings via Genkit (Ollama, Google AI / Gemini, or Vertex AI)."""
 
     def __init__(
@@ -453,4 +453,4 @@ class VectorService:
         return ""
 
 
-vector_service = VectorService()
+vector_service = EmbeddingService()
