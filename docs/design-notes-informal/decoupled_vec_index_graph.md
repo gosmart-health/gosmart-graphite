@@ -1,61 +1,55 @@
 # Decoupled Vector Index Graph Pattern Design
 
-## Why We Need This?
+## Why Do We Need This?
 
-In Vector Embeddings, Vectors contain a lot of information, and we need a way 
-to efficiently store
-and retrieve them. The decoupled vector index graph pattern is a design that allows us to do this.
+Vector embeddings are dense, high-dimensional representations that carry substantial data, so we need an efficient way to store and retrieve them. The decoupled vector index graph pattern addresses this by separating embedding vectors from their target domain nodes.
 
-Instead of storing vectors along with the target nodes, which may already have a lot of information, the decoupled vector index graph pattern separates the vectors from the target nodes. This allows for more efficient storage and retrieval of vectors, as well as easier management of the data.
+Rather than storing vectors directly on target nodes—which may already hold large payloads and many properties—decoupling them keeps domain nodes lightweight, improves storage and retrieval efficiency, and simplifies data management.
 
-Because we are using Graph databases, the decoupled vector index graph pattern 
-provides a flexible and scalable solution for storing and retrieving vector 
-embeddings. By separating the vectors from the target nodes, we can optimize 
-the storage and retrieval of vectors, while still maintaining the relationships 
-between the nodes in the graph.
+In a graph database, this pattern provides a flexible and scalable way to manage embeddings while preserving all domain relationships between nodes. In addition, vector representations are tightly coupled to specific embedding models, which evolve over time. Separating vectors into dedicated nodes allows us to re-embed, version, or swap models without modifying target domain nodes or disrupting the underlying graph topology.
 
-In addition, vectors are highly specific to the embedding models which can 
-evolve over time. By separating the vectors from the target nodes, we can 
-easily update the vectors without affecting the relationships between 
-the nodes in the graph.
-
-## The Architecture
+## Architecture
 
 ### Embedding Nodes
 
-It should derived from the AuditableNode.
+Embedding nodes should inherit from `AuditableNode`.
 
 #### Properties
 
-In addition to the values from the AuditableNode, each Embedding node should have:
+In addition to the fields inherited from `AuditableNode`, each Embedding node should define:
 
-- label: `:EMBEDDING`
-- modelTag: System specific short string describing the model used.
-- size: Size of the vector
-- vector: Normalized vector representation, an array of floats.
-  - Index of this vector
-- targetFieldTag: Tag identifying the field in the target node that the vector is associated with.
+- **Label**: `:EMBEDDING`
+- **`modelTag`**: System-specific short string identifying the embedding model used.
+- **`size`**: Dimensionality (length) of the vector.
+- **`vector`**: L2-normalized vector representation (an array of floats), indexed by a vector index.
+- **`targetFieldTag`**: Tag identifying the field on the target node that the vector represents.
 
-### Relations - `:EMBEDS`
+### Relationships — `:EMBEDS`
 
-The relations which will be based on AuditableRelation. 
+The `:EMBEDS` relationship should inherit from `AuditableRelation`.
 
-- aspect: Tag identifying the aspect of the target node that the vector is 
-  associated with, for example `IMPRESSION`, `FINDINGS`
+- **`aspect`**: Tag identifying the aspect of the target node associated with the vector (for example, `IMPRESSION` or `FINDINGS`).
 
 ## Specific Vectorization of `DiagnosticReport` Nodes
 
-One of the key interest in semantic search of the DiagnosticReport nodes the 
-text of the reports is to allow natural text search of contents
-of text reports.
+A primary use case for semantic search on `DiagnosticReport` nodes is enabling natural-language 
+search over the narrative text of diagnostic reports.
 
-These reports are usually much longer than the context window, and vectorizing 
-the entire report can be computationally expensive. Therefore, we can vectorize 
-only the relevant sections of the report and here is how we will approach this
-specific issue.
+Full reports can exceed an embedding model's context window, and embedding an entire multi-section 
+document as a single vector risks diluting key clinical signals. To avoid this, we split each 
+report into its relevant clinical sections and generate embeddings per section.
 
-The text reports are usually Base64 encoded in the FHIR `presentedForm` array
-like this:
+
+#### Notable Fields
+
+**` DiagnosticReport.conclusion`: Holds the narrative text of the conclusion. 
+This can be embedded.
+** `DiagnosticReport.conclusionCode`: Hold the SNOMED CT, ICD, LOINC codes of 
+   the conclusion.
+** `DiagnosticReport.result`
+
+
+In FHIR, plain-text reports are typically Base64-encoded inside the `presentedForm` array, as shown below:
 
 ```text
 "presentedForm": [ {
@@ -63,32 +57,179 @@ like this:
     "data": "CjIwMTYtMDEtMTAKCiMgQ2hpZW..."
   } ]
 ```
-Given this is not a PDF or other document, we will use the text/plain content 
-type and decode the Base64 encoded data to get the actual text of the report.
 
-Next we will find sections with the following headings (we need to later
-consider multiple languages, for now, we will try this in English):
+Assuming the attachment is plain text rather than a PDF or another binary format, we look for the `text/plain` content type and decode the Base64-encoded `data` field to obtain the raw report text.
 
-## Per-Resource Vector Nodes: Granular Vector Nodes Per Resource
+### Sectional Embedding Generation
 
-I will be using the `Observation` as an example to describe the approach.
+Given the plain text of a diagnostic (radiology) report, we split it into canonical sections—following the standard structure of radiology reports—to prevent semantic dilution. (Initial heading patterns target English reports; multilingual support will be considered later.)
 
-> ### Why Concatenating Strings of all observations is not a good idea?
-> - Semantic Dilution & "Lost in the Middle": An encounter with 30 observations 
-> (labs, vitals, social history, findings) dilutes specific signals. 
-> A query for "elevated diastolic pressure" gets drowned out by unrelated lab panels and notes.
-> - Loss of Granular Clinical Context: An Observation is not just text—it 
-> contains status (e.g. preliminary, amended), interpretation (e.g. HIGH, 
-> CRITICAL), 
-> values with units (150 mmHg), and timestamps. Simple concatenation strips 
-> these semantics.
-> Update Costs: If a single new lab or observation is added or amended 
-> to an Encounter, you have to re-read all observations and regenerate the 
-> entire concatenated embedding.
+The following example demonstrates how to perform this parsing:
 
-Text to Embed: Form a structured sentence rather than raw pipe concatenation: 
-"Observation: Blood Pressure. Value: 150/95 mmHg. Interpretation: High. 
-Note: Patient reports morning dizziness."
+```python
+from dataclasses import dataclass, field
+import re
+from typing import Literal
+from pydantic import BaseModel, Field
+
+CanonicalSection = Literal[
+    "INDICATION",
+    "TECHNIQUE",
+    "COMPARISON",
+    "FINDINGS",
+    "IMPRESSION",
+]
+
+
+class ParsedReport(BaseModel):
+    indication: str | None = Field(
+        default=None,
+        description="Clinical history or reason for exam, verbatim.",
+    )
+    technique: str | None = Field(
+        default=None,
+        description="Imaging protocol or technique, verbatim.",
+    )
+    comparison: str | None = Field(
+        default=None,
+        description="Prior comparison studies, verbatim.",
+    )
+    findings: str | None = Field(
+        default=None,
+        description="Detailed radiological observations, verbatim.",
+    )
+    impression: str | None = Field(
+        default=None,
+        description="Final diagnostic conclusion or opinion, verbatim.",
+    )
+
+
+@dataclass(slots=True)
+class InstitutionParsingProfile:
+    institution_id: str
+    heading_patterns: dict[CanonicalSection, re.Pattern[str]] = field(default_factory=dict)
+
+
+DEFAULT_HEADING_PATTERNS: dict[CanonicalSection, re.Pattern[str]] = {
+    "INDICATION": re.compile(
+        r"^(?:CLINICAL\s+)?(?:HISTORY|INDICATION|REASON\s+FOR\s+(?:EXAM|STUDY))[:\s-]*$",
+        re.IGNORECASE,
+    ),
+    "TECHNIQUE": re.compile(
+        r"^(?:TECHNIQUE|PROTOCOL|PROCEDURE)[:\s-]*$",
+        re.IGNORECASE,
+    ),
+    "COMPARISON": re.compile(
+        r"^(?:COMPARISON|PRIOR\s+STUDIES)[:\s-]*$",
+        re.IGNORECASE,
+    ),
+    "FINDINGS": re.compile(
+        r"^(?:FINDINGS|OBSERVATIONS|REPORT)[:\s-]*$",
+        re.IGNORECASE,
+    ),
+    "IMPRESSION": re.compile(
+        r"^(?:IMPRESSION|CONCLUSION|OPINION|DIAGNOSIS|SUMMARY)[:\s-]*$",
+        re.IGNORECASE,
+    ),
+}
+
+DEFAULT_PROFILE = InstitutionParsingProfile(
+    institution_id="default",
+    heading_patterns=DEFAULT_HEADING_PATTERNS,
+)
+
+INLINE_HEADER_RE = re.compile(
+    r"^(CLINICAL\s+HISTORY|INDICATION|TECHNIQUE|COMPARISON|FINDINGS|IMPRESSION|CONCLUSION|OPINION):\s*(.+)$",
+    re.IGNORECASE,
+)
+
+
+def _map_inline_token(header_token: str) -> CanonicalSection:
+    upper = header_token.upper()
+    if "HISTORY" in upper or "INDICATION" in upper:
+        return "INDICATION"
+    if "TECHNIQUE" in upper:
+        return "TECHNIQUE"
+    if "COMPARISON" in upper:
+        return "COMPARISON"
+    if "FINDINGS" in upper:
+        return "FINDINGS"
+    return "IMPRESSION"
+
+
+def parse_with_regex_profile(
+    raw_text: str,
+    profile: InstitutionParsingProfile = DEFAULT_PROFILE,
+) -> tuple[ParsedReport, bool]:
+    """
+    Deterministic Tier 1 parser: splits narrative report lines using facility-specific regexes.
+    Returns (ParsedReport, is_complete).
+    """
+    buckets: dict[CanonicalSection, list[str]] = {}
+    current_section: CanonicalSection | None = None
+
+    for raw_line in raw_text.splitlines():
+        trimmed = raw_line.strip()
+        if not trimmed:
+            continue
+
+        # 1. Check standalone section heading lines
+        matched_section: CanonicalSection | None = None
+        for section, pattern in profile.heading_patterns.items():
+            if pattern.match(trimmed):
+                matched_section = section
+                break
+
+        if matched_section is not None:
+            current_section = matched_section
+            buckets.setdefault(current_section, [])
+            continue
+
+        # 2. Check inline headers (e.g., "IMPRESSION: No acute intracranial abnormality.")
+        if inline_match := INLINE_HEADER_RE.match(trimmed):
+            current_section = _map_inline_token(inline_match.group(1))
+            buckets.setdefault(current_section, [])
+            if remainder := inline_match.group(2).strip():
+                buckets[current_section].append(remainder)
+            continue
+
+        if current_section is not None:
+            buckets[current_section].append(trimmed)
+
+    sections = ParsedReport(
+        indication="\n".join(buckets["INDICATION"]).strip() or None
+        if "INDICATION" in buckets
+        else None,
+        technique="\n".join(buckets["TECHNIQUE"]).strip() or None
+        if "TECHNIQUE" in buckets
+        else None,
+        comparison="\n".join(buckets["COMPARISON"]).strip() or None
+        if "COMPARISON" in buckets
+        else None,
+        findings="\n".join(buckets["FINDINGS"]).strip() or None
+        if "FINDINGS" in buckets
+        else None,
+        impression="\n".join(buckets["IMPRESSION"]).strip() or None
+        if "IMPRESSION" in buckets
+        else None,
+    )
+
+    is_complete = bool(sections.impression and sections.findings)
+    return sections, is_complete
+```
+
+## Granular Per-Resource Vector Nodes
+
+Using `Observation` as an example, here is why per-resource vector nodes are preferred over aggregating all observations into a single text blob:
+
+> ### Why Concatenating All Observations into a Single String Is Not Recommended
+>
+> - **Semantic Dilution & "Lost in the Middle"**: An encounter with 30 observations (labs, vitals, social history, findings) dilutes individual signals. A query for `"elevated diastolic pressure"` gets drowned out by unrelated lab panels and notes.
+> - **Loss of Granular Clinical Context**: An `Observation` is not just free text—it carries structured metadata such as status (e.g., `preliminary`, `amended`), interpretation (e.g., `HIGH`, `CRITICAL`), numeric values with units (`150 mmHg`), and timestamps. Naive concatenation obscures these structured clinical semantics.
+> - **Update Costs**: If a single observation is added to or amended in an `Encounter`, you would have to re-read every observation in that encounter and regenerate the entire concatenated embedding.
+
+**Text to Embed**: Form a structured sentence rather than using raw pipe concatenation, for example:
+`"Observation: Blood Pressure. Value: 150/95 mmHg. Interpretation: High. Note: Patient reports morning dizziness."`
 
 ```text
 (:Patient)-[:HAS_ENCOUNTER]->(:Encounter)-[:HAS_OBSERVATION]->(:Observation)
@@ -97,13 +238,13 @@ Note: Patient reports morning dizziness."
                                                     (:ObservationVectorIndex)
 ```
 
-#### Query Example to Return Related Encounters given Observation Search
+#### Query Example: Returning Related Encounters from an Observation Search
 
-```cyper
+```cypher
 CALL db.index.vector.queryNodes('observation_vector_index', 10, $queryVector)
      YIELD node AS vecNode, score
      MATCH (vecNode)<-[:INDEXES]-(obs:Observation)<-[:HAS_OBSERVATION]-(enc:Encounter)<-[:HAS_ENCOUNTER]-(p:Patient)
      RETURN p.id, enc.id, obs.codeText, obs.valueString, score
 ```
 
-- We may need to de-dupe results by patient and encounter.
+- Results may need to be deduplicated by patient and encounter.
