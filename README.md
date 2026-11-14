@@ -21,7 +21,7 @@ A high-performance DICOM Knowledge Graph backend server powered by **Python 3.14
 - **Vector Embedding Computation Service**: Unified text embedding generation (`VectorService`) powered by **Genkit** (`genkit-ollama` and `genkit-google-genai`) supporting both local/network Ollama models (e.g., `nomic-embed-text:latest`) and Google Vertex AI embedding models with L2 vector normalization.
 - **Audit Trail**: Structured audit logging with configurable retention, Neo4j persistence, and background `AuditActor` for non-blocking audit writes.
 - **Docker & Docker Compose**: Multi-stage Dockerfile with full-stack `docker compose` orchestration (Graph Server + Neo4j), health checks, named volumes, and unprivileged runtime user.
-- **CLI Management Tool**: Typer-based CLI (`cli.py`) with `start`, `health`, `echo`, `send`, `mcp`, and `admin` commands for server operation and administration.
+- **CLI Management Tool**: Typer-based CLI (`src/cli.py` / `gosmart-gs`) with `start`, `health`, `echo`, `send`, `mcp`, and `admin` commands for server operation and administration.
 - **CI/CD Pipeline**: GitHub Actions workflow with Ruff linting, pip-audit vulnerability scanning, CycloneDX SBOM generation, multi-platform unit tests, and Docker build verification.
 - **UV & Python 3.14**: Managed with Astral `uv` on Python 3.14.
 - **Interactive Exploration Notebook**: Ready-to-run Jupyter notebook exploring all library functions.
@@ -32,65 +32,68 @@ A high-performance DICOM Knowledge Graph backend server powered by **Python 3.14
 
 ```text
 gosmart-dicom-py-graph-server/
-├── actor/                       # Pykka Actor system
-│   ├── __init__.py
-│   ├── audit_actor.py           # Background audit logging actor
-│   ├── dicom_actor.py           # DICOM ingestion & processing actor
-│   ├── fhir_actor.py            # Background FHIR fetching & graph registration actor
-│   └── store_scu_actor.py       # Outbound C-STORE SCU transfer actor
-├── api/                         # FastAPI routes & endpoints
-│   ├── __init__.py
-│   └── v1/
-│       ├── endpoints/
-│       │   ├── auth.py          # Login, token refresh, API key management, OAuth2
-│       │   ├── dicom.py         # Ingestion, mock generator, and C-ECHO endpoints
-│       │   ├── dicomweb.py      # DICOMweb RESTful services (STOW-RS, WADO-RS, QIDO-RS)
-│       │   ├── graph.py         # Graph traversal and Cypher query endpoints
-│       │   ├── health.py        # Health status (Neo4j, Pykka, Storage)
-│       │   └── system.py        # System metadata, DICOM configurations, bootstrap
-│       └── router.py            # Aggregated v1 API router
-├── cli/                         # Administrative CLI subcommands
-│   ├── __init__.py
-│   └── admin.py                 # Admin bootstrap & API key generation commands
-├── cli.py                       # Typer CLI entrypoint (start, health, echo, send, mcp)
-├── core/                        # Application settings & logging
-│   ├── __init__.py
-│   ├── auth_dependency.py       # FastAPI dependency for JWT / API key authentication
-│   ├── config.py                # Pydantic Settings with GOSMART_GS_ prefix
-│   ├── logging.py               # Structured logging (structlog) with rotation
-│   └── security.py              # JWT signing, Argon2 hashing, API key utilities
-├── db/                          # Database connections
-│   ├── __init__.py
-│   └── neo4j.py                 # Neo4j async client, pooling, schema constraints
-├── model/                       # Pydantic domain models
-│   ├── __init__.py
-│   ├── audit.py                 # Audit log and audit trail models
-│   ├── auth.py                  # JWT token, API key, OAuth request/response models
-│   ├── dicom.py                 # Patient, Study, Series, Instance models
-│   ├── fhir/                    # FHIR R4B graph node and relationship models
-│   ├── graph.py                 # Cypher and graph schema models
-│   ├── health.py                # Health response models
-│   ├── media.py                 # StorageScheme, ParsedStorageUri, MediaMetadata
-│   └── system.py                # System, DICOMConfiguration, User, Group models
+├── src/                         # Python application source code
+│   ├── actor/                   # Pykka Actor system
+│   │   ├── __init__.py
+│   │   ├── audit_actor.py       # Background audit logging actor
+│   │   ├── dicom_actor.py       # DICOM ingestion & processing actor
+│   │   ├── fhir_actor.py        # Background FHIR fetching & graph registration actor
+│   │   └── store_scu_actor.py   # Outbound C-STORE SCU transfer actor
+│   ├── api/                     # FastAPI routes & endpoints
+│   │   ├── __init__.py
+│   │   └── v1/
+│   │       ├── endpoints/
+│   │       │   ├── auth.py      # Login, token refresh, API key management, OAuth2
+│   │       │   ├── dicom.py     # Ingestion, mock generator, and C-ECHO endpoints
+│   │       │   ├── dicomweb.py  # DICOMweb RESTful services (STOW-RS, WADO-RS, QIDO-RS)
+│   │       │   ├── graph.py     # Graph traversal and Cypher query endpoints
+│   │       │   ├── health.py    # Health status (Neo4j, Pykka, Storage)
+│   │       │   └── system.py    # System metadata, DICOM configurations, bootstrap
+│   │       └── router.py        # Aggregated v1 API router
+│   ├── cli/                     # Administrative CLI subcommands
+│   │   ├── __init__.py
+│   │   └── admin.py             # Admin bootstrap & API key generation commands
+│   ├── core/                    # Application settings & logging
+│   │   ├── __init__.py
+│   │   ├── auth_dependency.py   # FastAPI dependency for JWT / API key authentication
+│   │   ├── config.py            # Pydantic Settings with GOSMART_GS_ prefix
+│   │   ├── logging.py           # Structured logging (structlog) with rotation
+│   │   └── security.py          # JWT signing, Argon2 hashing, API key utilities
+│   ├── db/                      # Database connections
+│   │   ├── __init__.py
+│   │   ├── fhir_schema.cypher   # FHIR R4B Neo4j schema constraints & indexes
+│   │   └── neo4j.py             # Neo4j async client, pooling, schema constraints
+│   ├── model/                   # Pydantic domain models
+│   │   ├── __init__.py
+│   │   ├── audit.py             # Audit log and audit trail models
+│   │   ├── auth.py              # JWT token, API key, OAuth request/response models
+│   │   ├── dicom.py             # Patient, Study, Series, Instance models
+│   │   ├── fhir/                # FHIR R4B graph node and relationship models
+│   │   ├── graph.py             # Cypher and graph schema models
+│   │   ├── health.py            # Health response models
+│   │   ├── media.py             # StorageScheme, ParsedStorageUri, MediaMetadata
+│   │   └── system.py            # System, DICOMConfiguration, User, Group models
+│   ├── service/                 # Business logic services
+│   │   ├── __init__.py
+│   │   ├── dicom_service.py     # pydicom parsing, mock generation, storage save
+│   │   ├── dicomweb_service.py  # DICOMweb STOW-RS, WADO-RS, QIDO-RS implementations
+│   │   ├── embedding_service.py # Genkit vector embedding computation (Ollama & Vertex AI)
+│   │   ├── fhir_service.py      # FHIR R4B batch fetching and Neo4j graph upsert
+│   │   ├── graph_service.py     # Cypher queries for DICOM & FHIR hierarchy
+│   │   ├── group_service.py     # Organization and group management
+│   │   ├── mcp_service.py       # MCP server (SSE, StreamableHTTP, STDIO transports)
+│   │   ├── media_service.py     # Storage-agnostic async media (Local, UNC, GCS, S3, Azure)
+│   │   ├── pynetdicom_service.py# Dynamic SCP lifecycle, C-STORE/C-ECHO, network AE
+│   │   ├── system_service.py    # System bootstrap, DICOM configuration management
+│   │   └── user_service.py      # User CRUD, admin bootstrapping, password management
+│   ├── cli.py                   # Typer CLI entrypoint (start, health, echo, send, mcp)
+│   └── main.py                  # FastAPI application factory & Uvicorn entrypoint
+├── devop-scripts/               # DevOps & data cleanup CLI utilities
 ├── neo4j/                       # Standalone Neo4j Docker Compose for development
 │   ├── docker-compose.yaml      # Neo4j-only compose (for local dev/testing)
 │   └── README.md                # Neo4j Docker setup guide
 ├── notebooks/                   # Exploration and interactive experiments
 │   └── exploration.ipynb        # Interactive notebook for pydicom, neo4j, pykka, etc.
-├── service/                     # Business logic services
-│   ├── __init__.py
-│   ├── dicom_service.py         # pydicom parsing, mock generation, storage save
-│   ├── dicomweb_service.py      # DICOMweb STOW-RS, WADO-RS, QIDO-RS implementations
-│   ├── fhir_service.py          # FHIR R4B batch fetching and Neo4j graph upsert
-│   ├── graph_service.py         # Cypher queries for DICOM & FHIR hierarchy
-│   ├── group_service.py         # Organization and group management
-│   ├── mcp_service.py           # MCP server (SSE, StreamableHTTP, STDIO transports)
-│   ├── media_service.py         # Storage-agnostic async media (Local, UNC, GCS, S3, Azure)
-│   ├── pynetdicom_service.py    # Dynamic SCP lifecycle, C-STORE/C-ECHO, network AE
-│   ├── system_service.py        # System bootstrap, DICOM configuration management
-│   ├── user_service.py          # User CRUD, admin bootstrapping, password management
-│   └── vector_service.py        # Genkit vector embedding computation (Ollama & Vertex AI)
-├── main.py                      # FastAPI application factory & Uvicorn entrypoint
 ├── start.sh                     # Shell script shortcut for local development launch
 ├── pyproject.toml               # Project metadata, dependencies (uv/hatchling)
 ├── uv.lock                      # Locked dependency versions
@@ -143,7 +146,7 @@ gosmart-dicom-py-graph-server/
 
 ## ☁️ Storage Agnostic Media Service (`media_service.py`)
 
-`gosmart-dicom-py-graph-server` includes a unified, storage-agnostic `MediaService` (`service/media_service.py`) that abstracts file operations across local storage, Windows network shares, and multi-cloud providers.
+`gosmart-dicom-py-graph-server` includes a unified, storage-agnostic `MediaService` (`src/service/media_service.py`) that abstracts file operations across local storage, Windows network shares, and multi-cloud providers.
 
 ### Supported URI Schemes
 
@@ -266,9 +269,9 @@ MATCH (n) DETACH DELETE n;
 ```
 
 ```bash
-uv run python main.py
+uv run python src/main.py
 # or directly with uvicorn
-uv run uvicorn main:app --reload --port 8086
+uv run uvicorn main:app --app-dir src --reload --port 8086
 ```
 
 Interactive Swagger documentation will be available at:
@@ -389,27 +392,27 @@ The `docker-compose.yml` includes sensible defaults. To override any variable, e
 
 ### 4. CLI Commands
 
-The Typer-based CLI (`cli.py`) provides operational commands for server management:
+The Typer-based CLI (`src/cli.py` / `gosmart-gs`) provides operational commands for server management:
 
 ```bash
 # Start the FastAPI server
-uv run python cli.py start --host 0.0.0.0 --port 8086 --reload
+uv run python src/cli.py start --host 0.0.0.0 --port 8086 --reload
 
 # Check system health (Neo4j, Pykka Actors, Storage)
-uv run python cli.py health
+uv run python src/cli.py health
 
 # Send C-ECHO to a remote DICOM AE
-uv run python cli.py echo --aet REMOTE_AE --host 192.168.1.100 --port 104
+uv run python src/cli.py echo --aet REMOTE_AE --host 192.168.1.100 --port 104
 
 # Send DICOM files to a remote AE via Store SCU Actor
-uv run python cli.py send /path/to/dicom/ --dest-aet REMOTE_AE --host 192.168.1.100 --port 104
+uv run python src/cli.py send /path/to/dicom/ --dest-aet REMOTE_AE --host 192.168.1.100 --port 104
 
 # Run standalone MCP server (SSE, StreamableHTTP, or STDIO)
-uv run python cli.py mcp --transport sse --port 8001
-uv run python cli.py mcp --transport stdio
+uv run python src/cli.py mcp --transport sse --port 8001
+uv run python src/cli.py mcp --transport stdio
 ```
 
-Administrative commands are available via `cli/admin.py`:
+Administrative commands are available via `src/cli/admin.py` (`python -m cli.admin`):
 
 ```bash
 # Bootstrap initial admin user
@@ -484,7 +487,7 @@ GOSMART_GS_INITIAL_ADMIN_USERNAME=admin
 
 ---
 
-### 2. Out-of-Band Disaster Recovery & Password Reset (`cli/admin.py`)
+### 2. Out-of-Band Disaster Recovery & Password Reset (`src/cli/admin.py`)
 
 If a superuser forgets their password or loses access, the system provides **two** recovery mechanisms to prevent lockout:
 
@@ -518,7 +521,7 @@ If running in containerized environments (Docker / Kubernetes) where running a C
 
 ---
 
-### 3. Out-of-Band API Key Generation (`cli/admin.py`)
+### 3. Out-of-Band API Key Generation (`src/cli/admin.py`)
 
 Generate scoped API keys directly via CLI for MCP agents, automation bots, and external systems:
 
@@ -616,7 +619,7 @@ In **Cursor**, MCP servers are configured in the user's home directory:
 >       "args": [
 >         "run",
 >         "python",
->         "cli.py",
+>         "src/cli.py",
 >         "mcp",
 >         "--transport",
 >         "stdio"
@@ -699,7 +702,7 @@ Or using STDIO command:
       "args": [
         "run",
         "python",
-        "cli.py",
+        "src/cli.py",
         "mcp",
         "--transport",
         "stdio"

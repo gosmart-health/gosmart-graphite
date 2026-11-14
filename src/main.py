@@ -1,6 +1,7 @@
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import uvicorn
@@ -210,11 +211,14 @@ app = create_app()
 def run() -> None:
     """Entrypoint to run the server directly."""
     settings = get_settings()
+    src_dir = str(Path(__file__).resolve().parent)
     uvicorn.run(
         "main:app",
+        app_dir=src_dir,
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.RELOAD,
+        reload_dirs=[src_dir] if settings.RELOAD else None,
         log_level=settings.LOG_LEVEL.lower(),
     )
 

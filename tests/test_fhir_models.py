@@ -331,7 +331,7 @@ def test_cypher_schema_constraints_and_indexes_synchronization() -> None:
             expected_prop = f"n.`{prop}`" if prop == "class" else f"n.{prop}"
             assert f"FOR (n:{label}) ON ({expected_prop})" in joined_indexes
 
-    # Verify db/fhir_schema.cypher matches generate_fhir_cypher_script()
-    cypher_file = Path(__file__).resolve().parent.parent / "db" / "fhir_schema.cypher"
+    # Verify src/db/fhir_schema.cypher matches generate_fhir_cypher_script()
+    cypher_file = Path(__file__).resolve().parent.parent / "src" / "db" / "fhir_schema.cypher"
     assert cypher_file.exists()
     assert cypher_file.read_text(encoding="utf-8") == generate_fhir_cypher_script()

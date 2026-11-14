@@ -204,7 +204,9 @@ def notify_fhir(
     test_id: Optional[str] = None,
     acted_by: str = "fhir_actor",
 ) -> None:
-    """Convenience fire-and-forget helper to send patient_id, accession_number, study_uid, and series_uid to FhirActor."""
+    """Convenience fire-and-forget helper to send patient_id, accession_number,
+    study_uid, and series_uid to FhirActor.
+    """
     try:
         actor_ref = get_fhir_actor()
         actor_ref.tell(

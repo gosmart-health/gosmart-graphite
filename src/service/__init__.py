@@ -1,4 +1,15 @@
 from service.dicom_service import DicomService, dicom_service
+from service.embedding_service import (
+    EmbeddingService,
+    SimilarityMetric,
+    compute_cosine_scores,
+    compute_dot_product_scores,
+    compute_euclidean_scores,
+    compute_manhattan_scores,
+    compute_similarity_scores,
+    normalize_vector,
+    vector_service,
+)
 from service.fhir_service import (
     EncounterContext,
     EncRelevantResources,
@@ -10,21 +21,15 @@ from service.group_service import GroupService, group_service
 from service.media_service import MediaService, media_service
 from service.pynetdicom_service import PyNetDicomService, pynetdicom_service
 from service.user_service import UserService, user_service
-from service.vector_service import (
-    SimilarityMetric,
-    VectorService,
-    compute_cosine_scores,
-    compute_dot_product_scores,
-    compute_euclidean_scores,
-    compute_manhattan_scores,
-    compute_similarity_scores,
-    normalize_vector,
-    vector_service,
-)
+
+VectorService = EmbeddingService
+embedding_service = vector_service
 
 __all__ = [
     "DicomService",
     "dicom_service",
+    "EmbeddingService",
+    "embedding_service",
     "EncRelevantResources",
     "EncounterContext",
     "FHIRBatchFetcher",

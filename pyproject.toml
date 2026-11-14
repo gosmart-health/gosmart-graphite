@@ -39,7 +39,7 @@ dependencies = [
 gosmart-gs = "cli:cli_app"
 
 [tool.pytest.ini_options]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
 
 [build-system]
@@ -47,8 +47,21 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["actor", "api", "core", "db", "model", "service"]
-only-include = ["actor", "api", "core", "db", "model", "service", "cli.py", "main.py"]
+packages = ["src/actor", "src/api", "src/cli", "src/core", "src/db", "src/model", "src/service"]
+only-include = [
+    "src/actor",
+    "src/api",
+    "src/cli",
+    "src/core",
+    "src/db",
+    "src/model",
+    "src/service",
+    "src/cli.py",
+    "src/main.py",
+]
+
+[tool.hatch.build.targets.wheel.sources]
+"src" = ""
 
 [dependency-groups]
 dev = [
@@ -60,6 +73,7 @@ dev = [
 [tool.ruff]
 line-length = 120
 target-version = "py314"
+src = ["src", "."]
 extend-exclude = ["notebooks", "skills", "**/*.md"]
 
 [tool.ruff.lint]
@@ -70,3 +84,5 @@ select = [
     "W",
 ]
 
+[tool.ruff.lint.isort]
+known-first-party = ["actor", "api", "cli", "core", "db", "main", "model", "service", "tests"]

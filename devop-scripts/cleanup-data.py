@@ -10,10 +10,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union
 
-# Ensure project root is available on sys.path regardless of execution directory
+# Ensure project root and src/ directory are available on sys.path regardless of execution directory
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+SRC_DIR = PROJECT_ROOT / "src"
+for _p in (SRC_DIR, PROJECT_ROOT):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from neo4j.exceptions import DriverError  # noqa: E402
 

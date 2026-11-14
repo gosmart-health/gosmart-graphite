@@ -52,7 +52,15 @@ def start(
         )
     )
 
-    uvicorn.run("main:app", host=bind_host, port=bind_port, reload=reload)
+    src_dir = str(Path(__file__).resolve().parent)
+    uvicorn.run(
+        "main:app",
+        app_dir=src_dir,
+        host=bind_host,
+        port=bind_port,
+        reload=reload,
+        reload_dirs=[src_dir] if reload else None,
+    )
 
 
 @cli_app.command()

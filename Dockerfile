@@ -34,14 +34,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy project source and metadata needed by build backend (hatchling)
 COPY README.md LICENSE ./
-COPY actor/ ./actor/
-COPY api/ ./api/
-COPY core/ ./core/
-COPY db/ ./db/
-COPY model/ ./model/
-COPY service/ ./service/
-COPY cli/ ./cli/
-COPY cli.py main.py ./
+COPY src/ ./src/
 
 # Install root project into virtual environment
 RUN uv sync --frozen --no-dev
@@ -71,6 +64,7 @@ COPY --from=builder --chown=appuser:appuser /app /app
 
 # Environment configuration
 ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH="/app/src" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     GOSMART_GS_HOST=0.0.0.0 \
@@ -96,5 +90,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8086/api/v1/health || exit 1
 
 # Start Uvicorn server
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8086"]
-
+CMD ["uvicorn", "main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8086"]
