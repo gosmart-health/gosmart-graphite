@@ -1,5 +1,5 @@
 # ==============================================================================
-# Multi-stage Dockerfile for GoSmart DICOM Graph Server
+# Multi-stage Dockerfile for Gosmart.Health GRAPHITE
 # Base image: Python 3.14 (Debian Slim)
 # Managed with Astral uv
 # ==============================================================================
@@ -45,7 +45,7 @@ RUN uv sync --frozen --no-dev
 FROM python:3.14-slim AS runner
 
 LABEL maintainer="GoSmart Health" \
-      description="GoSmart DICOM Knowledge Graph Server on Python 3.14"
+      description="Gosmart.Health GRAPHITE — Graph-Based Clinical DICOM and FHIR Integrated Server on Python 3.14"
 
 # Runtime system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -90,4 +90,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8086/api/v1/health || exit 1
 
 # Start Uvicorn server
-CMD ["uvicorn", "main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8086"]
+CMD ["uvicorn", "gosmart_graphite.main:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8086"]

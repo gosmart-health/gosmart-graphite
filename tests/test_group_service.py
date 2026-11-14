@@ -2,9 +2,9 @@ import uuid
 
 import pytest
 
-from db.neo4j import neo4j_client
-from service.graph_service import graph_service
-from service.group_service import group_service
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.service.graph_service import graph_service
+from gosmart_graphite.service.group_service import group_service
 
 
 @pytest.mark.anyio

@@ -1,14 +1,14 @@
 # Hazard Analysis & Software Risk Management Plan
 
 **Document ID:** RMF-GSGS-001  
-**Project:** `gosmart-dicom-py-graph-server`  
+**Project:** `gosmart-graphite`  
 **Regulatory Standard Alignment:** ISO 14971:2019, IEC 62304 Clause 7, FDA SaMD Safety Guidance  
 
 ---
 
 ## 1. Risk Management Framework
 
-This document provides a comprehensive Software Hazard Analysis for the **GoSmart DICOM Graph Server & VNA (`gosmart-dicom-py-graph-server`)** in accordance with **ISO 14971:2019** and **IEC 62304 Clause 7**.
+This document provides a comprehensive Software Hazard Analysis for the **Gosmart.Health GRAPHITE (`gosmart-graphite`)** in accordance with **ISO 14971:2019** and **IEC 62304 Clause 7**.
 
 The risk management process assesses clinical, technical, and operational hazards associated with:
 1. Ingesting, parsing, and storing DICOM composite objects.
@@ -39,4 +39,4 @@ The risk management process assesses clinical, technical, and operational hazard
 
 ## 3. Risk Management Conclusion
 
-All identified hazards (HAZ-001 through HAZ-010) have been mitigated through software design controls. The residual risk for the GoSmart DICOM Graph Server is assessed as **acceptable** for medical image archiving, knowledge graph querying, and research operations under **ISO 14971:2019**.
+All identified hazards (HAZ-001 through HAZ-010) have been mitigated through software design controls. The residual risk for the Gosmart.Health GRAPHITE is assessed as **acceptable** for medical image archiving, knowledge graph querying, and research operations under **ISO 14971:2019**.

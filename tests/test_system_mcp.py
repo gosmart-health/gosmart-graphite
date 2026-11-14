@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from service.mcp_service import (
+from gosmart_graphite.service.mcp_service import (
     bootstrap_system_defaults,
     create_dicom_configuration,
     delete_dicom_configuration,
@@ -13,7 +13,7 @@ from service.mcp_service import (
     update_dicom_configuration,
     update_system_info,
 )
-from service.system_service import system_service
+from gosmart_graphite.service.system_service import system_service
 
 
 @pytest.mark.anyio

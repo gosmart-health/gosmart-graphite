@@ -1,5 +1,5 @@
 ### ==============================================================================
-### GoSmart DICOM Graph Server - Administrative & Authentication Requests
+### Gosmart.Health GRAPHITE - Administrative & Authentication Requests
 ### ==============================================================================
 ### Host variables are defined in .vscode/settings.json ("$shared" / "local" / "docker")
 ### You can switch environments via VS Code status bar (bottom right: Rest Client Env)

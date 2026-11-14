@@ -5,14 +5,14 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from actor.audit_actor import get_audit_actor, stop_audit_actor
-from actor.dicom_actor import stop_dicom_actor
-from core.auth_dependency import get_current_user
-from main import app
-from model.audit import AuditAction
-from service.dicom_service import dicom_service
-from service.dicomweb_service import dicomweb_service
-from service.graph_service import graph_service
+from gosmart_graphite.actor.audit_actor import get_audit_actor, stop_audit_actor
+from gosmart_graphite.actor.dicom_actor import stop_dicom_actor
+from gosmart_graphite.core.auth_dependency import get_current_user
+from gosmart_graphite.main import app
+from gosmart_graphite.model.audit import AuditAction
+from gosmart_graphite.service.dicom_service import dicom_service
+from gosmart_graphite.service.dicomweb_service import dicomweb_service
+from gosmart_graphite.service.graph_service import graph_service
 
 
 @pytest.fixture(scope="module", autouse=True)

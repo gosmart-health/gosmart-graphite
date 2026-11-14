@@ -1,6 +1,6 @@
 import pytest
 
-from service.mcp_service import mcp
+from gosmart_graphite.service.mcp_service import mcp
 
 
 @pytest.mark.anyio

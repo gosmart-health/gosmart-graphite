@@ -9,17 +9,17 @@ from pydicom.dataset import Dataset
 from pynetdicom import AE
 from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelFind
 
-from actor.audit_actor import get_audit_actor, stop_audit_actor
-from actor.dicom_actor import get_dicom_actor, stop_dicom_actor
-from core.config import get_settings
-from db.neo4j import neo4j_client
-from main import app
-from model.audit import AuditAction
-from service.dicom_service import dicom_service
-from service.graph_service import graph_service
-from service.group_service import group_service
-from service.pynetdicom_service import PyNetDicomService
-from service.system_service import system_service
+from gosmart_graphite.actor.audit_actor import get_audit_actor, stop_audit_actor
+from gosmart_graphite.actor.dicom_actor import get_dicom_actor, stop_dicom_actor
+from gosmart_graphite.core.config import get_settings
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.main import app
+from gosmart_graphite.model.audit import AuditAction
+from gosmart_graphite.service.dicom_service import dicom_service
+from gosmart_graphite.service.graph_service import graph_service
+from gosmart_graphite.service.group_service import group_service
+from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
+from gosmart_graphite.service.system_service import system_service
 
 
 def get_free_port() -> int:
@@ -101,7 +101,7 @@ async def test_rebac_dicom_full_organization_lifecycle():
     aet_a = f"AET_A_{suffix}"
     aet_b = f"AET_B_{suffix}"
 
-    from model.system import DICOMConfigurationCreateRequest
+    from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
 
     cfg_a = await system_service.create_configuration(
         DICOMConfigurationCreateRequest(
@@ -245,7 +245,7 @@ async def test_rebac_dicom_full_organization_lifecycle():
     # -------------------------------------------------------------------------
     # 5. DICOMweb QIDO-RS ReBAC Scoping
     # -------------------------------------------------------------------------
-    from core.auth_dependency import get_current_group_context, get_current_user
+    from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
 
     app.dependency_overrides[get_current_user] = lambda: {
         "id": f"dr_user_{test_id}",

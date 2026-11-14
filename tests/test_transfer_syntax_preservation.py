@@ -16,12 +16,12 @@ from pynetdicom.sop_class import (
     StudyRootQueryRetrieveInformationModelMove,
 )
 
-from core.config import get_settings
-from db.neo4j import neo4j_client
-from model.graph import DICOMConfigurationNode
-from service.dicom_service import dicom_service
-from service.media_service import media_service
-from service.pynetdicom_service import PyNetDicomService
+from gosmart_graphite.core.config import get_settings
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.graph import DICOMConfigurationNode
+from gosmart_graphite.service.dicom_service import dicom_service
+from gosmart_graphite.service.media_service import media_service
+from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
 
 TEST_ASSET_DCM = Path("tests/assets/mr/MR.2.25.10986282349447326157620829373816019196.dcm")
 

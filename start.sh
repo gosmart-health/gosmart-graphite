@@ -4,4 +4,4 @@ if [ -f .venv/bin/activate ]; then
   source .venv/bin/activate
 fi
 unset VIRTUAL_ENV
-uv run python src/main.py
+uv run python -m gosmart_graphite.main

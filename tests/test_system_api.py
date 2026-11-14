@@ -3,9 +3,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from core.auth_dependency import get_current_user
-from main import app
-from service.system_service import system_service
+from gosmart_graphite.core.auth_dependency import get_current_user
+from gosmart_graphite.main import app
+from gosmart_graphite.service.system_service import system_service
 
 
 @pytest.fixture

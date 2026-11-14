@@ -1,4 +1,4 @@
-from actor.dicom_actor import DicomIngestionActor
+from gosmart_graphite.actor.dicom_actor import DicomIngestionActor
 
 
 def test_actor_lifecycle_and_messaging():

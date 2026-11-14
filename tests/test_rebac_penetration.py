@@ -3,12 +3,12 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from core.security import create_access_token
-from main import app
-from service.dicom_service import dicom_service
-from service.graph_service import graph_service
-from service.group_service import group_service
-from service.user_service import user_service
+from gosmart_graphite.core.security import create_access_token
+from gosmart_graphite.main import app
+from gosmart_graphite.service.dicom_service import dicom_service
+from gosmart_graphite.service.graph_service import graph_service
+from gosmart_graphite.service.group_service import group_service
+from gosmart_graphite.service.user_service import user_service
 
 
 @pytest.fixture

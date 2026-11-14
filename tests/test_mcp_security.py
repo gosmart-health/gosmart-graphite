@@ -4,10 +4,10 @@ import uuid
 import httpx
 import pytest
 
-from core.security import create_access_token
-from service.graph_service import graph_service
-from service.group_service import group_service
-from service.mcp_service import (
+from gosmart_graphite.core.security import create_access_token
+from gosmart_graphite.service.graph_service import graph_service
+from gosmart_graphite.service.group_service import group_service
+from gosmart_graphite.service.mcp_service import (
     _current_mcp_user,
     get_current_mcp_acted_by,
     get_mcp_sse_app,
@@ -15,7 +15,7 @@ from service.mcp_service import (
     mcp,
     update_system_info,
 )
-from service.user_service import user_service
+from gosmart_graphite.service.user_service import user_service
 
 LOCAL_MCP_HOST = "127.0.0.1"
 LOCAL_MCP_PORT = 8086
@@ -149,7 +149,7 @@ async def test_mcp_context_propagation_and_rbac():
     await graph_service.init_schema_constraints()
 
     # Bootstrap default system node first
-    from service.system_service import system_service
+    from gosmart_graphite.service.system_service import system_service
 
     await system_service.bootstrap_system(test_id=test_id)
 
@@ -239,13 +239,13 @@ async def test_mcp_streamable_http_auth_and_handshake():
             assert "application/json" in res_auth.headers.get(
                 "content-type", ""
             ) or "text/event-stream" in res_auth.headers.get("content-type", "")
-            assert "gosmart-dicom-graph-server" in res_auth.text
+            assert "gosmart-graphite" in res_auth.text
 
 
 @pytest.mark.anyio
 async def test_mcp_streamable_http_via_main_app_lifespan():
     """Verify StreamableHTTP transport accessed via FastAPI root /mcp with lifespan."""
-    from main import create_app
+    from gosmart_graphite.main import create_app
 
     test_app = create_app()
 
@@ -287,7 +287,7 @@ async def test_mcp_streamable_http_via_main_app_lifespan():
             assert res_init.status_code == 200
             session_id = res_init.headers.get("mcp-session-id")
             assert session_id is not None
-            assert "gosmart-dicom-graph-server" in res_init.text
+            assert "gosmart-graphite" in res_init.text
 
             # 3. Subsequent request with mcp-session-id header (without token in query or header)
             res_subsequent = await client.post(

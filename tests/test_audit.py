@@ -4,11 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from actor.audit_actor import get_audit_actor, record_audit, stop_audit_actor
-from actor.dicom_actor import stop_dicom_actor
-from core.config import get_settings
-from model.audit import AuditAction, AuditNode
-from service.graph_service import graph_service
+from gosmart_graphite.actor.audit_actor import get_audit_actor, record_audit, stop_audit_actor
+from gosmart_graphite.actor.dicom_actor import stop_dicom_actor
+from gosmart_graphite.core.config import get_settings
+from gosmart_graphite.model.audit import AuditAction, AuditNode
+from gosmart_graphite.service.graph_service import graph_service
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -183,8 +183,8 @@ def test_audit_actor_synchronous_and_async():
 @pytest.mark.anyio
 async def test_dicom_c_store_records_audit():
     """Test that incoming DICOM C-STORE records an audit event."""
-    from service.dicom_service import dicom_service
-    from service.pynetdicom_service import pynetdicom_service
+    from gosmart_graphite.service.dicom_service import dicom_service
+    from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
     pid = f"PID_{uuid.uuid4().hex[:6]}"
     calling_aet = f"SCU_{uuid.uuid4().hex[:4]}"
@@ -237,7 +237,7 @@ async def test_dicom_c_store_records_audit():
 
 def test_dicom_c_echo_records_audit():
     """Test that incoming C-ECHO verification records an audit event."""
-    from service.pynetdicom_service import pynetdicom_service
+    from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
     echo_aet = f"ECHO_{uuid.uuid4().hex[:4]}"
 
@@ -272,7 +272,7 @@ def test_audit_actor_database_failure_resilience():
     actor = get_audit_actor()
     test_id = f"test_resilience_{uuid.uuid4().hex[:6]}"
     with patch(
-        "service.graph_service.GraphService.save_audit_log_sync",
+        "gosmart_graphite.service.graph_service.GraphService.save_audit_log_sync",
         side_effect=RuntimeError("Neo4j connection lost"),
     ):
         # Synchronous ask when DB is down
@@ -298,7 +298,7 @@ def test_audit_actor_database_failure_resilience():
 
 def test_dicom_actor_mock_ingestion_records_audit():
     """Test that DicomIngestionActor records audit event on mock ingestion."""
-    from actor.dicom_actor import get_dicom_actor
+    from gosmart_graphite.actor.dicom_actor import get_dicom_actor
 
     ingest_actor = get_dicom_actor()
     test_id = f"test_ingest_{uuid.uuid4().hex[:6]}"
@@ -333,7 +333,7 @@ def test_dicom_c_find_records_audit():
     """Test that C-FIND execution records an audit event."""
     from pydicom.dataset import Dataset
 
-    from service.pynetdicom_service import pynetdicom_service
+    from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
     find_aet = f"FIND_{uuid.uuid4().hex[:4]}"
 

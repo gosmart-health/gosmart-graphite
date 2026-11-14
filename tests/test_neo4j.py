@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from neo4j.exceptions import ServiceUnavailable
 
-from db.neo4j import Neo4jClient
+from gosmart_graphite.db.neo4j import Neo4jClient
 from neo4j import NotificationDisabledClassification, NotificationMinimumSeverity
 
 
@@ -14,7 +14,7 @@ async def test_verify_connectivity_success():
     mock_driver = AsyncMock()
     mock_driver.verify_connectivity = AsyncMock(return_value=None)
 
-    with patch("db.neo4j.AsyncGraphDatabase.driver", return_value=mock_driver):
+    with patch("gosmart_graphite.db.neo4j.AsyncGraphDatabase.driver", return_value=mock_driver):
         is_connected = await client.verify_connectivity()
         assert is_connected is True
         mock_driver.verify_connectivity.assert_awaited_once()
@@ -29,7 +29,7 @@ async def test_verify_connectivity_failure():
     mock_driver = AsyncMock()
     mock_driver.verify_connectivity = AsyncMock(side_effect=ServiceUnavailable("Connection refused"))
 
-    with patch("db.neo4j.AsyncGraphDatabase.driver", return_value=mock_driver):
+    with patch("gosmart_graphite.db.neo4j.AsyncGraphDatabase.driver", return_value=mock_driver):
         is_connected = await client.verify_connectivity()
         assert is_connected is False
 
@@ -54,13 +54,16 @@ async def test_driver_notification_suppression_config():
     mock_async_driver = AsyncMock()
     mock_sync_driver = MagicMock()
 
-    with patch("db.neo4j.AsyncGraphDatabase.driver", return_value=mock_async_driver) as mock_async_factory:
+    with patch(
+        "gosmart_graphite.db.neo4j.AsyncGraphDatabase.driver",
+        return_value=mock_async_driver,
+    ) as mock_async_factory:
         await client.connect()
         _, async_kwargs = mock_async_factory.call_args
         assert async_kwargs.get("notifications_min_severity") == NotificationMinimumSeverity.WARNING
         assert async_kwargs.get("notifications_disabled_classifications") == [NotificationDisabledClassification.SCHEMA]
 
-    with patch("db.neo4j.GraphDatabase.driver", return_value=mock_sync_driver) as mock_sync_factory:
+    with patch("gosmart_graphite.db.neo4j.GraphDatabase.driver", return_value=mock_sync_driver) as mock_sync_factory:
         client.get_sync_driver()
         _, sync_kwargs = mock_sync_factory.call_args
         assert sync_kwargs.get("notifications_min_severity") == NotificationMinimumSeverity.WARNING

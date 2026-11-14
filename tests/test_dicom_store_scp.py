@@ -6,9 +6,9 @@ import pydicom
 import pytest
 from pynetdicom import AE
 
-from core.config import get_settings
-from service.media_service import media_service
-from service.pynetdicom_service import PyNetDicomService
+from gosmart_graphite.core.config import get_settings
+from gosmart_graphite.service.media_service import media_service
+from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
 
 TEST_ASSET_DCM = Path("tests/assets/mr/MR.2.25.10986282349447326157620829373816019196.dcm")
 
@@ -77,7 +77,7 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
     assert stored_ds.PatientID == ds.PatientID
 
     # Verify Instance provenance tracking in Neo4j (if connected)
-    from db.neo4j import neo4j_client
+    from gosmart_graphite.db.neo4j import neo4j_client
 
     try:
         driver = neo4j_client.get_sync_driver()
@@ -125,7 +125,7 @@ def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server)
 
     # Simulate downstream Neo4j failure
     with patch(
-        "service.graph_service.graph_service.save_hierarchy_sync",
+        "gosmart_graphite.service.graph_service.graph_service.save_hierarchy_sync",
         side_effect=RuntimeError("Simulated DB failure"),
     ):
         status = assoc.send_c_store(ds)

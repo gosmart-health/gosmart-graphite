@@ -1,21 +1,21 @@
 # Software Requirements Specification (SRS)
 
 **Document ID:** SRS-GSGS-001  
-**Project:** `gosmart-dicom-py-graph-server`  
+**Project:** `gosmart-graphite`  
 **Regulatory Standard Alignment:** IEC 62304 Clause 5.2, FDA 21 CFR 820.30, ISO 13485:2016 Clause 7.3  
 
 ---
 
 ## 1. Scope & Purpose
 
-This document specifies the functional, performance, security, and interface requirements for the **GoSmart DICOM Graph Server & VNA (`gosmart-dicom-py-graph-server`)**. The software functions as a headless, graph-native medical imaging Vendor Neutral Archive (VNA) and Knowledge Graph platform.
+This document specifies the functional, performance, security, and interface requirements for the **Gosmart.Health GRAPHITE (`gosmart-graphite`)**. The software functions as a headless, graph-native medical imaging Vendor Neutral Archive (VNA) and Knowledge Graph platform.
 
 The system combines:
 1. Standard DICOM Upper Layer network communication (DIMSE: C-STORE, C-FIND, C-GET, C-MOVE, C-ECHO) as a full VNA archive.
 2. Property graph database persistence in Neo4j capturing the hierarchical clinical relationships (`Patient -> Study -> Series -> Instance`) and cross-study query topologies.
 3. Concurrent, non-blocking ingestion and graph indexing powered by the Pykka actor concurrency system.
 4. Embedded Model Context Protocol (MCP) server over Server-Sent Events (SSE) for agentic and external system integration.
-5. Headless terminal management via the `gosmart-gs` CLI (with no dependency on client web UIs).
+5. Headless terminal management via the `gosmart-graphite` CLI (with no dependency on client web UIs).
 6. Industrial-strength structured logging via `structlog` with arbitrary JSON values and 7-day auto-rotating file handlers.
 
 ---
@@ -36,7 +36,7 @@ The system combines:
 | **REQ-FUN-010** | Graph Query API Endpoints | The system SHALL provide REST endpoints (`GET /api/v1/graph/patients`, `GET /api/v1/graph/patients/{id}`, `POST /api/v1/graph/query`) allowing traversal and arbitrary Cypher execution against Neo4j. | High |
 | **REQ-FUN-011** | Model Context Protocol (MCP) Tools | The system SHALL expose standard MCP tools (`health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `execute_cypher`, `echo_scu`) accessible via both Server-Sent Events (SSE) and STDIO. | High |
 | **REQ-FUN-012** | MCP SSE Mount | The system SHALL mount the MCP server directly onto the FastAPI application at `/mcp/sse` and `/mcp/messages/` for seamless real-time agentic interaction. | High |
-| **REQ-FUN-013** | Headless CLI Management (`gosmart-gs`) | The system SHALL provide a command-line interface (`gosmart-gs`) offering commands `start`, `health`, `mock`, `ingest`, `patients`, `query`, `echo`, and `mcp` without requiring any web UI. | High |
+| **REQ-FUN-013** | Headless CLI Management (`gosmart-graphite`) | The system SHALL provide a command-line interface (`gosmart-graphite`) offering commands `start`, `health`, `mock`, `ingest`, `patients`, `query`, `echo`, and `mcp` without requiring any web UI. | High |
 | **REQ-FUN-014** | Industrial-Strength Structured Logging | The system SHALL implement structured logging via `structlog` outputting ISO 8601 timestamps, log level, logger name, and arbitrary key-value JSON data. | High |
 | **REQ-FUN-015** | 7-Day Auto-Rotating File Logging | The system SHALL automatically rotate log files on a 7-day basis by default (`TimedRotatingFileHandler(when="D", interval=7)`), retaining a configurable number of backup cycles (`GOSMART_GS_LOG_BACKUP_COUNT`, default 8). | High |
 | **REQ-FUN-016** | Contextual Log Tracing | The system SHALL support contextvars binding (`bind_log_context`, `clear_log_context`) and SHALL automatically bind `request_id`, `http_method`, `path`, and `client_ip` to all logs emitted within an HTTP request lifecycle. | High |

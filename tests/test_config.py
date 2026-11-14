@@ -1,7 +1,7 @@
 import os
 from unittest.mock import patch
 
-from core.config import Settings
+from gosmart_graphite.core.config import Settings
 
 
 def test_fhir_settings_defaults():

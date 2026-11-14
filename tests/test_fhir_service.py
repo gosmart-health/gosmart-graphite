@@ -15,16 +15,16 @@ from fhir.resources.R4B.procedure import Procedure
 from fhir.resources.R4B.reference import Reference
 from fhir.resources.R4B.servicerequest import ServiceRequest
 
-from core.config import get_settings
-from db.neo4j import neo4j_client
-from model.dicom import DicomHierarchy, InstanceModel, PatientModel, SeriesModel, StudyModel
-from service.fhir_service import (
+from gosmart_graphite.core.config import get_settings
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.dicom import DicomHierarchy, InstanceModel, PatientModel, SeriesModel, StudyModel
+from gosmart_graphite.service.fhir_service import (
     EncounterContext,
     EncRelevantResources,
     FHIRBatchFetcher,
     FhirService,
 )
-from service.graph_service import graph_service
+from gosmart_graphite.service.graph_service import graph_service
 from tests.utils.config_utils import ConfigUtils
 
 config_utils = ConfigUtils()

@@ -1,4 +1,4 @@
-from model.auth import (
+from gosmart_graphite.model.auth import (
     AuthenticatorNode,
     BelongsToRelation,
     GroupNode,

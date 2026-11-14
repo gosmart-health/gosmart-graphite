@@ -3,7 +3,7 @@ from datetime import timedelta
 import jwt
 import pytest
 
-from core.security import (
+from gosmart_graphite.core.security import (
     create_access_token,
     create_refresh_token,
     decode_token,

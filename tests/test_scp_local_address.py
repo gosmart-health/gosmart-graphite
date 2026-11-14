@@ -1,6 +1,6 @@
 import socket
 
-from service.pynetdicom_service import is_local_address, pynetdicom_service
+from gosmart_graphite.service.pynetdicom_service import is_local_address, pynetdicom_service
 
 
 def get_free_port() -> int:

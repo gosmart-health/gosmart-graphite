@@ -1,7 +1,7 @@
 # Authentication, Authorization & Identity Security Design Specification
 
 **Document ID:** SEC-GSGS-050  
-**Project:** `gosmart-dicom-py-graph-server`  
+**Project:** `gosmart-graphite`  
 **Regulatory Alignment:** HIPAA Security Rule (§ 164.312), FDA Cybersecurity in Medical Devices (Section 524B FD&C Act), IEC 62304 Clause 5.3  
 **Status:** Approved for Phased Implementation  
 
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary & Security Objectives
 
-This specification defines the authentication (AuthN), authorization (AuthZ), and identity management architecture for the `gosmart-dicom-py-graph-server`. The architecture secures both **FastAPI REST / DICOMweb endpoints** and the **Model Context Protocol (MCP) service** ([`service/mcp_service.py`](file:///Users/manabutokunaga/development/dicom-root/gosmart-dicom-py-graph-server/service/mcp_service.py)).
+This specification defines the authentication (AuthN), authorization (AuthZ), and identity management architecture for the `gosmart-graphite`. The architecture secures both **FastAPI REST / DICOMweb endpoints** and the **Model Context Protocol (MCP) service** ([`service/mcp_service.py`](file://src/gosmart_graphite/service/mcp_service.py)).
 
 ### Core Objectives:
 1. **Decoupled Identity & Authenticator Model**: Clear separation between `User` (principal), `Identity` (provider linkage), and `Authenticator` (credentials/factors).
@@ -202,7 +202,7 @@ gantt
      - `get_current_user` (Extract & decode Bearer JWT or API key).
      - `get_current_group_context` (Validate optional `X-Group-ID` against user's accessible groups).
      - `require_roles(roles: List[str])`.
-  2. Guard [`api/v1/router.py`](file:///Users/manabutokunaga/development/dicom-root/gosmart-dicom-py-graph-server/api/v1/router.py) and DICOMweb endpoints (`/dicomweb/*`).
+  2. Guard [`api/v1/router.py`](file://src/gosmart_graphite/api/v1/router.py) and DICOMweb endpoints (`/dicomweb/*`).
   3. Bind authenticated user context into structured logging (`main.py` middleware) and graph mutation metadata (`ActedBy`, `ActedInGroup`).
 * **Validation**:
   * HTTP 401 Unauthorized tests for unauthenticated requests on protected endpoints.

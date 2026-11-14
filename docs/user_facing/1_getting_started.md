@@ -1,4 +1,4 @@
-# Getting Started with GoSmart DICOM Graph Server
+# Getting Started with Gosmart.Health GRAPHITE
 
 ## Getting Ready
 

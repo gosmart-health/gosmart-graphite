@@ -1148,7 +1148,7 @@ grpc = [
 ]
 
 [[package]]
-name = "gosmart-dicom-py-graph-server"
+name = "gosmart-graphite"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

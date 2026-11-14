@@ -1,6 +1,6 @@
 # Design Controls & Regulatory Documentation
 
-This directory contains the regulatory-compliant Design Controls documentation suite for the **GoSmart DICOM Graph Server & VNA (`gosmart-dicom-py-graph-server`)**, aligned with **FDA 21 CFR 820.30**, **IEC 62304:2006+A1:2015**, **ISO 14971:2019**, and **ISO 13485:2016 Clause 7.3**.
+This directory contains the regulatory-compliant Design Controls documentation suite for the **Gosmart.Health GRAPHITE (`gosmart-graphite`)**, aligned with **FDA 21 CFR 820.30**, **IEC 62304:2006+A1:2015**, **ISO 14971:2019**, and **ISO 13485:2016 Clause 7.3**.
 
 The design documents are prefixed with `gsgs_XXX` in logical order (from requirements to architecture, risk management, verification & validation, traceability, and cybersecurity).
 
@@ -9,7 +9,7 @@ The design documents are prefixed with `gsgs_XXX` in logical order (from require
 > [!IMPORTANT]
 > **Regulatory Intent & Quality Management Scope**
 > 
-> The GoSmart DICOM Graph Server is engineered with rigorous medical device design controls, safety architecture, and verification traceability. The structure and content of these documents provide turnkey artifacts for medical device manufacturers, hospital IT integrators, and clinical research organizations seeking to adopt, validate, and clear this software within their own certified Quality Management System (QMS) and 510(k) submissions.
+> The Gosmart.Health GRAPHITE is engineered with rigorous medical device design controls, safety architecture, and verification traceability. The structure and content of these documents provide turnkey artifacts for medical device manufacturers, hospital IT integrators, and clinical research organizations seeking to adopt, validate, and clear this software within their own certified Quality Management System (QMS) and 510(k) submissions.
 
 ---
 

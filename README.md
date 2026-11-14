@@ -1,4 +1,4 @@
-# GoSmart DICOM Graph Server (`gosmart-dicom-py-graph-server`)
+# Gosmart.Health GRAPHITE (`gosmart-graphite`)
 
 A high-performance DICOM Knowledge Graph backend server powered by **Python 3.14**, **FastAPI**, **Pydantic**, **Neo4j**, **pydicom**, **pynetdicom**, and **Pykka**.
 
@@ -21,7 +21,7 @@ A high-performance DICOM Knowledge Graph backend server powered by **Python 3.14
 - **Vector Embedding Computation Service**: Unified text embedding generation (`VectorService`) powered by **Genkit** (`genkit-ollama` and `genkit-google-genai`) supporting both local/network Ollama models (e.g., `nomic-embed-text:latest`) and Google Vertex AI embedding models with L2 vector normalization.
 - **Audit Trail**: Structured audit logging with configurable retention, Neo4j persistence, and background `AuditActor` for non-blocking audit writes.
 - **Docker & Docker Compose**: Multi-stage Dockerfile with full-stack `docker compose` orchestration (Graph Server + Neo4j), health checks, named volumes, and unprivileged runtime user.
-- **CLI Management Tool**: Typer-based CLI (`src/cli.py` / `gosmart-gs`) with `start`, `health`, `echo`, `send`, `mcp`, and `admin` commands for server operation and administration.
+- **CLI Management Tool**: Typer-based CLI (`src/gosmart_graphite/cli.py` / `gosmart-graphite`) with `start`, `health`, `echo`, `send`, `mcp`, and `admin` commands for server operation and administration.
 - **CI/CD Pipeline**: GitHub Actions workflow with Ruff linting, pip-audit vulnerability scanning, CycloneDX SBOM generation, multi-platform unit tests, and Docker build verification.
 - **UV & Python 3.14**: Managed with Astral `uv` on Python 3.14.
 - **Interactive Exploration Notebook**: Ready-to-run Jupyter notebook exploring all library functions.
@@ -31,7 +31,7 @@ A high-performance DICOM Knowledge Graph backend server powered by **Python 3.14
 ## 📁 Project Structure
 
 ```text
-gosmart-dicom-py-graph-server/
+gosmart-graphite/
 ├── src/                         # Python application source code
 │   ├── actor/                   # Pykka Actor system
 │   │   ├── __init__.py
@@ -146,7 +146,7 @@ gosmart-dicom-py-graph-server/
 
 ## ☁️ Storage Agnostic Media Service (`media_service.py`)
 
-`gosmart-dicom-py-graph-server` includes a unified, storage-agnostic `MediaService` (`src/service/media_service.py`) that abstracts file operations across local storage, Windows network shares, and multi-cloud providers.
+`gosmart-graphite` includes a unified, storage-agnostic `MediaService` (`src/gosmart_graphite/service/media_service.py`) that abstracts file operations across local storage, Windows network shares, and multi-cloud providers.
 
 ### Supported URI Schemes
 
@@ -292,7 +292,7 @@ Docker provides the fastest path to a fully running stack with both the Graph Se
 
 #### Option A: Full-Stack Launch (Recommended)
 
-The root `docker-compose.yml` orchestrates both the **GoSmart DICOM Graph Server** and **Neo4j** in a single command:
+The root `docker-compose.yml` orchestrates both the **Gosmart.Health GRAPHITE** and **Neo4j** in a single command:
 
 ```bash
 docker compose up -d --build
@@ -302,7 +302,7 @@ This starts:
 
 | Service | Container Name | Ports | Description |
 | :--- | :--- | :--- | :--- |
-| **Graph Server** | `gosmart-dicom-graph-server` | `8086` (HTTP), `11112` (DICOM SCP) | FastAPI REST API, MCP endpoints, DICOM SCP |
+| **Graph Server** | `gosmart-graphite` | `8086` (HTTP), `11112` (DICOM SCP) | FastAPI REST API, MCP endpoints, DICOM SCP |
 | **Neo4j** | `gosmart-neo4j` | `7474` (Browser), `7687` (Bolt) | Graph database with health check |
 
 **Service Endpoints after launch:**
@@ -335,20 +335,20 @@ docker compose down -v
 To build the Docker image separately (e.g., for custom deployment):
 
 ```bash
-docker build -t gosmart-dicom-graph-server .
+docker build -t gosmart-graphite .
 ```
 
 Run the image standalone (requires an external Neo4j instance):
 
 ```bash
 docker run -d \
-  --name gosmart-dicom-graph-server \
+  --name gosmart-graphite \
   -p 8086:8086 \
   -p 11112:11112 \
   -e GOSMART_GS_DB_CONNECTION_URI=bolt://host.docker.internal:7687 \
   -e GOSMART_GS_DB_PASSWORD=your_password \
   -e GOSMART_GS_INITIAL_ADMIN_PASSWORD=MySecurePassword123! \
-  gosmart-dicom-graph-server
+  gosmart-graphite
 ```
 
 #### Dockerfile Architecture
@@ -392,24 +392,24 @@ The `docker-compose.yml` includes sensible defaults. To override any variable, e
 
 ### 4. CLI Commands
 
-The Typer-based CLI (`src/cli.py` / `gosmart-gs`) provides operational commands for server management:
+The Typer-based CLI (`src/gosmart_graphite/cli.py` / `gosmart-graphite`) provides operational commands for server management:
 
 ```bash
 # Start the FastAPI server
-uv run python src/cli.py start --host 0.0.0.0 --port 8086 --reload
+uv run python src/gosmart_graphite/cli.py start --host 0.0.0.0 --port 8086 --reload
 
 # Check system health (Neo4j, Pykka Actors, Storage)
-uv run python src/cli.py health
+uv run python src/gosmart_graphite/cli.py health
 
 # Send C-ECHO to a remote DICOM AE
-uv run python src/cli.py echo --aet REMOTE_AE --host 192.168.1.100 --port 104
+uv run python src/gosmart_graphite/cli.py echo --aet REMOTE_AE --host 192.168.1.100 --port 104
 
 # Send DICOM files to a remote AE via Store SCU Actor
-uv run python src/cli.py send /path/to/dicom/ --dest-aet REMOTE_AE --host 192.168.1.100 --port 104
+uv run python src/gosmart_graphite/cli.py send /path/to/dicom/ --dest-aet REMOTE_AE --host 192.168.1.100 --port 104
 
 # Run standalone MCP server (SSE, StreamableHTTP, or STDIO)
-uv run python src/cli.py mcp --transport sse --port 8001
-uv run python src/cli.py mcp --transport stdio
+uv run python src/gosmart_graphite/cli.py mcp --transport sse --port 8001
+uv run python src/gosmart_graphite/cli.py mcp --transport stdio
 ```
 
 Administrative commands are available via `src/cli/admin.py` (`python -m cli.admin`):
@@ -537,7 +537,7 @@ uv run python -m cli.admin create-api-key --email admin@gosmart.health --name "A
 
 ## 🤖 Model Context Protocol (MCP) Server Configuration
 
-GoSmart DICOM Graph Server implements the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) exposing DICOM ingestion, C-ECHO verification, graph querying, and system administration tools.
+Gosmart.Health GRAPHITE implements the [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) exposing DICOM ingestion, C-ECHO verification, graph querying, and system administration tools.
 
 MCP can run over **SSE (Server-Sent Events HTTP)** or **STDIO**.
 
@@ -602,7 +602,7 @@ In **Cursor**, MCP servers are configured in the user's home directory:
 ```json
 {
   "mcpServers": {
-    "gosmart-dicom-graph-server": {
+    "gosmart-graphite": {
       "url": "http://127.0.0.1:8086/sse?api_key=gs_live_YOUR_API_KEY_HERE"
     }
   }
@@ -614,12 +614,12 @@ In **Cursor**, MCP servers are configured in the user's home directory:
 > ```json
 > {
 >   "mcpServers": {
->     "gosmart-dicom-graph-server": {
+>     "gosmart-graphite": {
 >       "command": "uv",
 >       "args": [
 >         "run",
 >         "python",
->         "src/cli.py",
+>         "src/gosmart_graphite/cli.py",
 >         "mcp",
 >         "--transport",
 >         "stdio"
@@ -685,7 +685,7 @@ In **AntiGravity**, MCP configuration files are managed under the user's home di
 ```json
 {
   "mcpServers": {
-    "gosmart-dicom-graph-server": {
+    "gosmart-graphite": {
       "serverUrl": "http://127.0.0.1:8086/sse?api_key=gs_live_YOUR_API_KEY_HERE"
     }
   }
@@ -697,12 +697,12 @@ Or using STDIO command:
 ```json
 {
   "mcpServers": {
-    "gosmart-dicom-graph-server": {
+    "gosmart-graphite": {
       "command": "uv",
       "args": [
         "run",
         "python",
-        "src/cli.py",
+        "src/gosmart_graphite/cli.py",
         "mcp",
         "--transport",
         "stdio"

@@ -1,14 +1,14 @@
 # Verification & Validation Plan (VVP)
 
 **Document ID:** VVP-GSGS-001  
-**Project:** `gosmart-dicom-py-graph-server`  
+**Project:** `gosmart-graphite`  
 **Regulatory Standard Alignment:** IEC 62304 Clause 5.5 – 5.7, FDA 21 CFR 820.30(f)(g), FDA Software Validation Guidance  
 
 ---
 
 ## 1. Scope & Strategy
 
-This document defines the software verification and validation activities for the **GoSmart DICOM Graph Server & VNA (`gosmart-dicom-py-graph-server`)**.
+This document defines the software verification and validation activities for the **Gosmart.Health GRAPHITE (`gosmart-graphite`)**.
 
 The verification strategy encompasses:
 1. **Unit Verification**: Automated testing of isolated modules (Pydantic models, DICOM parsing, structlog formatting, Neo4j query builders).
@@ -41,7 +41,7 @@ The verification strategy encompasses:
 | **TC-LOG-002** | System | Log Auto-Rotation / `REQ-FUN-015` | Configure `TimedRotatingFileHandler` with `LOG_ROTATION_DAYS=7` and `LOG_BACKUP_COUNT=8`. Verify handler properties: `when="D"`, interval equals 7 days, and backup count equals 8. | `tests/test_logging.py::test_logging_setup_and_7_day_rotation` |
 | **TC-MCP-001** | System | MCP Tool Discovery / `REQ-FUN-011`, `012` | Call `mcp.list_tools()`. Verify that all 7 required tools (`health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `execute_cypher`, `echo_scu`) are registered. | `tests/test_mcp.py::test_mcp_list_tools` |
 | **TC-MCP-002** | System | MCP Mock Tool Execution / `REQ-FUN-011` | Invoke `mcp.call_tool("generate_mock_dicom", ...)`. Verify that tool executes, saves DICOM file, returns `CallToolResult` with `is_error=False`, and handles offline Neo4j gracefully. | `tests/test_mcp.py::test_mcp_generate_mock_tool` |
-| **TC-CLI-001** | System | Headless CLI / `REQ-FUN-013` | Invoke `uv run gosmart-gs --help` and `uv run gosmart-gs health`. Verify zero exit code and formatted status table output. | Manual & CI execution. |
+| **TC-CLI-001** | System | Headless CLI / `REQ-FUN-013` | Invoke `uv run gosmart-graphite --help` and `uv run gosmart-graphite health`. Verify zero exit code and formatted status table output. | Manual & CI execution. |
 | **TC-SYS-001** | Unit & Integration | `SystemService` / `REQ-FUN-021`, `022` | Verify `SystemNode` and `DICOMConfigurationNode` deterministic UUIDv5 derivation, promiscuous mode flag assignment, idempotent bootstrapping with default GoSmart Health metadata, configuration CRUD, soft deletion, and restoration. | `tests/test_system_service.py` |
 | **TC-SYS-002** | System | System & Config REST API / `REQ-FUN-023` | Verify `/api/v1/system` (GET, PUT), `/api/v1/system/bootstrap` (POST), and `/api/v1/configurations/dicom` (GET, POST, PUT, DELETE, restore) endpoints. | `tests/test_system_api.py` |
 | **TC-SYS-003** | System | System & Config MCP Tools / `REQ-FUN-023` | Verify execution of MCP tools: `get_system_info`, `update_system_info`, `bootstrap_system_defaults`, `list_dicom_configurations`, `get_dicom_configuration`, `create_dicom_configuration`, `update_dicom_configuration`, `delete_dicom_configuration`, `restore_dicom_configuration`. | `tests/test_system_mcp.py` |

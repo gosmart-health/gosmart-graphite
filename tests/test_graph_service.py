@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from db.neo4j import neo4j_client
-from model.graph import (
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.graph import (
     HasInstanceRelation,
     HasSeriesRelation,
     HasStudyRelation,
@@ -16,8 +16,8 @@ from model.graph import (
     to_negated_relation_type,
     to_positive_relation_type,
 )
-from service.dicom_service import dicom_service
-from service.graph_service import graph_service
+from gosmart_graphite.service.dicom_service import dicom_service
+from gosmart_graphite.service.graph_service import graph_service
 
 TEST_ID = "test_dicom_mr_hierarchy"
 TEST_PATIENT_ID = "GSH-90967971"

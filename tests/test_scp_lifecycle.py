@@ -4,8 +4,8 @@ import pytest
 from pynetdicom import AE
 from pynetdicom.sop_class import MRImageStorage, Verification
 
-from core.config import get_settings
-from service.pynetdicom_service import PyNetDicomService
+from gosmart_graphite.core.config import get_settings
+from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
 
 
 def get_free_port() -> int:

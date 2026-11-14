@@ -3,19 +3,19 @@ from datetime import datetime, timezone
 
 import pytest
 
-from db.neo4j import neo4j_client
-from model.graph import (
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.graph import (
     DICOMConfigurationNode,
     HasDicomConfigurationRelation,
     SystemNode,
     generate_deterministic_id,
 )
-from model.system import (
+from gosmart_graphite.model.system import (
     DICOMConfigurationCreateRequest,
     DICOMConfigurationUpdateRequest,
     SystemUpdateRequest,
 )
-from service.system_service import system_service
+from gosmart_graphite.service.system_service import system_service
 
 
 def test_system_node_unit():

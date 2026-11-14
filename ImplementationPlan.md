@@ -5,7 +5,7 @@ Restructure the Python source packages and application entrypoints into a top-le
 
 ## Target Directory Structure
 ```text
-gosmart-dicom-py-graph-server/
+gosmart-graphite/
 ├── src/
 │   ├── actor/
 │   ├── api/
@@ -44,7 +44,7 @@ gosmart-dicom-py-graph-server/
 - Move `db/` -> `src/db/`
 - Move `model/` -> `src/model/`
 - Move `service/` -> `src/service/`
-- Move `cli.py` -> `src/cli.py`
+- Move `cli.py` -> `src/gosmart_graphite/cli.py`
 - Move `main.py` -> `src/main.py`
 
 ### 2. Update Build & Packaging (`pyproject.toml`)
@@ -69,7 +69,7 @@ gosmart-dicom-py-graph-server/
       "src/db",
       "src/model",
       "src/service",
-      "src/cli.py",
+      "src/gosmart_graphite/cli.py",
       "src/main.py",
   ]
 
@@ -83,7 +83,7 @@ gosmart-dicom-py-graph-server/
   - Copy `src/` into `/app/src/` instead of individual top-level package directories.
   - Set `PYTHONPATH="/app/src"` in runtime environment variables.
   - Ensure `CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8086"]` works seamlessly.
-- **`src/main.py` & `src/cli.py`**: Ensure `sys.path` includes `Path(__file__).resolve().parent` when invoked directly as `python src/main.py` or `python src/cli.py`.
+- **`src/main.py` & `src/gosmart_graphite/cli.py`**: Ensure `sys.path` includes `Path(__file__).resolve().parent` when invoked directly as `python src/main.py` or `python src/gosmart_graphite/cli.py`.
 
 ### 4. Update Top-Level Scripts, Notebooks, and Tests
 - **`devop-scripts/cleanup-data.py`**: Add `PROJECT_ROOT / "src"` to `sys.path` so standalone execution (`python devop-scripts/cleanup-data.py`) resolves `core`, `db`, and `service`.

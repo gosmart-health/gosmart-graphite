@@ -6,8 +6,8 @@ from pathlib import Path
 import fsspec
 import pytest
 
-from model.media import StorageScheme
-from service.media_service import MediaService, media_service
+from gosmart_graphite.model.media import StorageScheme
+from gosmart_graphite.service.media_service import MediaService, media_service
 
 
 @pytest.fixture

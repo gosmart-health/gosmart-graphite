@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: gosmart-dicom-graph-server
+    container_name: gosmart-graphite
     restart: unless-stopped
     ports:
       - "8086:8086"

@@ -1,7 +1,7 @@
 # DICOM Conformance Statement
 
 **Document Title:** DICOM Conformance Statement for GoSmart.Health DICOM Graph Server & VNA  
-**Software Name:** `gosmart-dicom-py-graph-server`  
+**Software Name:** `gosmart-graphite`  
 **Software Release:** Version 0.1.0  
 **Document Release Date:** 2026-09-25  
 **Standard Compliance:** NEMA PS 3.1 – PS 3.22 (DICOM Standard 2024c / 2025)  
@@ -12,7 +12,7 @@
 > [!IMPORTANT]
 > **Product Classification & Intended Use**
 > 
-> The GoSmart DICOM Graph Server (`gosmart-dicom-py-graph-server`) is a graph-native **Vendor Neutral Archive (VNA)** and medical imaging knowledge engine. It provides standard DICOM Upper Layer network communication (DIMSE), graph-topological persistence (Neo4j), Pykka actor-based asynchronous processing, and headless control via CLI and Model Context Protocol (MCP) tool interfaces.
+> The Gosmart.Health GRAPHITE (`gosmart-graphite`) is a graph-native **Vendor Neutral Archive (VNA)** and medical imaging knowledge engine. It provides standard DICOM Upper Layer network communication (DIMSE), graph-topological persistence (Neo4j), Pykka actor-based asynchronous processing, and headless control via CLI and Model Context Protocol (MCP) tool interfaces.
 > 
 > It is intended to function as an enterprise medical image archive and research platform supporting **C-STORE**, **C-FIND**, **C-GET**, **C-MOVE**, and **C-ECHO** network transactions with zero dependency on client web UIs.
 
@@ -20,11 +20,11 @@
 
 ## 1. Conformance Statement Overview
 
-The GoSmart DICOM Graph Server provides standard DICOM Part 10 file storage, hierarchical metadata indexing into a Neo4j property graph, and DICOM Upper Layer (DIMSE) network communication over TCP/IP as both a Service Class Provider (SCP) and Service Class User (SCU).
+The Gosmart.Health GRAPHITE provides standard DICOM Part 10 file storage, hierarchical metadata indexing into a Neo4j property graph, and DICOM Upper Layer (DIMSE) network communication over TCP/IP as both a Service Class Provider (SCP) and Service Class User (SCU).
 
 ### 1.1 Network Services Supported
 
-The following table summarizes the network services, roles, and SOP Classes supported by `gosmart-dicom-py-graph-server`:
+The following table summarizes the network services, roles, and SOP Classes supported by `gosmart-graphite`:
 
 | SOP Class Name | SOP Class UID | Service Class User (SCU) | Service Class Provider (SCP) |
 | :--- | :--- | :---: | :---: |
@@ -88,7 +88,7 @@ The server supports negotiation and transmission across all standard uncompresse
 
 ```mermaid
 graph LR
-    RemoteSCU[Remote DICOM SCU<br/>Modality / PACS / Workstation] -->|C-ECHO RQ| VNA[GoSmart DICOM Graph Server<br/>AE: GOSMART_GS]
+    RemoteSCU[Remote DICOM SCU<br/>Modality / PACS / Workstation] -->|C-ECHO RQ| VNA[Gosmart.Health GRAPHITE<br/>AE: GOSMART_GS]
     RemoteSCU -->|C-STORE RQ| VNA
     RemoteSCU -->|C-FIND RQ| VNA
     RemoteSCU -->|C-GET RQ| VNA

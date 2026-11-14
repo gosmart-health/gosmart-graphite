@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from model.fhir import (
+from gosmart_graphite.model.fhir import (
     FHIR_ALL_SCHEMA_DDL,
     FHIR_NODE_CLASSES,
     FHIR_NODE_LABELS,

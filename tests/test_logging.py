@@ -4,8 +4,8 @@ import tempfile
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
-from core.config import Settings
-from core.logging import (
+from gosmart_graphite.core.config import Settings
+from gosmart_graphite.core.logging import (
     Neo4jAlreadyExistsLogFilter,
     bind_log_context,
     clear_log_context,

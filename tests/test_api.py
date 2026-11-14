@@ -1,8 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from main import app
-from service.dicom_service import dicom_service
+from gosmart_graphite.main import app
+from gosmart_graphite.service.dicom_service import dicom_service
 
 
 @pytest.fixture

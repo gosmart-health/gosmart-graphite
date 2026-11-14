@@ -8,14 +8,14 @@ from pydicom.dataset import Dataset
 from pydicom.uid import ExplicitVRLittleEndian, ImplicitVRLittleEndian, JPEG2000Lossless
 from pynetdicom import AE, evt
 
-from actor.store_scu_actor import (
+from gosmart_graphite.actor.store_scu_actor import (
     build_store_contexts,
     get_store_scu_actor,
     stop_store_scu_actor,
 )
-from db.neo4j import neo4j_client
-from service.dicom_service import dicom_service
-from service.pynetdicom_service import pynetdicom_service
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.service.dicom_service import dicom_service
+from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
 TEST_ASSET_DCM = Path("tests/assets/mr/MR.2.25.10986282349447326157620829373816019196.dcm")
 LIVE_MDICOM_HOST = "10.200.0.103"

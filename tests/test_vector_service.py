@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
-from core.config import Settings
-from service.vector_service import (
+from gosmart_graphite.core.config import Settings
+from gosmart_graphite.service.vector_service import (
     SimilarityMetric,
     VectorService,
     compute_cosine_scores,

@@ -1,19 +1,19 @@
 # System Design Specification (SDS) / Software Architecture Description
 
 **Document ID:** SDS-GSGS-001  
-**Project:** `gosmart-dicom-py-graph-server`  
+**Project:** `gosmart-graphite`  
 **Regulatory Standard Alignment:** IEC 62304 Clause 5.3 / 5.4, FDA 21 CFR 820.30, ISO 13485:2016 Clause 7.3  
 
 ---
 
 ## 1. Executive Summary & Architectural Scope
 
-`gosmart-dicom-py-graph-server` is a graph-native, headless **Vendor Neutral Archive (VNA)** and medical imaging knowledge engine. Built on **Python 3.14**, **FastAPI**, **Pydantic**, **Neo4j**, **pydicom**, **pynetdicom**, **Pykka**, and **Model Context Protocol (MCP)**, the software provides:
+`gosmart-graphite` is a graph-native, headless **Vendor Neutral Archive (VNA)** and medical imaging knowledge engine. Built on **Python 3.14**, **FastAPI**, **Pydantic**, **Neo4j**, **pydicom**, **pynetdicom**, **Pykka**, and **Model Context Protocol (MCP)**, the software provides:
 1. Full DICOM Upper Layer network communication (DIMSE: C-STORE, C-FIND, C-GET, C-MOVE, C-ECHO).
 2. Deep graph-topological persistence in Neo4j capturing the hierarchical clinical relationships (`Patient -> Study -> Series -> Instance`) and cross-study query topologies.
 3. Concurrent, non-blocking ingestion and graph indexing via Pykka actors.
 4. Embedded Model Context Protocol (MCP) server over Server-Sent Events (SSE).
-5. Headless terminal management via the `gosmart-gs` CLI (with zero dependency on client web UIs).
+5. Headless terminal management via the `gosmart-graphite` CLI (with zero dependency on client web UIs).
 6. Industrial-strength structured logging via `structlog` with arbitrary JSON values and 7-day auto-rotating file handlers.
 
 ---
@@ -145,7 +145,7 @@ graph TD
   - Mounts MCP SSE server at `/mcp`.
   - HTTP middleware binding request ID and timing to structlog context.
 * **`cli.py`**:
-  - Typer CLI (`gosmart-gs`) providing terminal management: `start`, `health`, `mock`, `ingest`, `patients`, `query`, `echo`, `mcp`.
+  - Typer CLI (`gosmart-graphite`) providing terminal management: `start`, `health`, `mock`, `ingest`, `patients`, `query`, `echo`, `mcp`.
 
 ---
 

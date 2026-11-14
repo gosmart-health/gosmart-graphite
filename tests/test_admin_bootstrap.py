@@ -4,12 +4,12 @@ from unittest.mock import patch
 import pytest
 from pydantic import SecretStr
 
-from cli.admin import cmd_create_admin, cmd_list_admins, cmd_reset_password
-from core.config import Settings
-from db.neo4j import neo4j_client
-from service.graph_service import graph_service
-from service.group_service import group_service
-from service.user_service import user_service
+from gosmart_graphite.cli.admin import cmd_create_admin, cmd_list_admins, cmd_reset_password
+from gosmart_graphite.core.config import Settings
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.service.graph_service import graph_service
+from gosmart_graphite.service.group_service import group_service
+from gosmart_graphite.service.user_service import user_service
 
 
 @pytest.mark.anyio
@@ -32,7 +32,7 @@ async def test_bootstrap_admin_user_creation():
         FORCE_ADMIN_PASSWORD_RESET=False,
     )
 
-    with patch("service.user_service.get_settings", return_value=mock_settings):
+    with patch("gosmart_graphite.service.user_service.get_settings", return_value=mock_settings):
         created_admin = await user_service.bootstrap_admin_user(test_id=test_id)
 
     assert created_admin is not None
@@ -71,7 +71,7 @@ async def test_bootstrap_admin_idempotency():
         FORCE_ADMIN_PASSWORD_RESET=False,
     )
 
-    with patch("service.user_service.get_settings", return_value=mock_settings_1):
+    with patch("gosmart_graphite.service.user_service.get_settings", return_value=mock_settings_1):
         first_run = await user_service.bootstrap_admin_user(test_id=test_id)
 
     assert first_run is not None
@@ -83,7 +83,7 @@ async def test_bootstrap_admin_idempotency():
         FORCE_ADMIN_PASSWORD_RESET=False,
     )
 
-    with patch("service.user_service.get_settings", return_value=mock_settings_2):
+    with patch("gosmart_graphite.service.user_service.get_settings", return_value=mock_settings_2):
         second_run = await user_service.bootstrap_admin_user(test_id=test_id)
 
     assert second_run["id"] == first_run["id"]
@@ -111,7 +111,7 @@ async def test_bootstrap_force_password_reset():
         INITIAL_ADMIN_USERNAME=f"force_admin_{uuid.uuid4().hex[:4]}",
         FORCE_ADMIN_PASSWORD_RESET=False,
     )
-    with patch("service.user_service.get_settings", return_value=mock_settings_initial):
+    with patch("gosmart_graphite.service.user_service.get_settings", return_value=mock_settings_initial):
         admin = await user_service.bootstrap_admin_user(test_id=test_id)
     assert admin is not None
 
@@ -121,7 +121,7 @@ async def test_bootstrap_force_password_reset():
         INITIAL_ADMIN_PASSWORD=SecretStr(new_forced_pass),
         FORCE_ADMIN_PASSWORD_RESET=True,
     )
-    with patch("service.user_service.get_settings", return_value=mock_settings_forced):
+    with patch("gosmart_graphite.service.user_service.get_settings", return_value=mock_settings_forced):
         updated_admin = await user_service.bootstrap_admin_user(test_id=test_id)
 
     assert updated_admin["id"] == admin["id"]

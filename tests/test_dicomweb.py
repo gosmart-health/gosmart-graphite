@@ -3,9 +3,9 @@ import io
 import pytest
 from fastapi.testclient import TestClient
 
-from core.auth_dependency import get_current_user
-from main import app
-from service.dicom_service import dicom_service
+from gosmart_graphite.core.auth_dependency import get_current_user
+from gosmart_graphite.main import app
+from gosmart_graphite.service.dicom_service import dicom_service
 
 
 @pytest.fixture
@@ -95,7 +95,7 @@ def test_dicomweb_stow_rs_provenance(client):
     mock_actor = MagicMock()
     mock_actor.is_alive.return_value = True
 
-    with patch("api.v1.endpoints.dicomweb.get_dicom_actor", return_value=mock_actor):
+    with patch("gosmart_graphite.api.v1.endpoints.dicomweb.get_dicom_actor", return_value=mock_actor):
         response = client.post(
             "/dicomweb/studies",
             content=dicom_bytes,
@@ -130,7 +130,7 @@ def test_dicomweb_qido_series_and_instances(client):
     # Ingest into graph synchronously if Neo4j is available
     hierarchy = dicom_service.parse_dataset(ds)
     hierarchy.test_id = "test_qido_series"
-    from service.graph_service import graph_service
+    from gosmart_graphite.service.graph_service import graph_service
 
     try:
         graph_service.save_hierarchy_sync(hierarchy)
@@ -220,8 +220,8 @@ def test_dicomweb_graph_qido_live_traversal(client):
     """Verify QIDO-RS reads directly from Neo4j Knowledge Graph with live traversal counts."""
     from pydicom.uid import generate_uid
 
-    from db.neo4j import neo4j_client
-    from service.graph_service import graph_service
+    from gosmart_graphite.db.neo4j import neo4j_client
+    from gosmart_graphite.service.graph_service import graph_service
 
     try:
         neo4j_client.get_sync_driver().verify_connectivity()

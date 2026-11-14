@@ -19,10 +19,10 @@ for _p in (SRC_DIR, PROJECT_ROOT):
 
 from neo4j.exceptions import DriverError  # noqa: E402
 
-from core.config import Settings, get_settings  # noqa: E402
-from core.logging import get_logger  # noqa: E402
-from db.neo4j import Neo4jClient  # noqa: E402
-from service.media_service import MediaService  # noqa: E402
+from gosmart_graphite.core.config import Settings, get_settings  # noqa: E402
+from gosmart_graphite.core.logging import get_logger  # noqa: E402
+from gosmart_graphite.db.neo4j import Neo4jClient  # noqa: E402
+from gosmart_graphite.service.media_service import MediaService  # noqa: E402
 
 logger = get_logger("gosmart_gs.devop.cleanup")
 
