@@ -8,7 +8,7 @@ dependencies = [
     "adlfs>=2026.8.0",
     "argon2-cffi>=23.1.0",
     "cryptography==50.0.2",
-    "fastapi==0.162.0",
+    "fastapi==0.163.1",
     "fhir-resources>=8.3.0",
     "fsspec==2026.9.0",
     "gcsfs==2026.10.1",
@@ -20,8 +20,8 @@ dependencies = [
     "mcp==2.3.0",
     "neo4j==6.4.1",
     "numpy>=2.5.4",
-    "pydantic==2.14.2",
-    "pydantic-settings==2.16.2",
+    "pydantic==2.14.3",
+    "pydantic-settings==2.16.3",
     "pydicom==3.0.2",
     "pyjwt>=2.8.0",
     "pykka==4.5.0",
@@ -31,7 +31,7 @@ dependencies = [
     "rich==15.0.0",
     "s3fs>=2026.9.0",
     "structlog>=26.1.0",
-    "typer==0.27.3",
+    "typer==0.29.1",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -52,9 +52,9 @@ packages = ["src/gosmart_graphite"]
 
 [dependency-groups]
 dev = [
-    "cyclonedx-bom==7.6.0",
+    "cyclonedx-bom==8.0.1",
     "pip-audit>=2.7.0",
-    "ruff==0.17.3",
+    "ruff==0.17.5",
 ]
 
 [tool.ruff]
