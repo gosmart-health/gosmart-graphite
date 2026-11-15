@@ -14,10 +14,10 @@ By default we will use `/tmp/gosmart_dicom_storage` as the DICOM image storage l
 
 ### Start the Database and DICOM Graph Server
 
-You will find `docker-compose.yaml` file on the root of this project. Please inspect this file and if you already know how docker-compose works, feel free to change variables.
+You will find the `docker-compose.yml` file in the `docker/` folder of this project. Please inspect this file and if you already know how Docker Compose works, feel free to change variables.
 
 ```shell
-docker-compose up -d
+docker compose -f docker/docker-compose.yml up -d
 ```
 
 ### Check the Database
