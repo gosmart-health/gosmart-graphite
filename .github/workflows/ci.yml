@@ -172,6 +172,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: docker/Dockerfile
           platforms: linux/amd64
           push: false
           tags: gosmart-graphite:test
