@@ -1,8 +1,16 @@
+# Pin the Compose project name so network names and named-volume prefixes
+# (e.g., gosmart-graphite_dicom_storage) stay stable now that this file
+# lives inside the docker/ subfolder instead of the repository root.
+name: gosmart-graphite
+
 services:
   graph-server:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # Resolved relative to this file's directory (docker/), so `..`
+      # restores the repository root as the Docker build context.
+      context: ..
+      # Resolved relative to the build context (repository root).
+      dockerfile: docker/Dockerfile
     container_name: gosmart-graphite
     restart: unless-stopped
     ports:

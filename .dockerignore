@@ -36,7 +36,6 @@ notebooks/
 
 # Neo4j local setup and Docker configs
 neo4j/
-docker-compose.yml
-Dockerfile
+docker/
 ImplementationPlan.md
 

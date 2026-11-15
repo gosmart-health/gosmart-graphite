@@ -97,8 +97,9 @@ gosmart-graphite/
 ├── start.sh                     # Shell script shortcut for local development launch
 ├── pyproject.toml               # Project metadata, dependencies (uv/hatchling)
 ├── uv.lock                      # Locked dependency versions
-├── Dockerfile                   # Multi-stage Docker build (Python 3.14 + uv)
-├── docker-compose.yml           # Full-stack compose (Graph Server + Neo4j)
+├── docker/                      # Docker build & orchestration
+│   ├── Dockerfile               # Multi-stage Docker build (Python 3.14 + uv)
+│   └── docker-compose.yml       # Full-stack compose (Graph Server + Neo4j)
 ├── .env.example                 # Environment variable template
 ├── .dockerignore                # Docker build context exclusions
 ├── .github/workflows/ci.yml     # CI pipeline (lint, audit, SBOM, tests, Docker build)
@@ -292,10 +293,10 @@ Docker provides the fastest path to a fully running stack with both the Graph Se
 
 #### Option A: Full-Stack Launch (Recommended)
 
-The root `docker-compose.yml` orchestrates both the **Gosmart.Health GRAPHITE** and **Neo4j** in a single command:
+The `docker/docker-compose.yml` file orchestrates both the **Gosmart.Health GRAPHITE** and **Neo4j** in a single command (run from the repository root):
 
 ```bash
-docker compose up -d --build
+docker compose -f docker/docker-compose.yml up -d --build
 ```
 
 This starts:
@@ -322,12 +323,12 @@ This starts:
 
 **Stopping the stack:**
 ```bash
-docker compose down
+docker compose -f docker/docker-compose.yml down
 ```
 
 **Stopping and removing all data volumes:**
 ```bash
-docker compose down -v
+docker compose -f docker/docker-compose.yml down -v
 ```
 
 #### Option B: Build Image Only
@@ -335,7 +336,7 @@ docker compose down -v
 To build the Docker image separately (e.g., for custom deployment):
 
 ```bash
-docker build -t gosmart-graphite .
+docker build -t gosmart-graphite -f docker/Dockerfile .
 ```
 
 Run the image standalone (requires an external Neo4j instance):
@@ -353,7 +354,7 @@ docker run -d \
 
 #### Dockerfile Architecture
 
-The `Dockerfile` uses a **multi-stage build** for optimized image size and security:
+The `docker/Dockerfile` uses a **multi-stage build** for optimized image size and security:
 
 | Stage | Base Image | Purpose |
 | :--- | :--- | :--- |
@@ -379,16 +380,16 @@ This starts only the Neo4j database container. See [neo4j/README.md](neo4j/READM
 
 #### Overriding Environment Variables
 
-The `docker-compose.yml` includes sensible defaults. To override any variable, either:
+The `docker/docker-compose.yml` includes sensible defaults. To override any variable, either:
 
-1. **Edit `docker-compose.yml`** directly in the `environment:` section, or
+1. **Edit `docker/docker-compose.yml`** directly in the `environment:` section, or
 2. **Use `--env-file`** to pass an external `.env` file:
    ```bash
-   docker compose --env-file .env up -d
+   docker compose -f docker/docker-compose.yml --env-file .env up -d
    ```
 
 > [!TIP]
-> The Graph Server container connects to Neo4j via the Docker network using the service hostname `neo4j` (i.e., `bolt://neo4j:7687`). This is pre-configured in `docker-compose.yml`.
+> The Graph Server container connects to Neo4j via the Docker network using the service hostname `neo4j` (i.e., `bolt://neo4j:7687`). This is pre-configured in `docker/docker-compose.yml`.
 
 ### 4. CLI Commands
 
