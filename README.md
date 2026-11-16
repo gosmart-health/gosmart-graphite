@@ -129,7 +129,8 @@ gosmart-graphite/
 │   ├── cli.py                   # Typer CLI entrypoint (start, health, echo, send, mcp)
 │   └── main.py                  # FastAPI application factory & Uvicorn entrypoint
 ├── devop-scripts/               # DevOps & data cleanup CLI utilities
-├── neo4j/                       # Standalone Neo4j Docker Compose for development
+├── neo4j-local-docker/          # Standalone Neo4j Docker Compose 
+for development
 │   ├── docker-compose.yaml      # Neo4j-only compose (for local dev/testing)
 │   └── README.md                # Neo4j Docker setup guide
 ├── notebooks/                   # Exploration and interactive experiments
