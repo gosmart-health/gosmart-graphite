@@ -81,7 +81,7 @@ gosmart-graphite/
 │   │       ├── endpoints/
 │   │       │   ├── auth.py      # Login, token refresh, API key management, OAuth2
 │   │       │   ├── dicom.py     # Ingestion, mock generator, and C-ECHO endpoints
-│   │       │   ├── dicomweb.py  # DICOMweb RESTful services (STOW-RS, WADO-RS, QIDO-RS)
+│   │       │   ├── dicomweb.py  # DICOMweb REST services (STOW-RS, WADO-RS, QIDO-RS)
 │   │       │   ├── graph.py     # Graph traversal and Cypher query endpoints
 │   │       │   ├── health.py    # Health status (Neo4j, Pykka, Storage)
 │   │       │   ├── llm.py       # Dynamic group-scoped LLM configuration endpoints
@@ -312,7 +312,7 @@ NOTE: Before running the server you may issue the following Cypher to clear the
 entire
 database. This will initialize the system to its default, then you can add
 remote AEs
-etc after the server starts via the REST scripts (under test/rest-client) with
+etc. after the server starts via the REST scripts (under test/rest-client) with
 the
 REST Client on VS Code.
 
@@ -439,12 +439,12 @@ For local development where you run the server natively with `uv`, use the
 standalone Neo4j compose file:
 
 ```bash
-cd neo4j
+cd neo4j-local-docker
 docker compose up -d
 ```
 
 This starts only the Neo4j database container.
-See [neo4j/README.md](neo4j/README.md) for details.
+See [neo4j-local-docker/README.md](neo4j-local-docker/README.md) for details.
 
 #### Overriding Environment Variables
 
@@ -460,8 +460,8 @@ variable, either:
 
 > [!TIP]
 > The Graph Server container connects to Neo4j via the Docker network using the
-service hostname `neo4j` (i.e., `bolt://neo4j:7687`). This is pre-configured in
-`docker/docker-compose.yml`.
+> service hostname `neo4j` (i.e., `bolt://neo4j:7687`). This is pre-configured 
+> in `docker/docker-compose.yml`.
 
 ### 4. CLI Commands
 
@@ -592,8 +592,8 @@ generate the API key.
 > [!CAUTION]
 > **CRITICAL SECURITY REQUIREMENT: SERVER PLATFORM ACCESS CONTROL**  
 > The security model assumes that the underlying host server platform, container
-execution environment, filesystem, environment variable configurations, and
-direct Neo4j database ports are **strictly access-controlled and hardened**.
+> execution environment, filesystem, environment variable configurations, and
+> direct Neo4j database ports are **strictly access-controlled and hardened**.
 >
 > Direct shell access to the host/container or write access to environment
 > variables enables out-of-band administrative privileges (such as password resets
@@ -617,8 +617,8 @@ GOSMART_GS_INITIAL_ADMIN_USERNAME=admin
 
 > [!NOTE]
 > Bootstrapping is **idempotent**. On subsequent restarts, if the admin user
-already exists, the server preserves the existing database state and does not
-overwrite user credentials or settings.
+> already exists, the server preserves the existing database state and does not
+> overwrite user credentials or settings.
 
 ---
 
@@ -763,7 +763,7 @@ In **Cursor**, MCP servers are configured in the user's home directory:
 
 > [!TIP]
 > If running MCP directly via command (STDIO) in Cursor without starting a
-separate HTTP process:
+> separate HTTP process:
 > ```json
 > {
 >   "mcpServers": {
@@ -931,7 +931,7 @@ These tools include:
   Plugin
   Docker composed containers for testing.
 - **HAPI FHIR Server**: Local FHIR Server. This is Dockerized.
-- **Synthea(tm)**: Generate synthetic patients and studies for testing with the
+- **Synthea™**: Generate synthetic patients and studies for testing with the
   HAPI FHIR server.
 - **PACS Viewer**: On Windows we recommend MicroDICOM viewer with DICOM Q/R, and
   Move.
@@ -997,8 +997,8 @@ sequenceDiagram
     PACS ->> FHIR: Get Full FHIR Bundle via Study UID
     FHIR ->> PACS: Provide the Full FHIR Bundle
     PACS ->> PACS: Register Patient /Link
-    PACS ->> FHIR: Get Practioner
-    PACS ->> PACS: Register Practioner
+    PACS ->> FHIR: Get Practitioner
+    PACS ->> PACS: Register Practitioner
     PACS ->> FHIR: Get Organization
     PACS ->> PACS: Register Organization
     PACS ->> PACS: Register Other Resources

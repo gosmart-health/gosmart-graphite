@@ -4,7 +4,9 @@
       <w>GOSMART</w>
       <w>caplog</w>
       <w>cfind</w>
+      <w>dicomweb</w>
       <w>dimse</w>
+      <w>pykka</w>
       <w>sopclass</w>
     </words>
   </dictionary>
