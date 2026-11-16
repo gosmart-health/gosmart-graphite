@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -9,6 +10,15 @@ from gosmart_graphite.service.mcp_service import (
     get_mcp_streamable_http_app,
     mcp,
 )
+from gosmart_graphite.service.user_service import user_service
+
+
+@pytest.fixture
+def offline_mcp_auth(monkeypatch: pytest.MonkeyPatch):
+    """Keep MCP auth unit tests fully offline: the middleware resolves users via its JWT-claims
+    fallback instead of querying the external Neo4j-backed user service."""
+    monkeypatch.setattr(user_service, "get_user_by_id", AsyncMock(return_value=None))
+    monkeypatch.setattr(user_service, "authenticate_api_key", AsyncMock(return_value=None))
 
 
 @pytest.fixture
@@ -17,7 +27,7 @@ def mcp_app():
 
 
 @pytest.mark.anyio
-async def test_mcp_sse_unauthenticated_rejected(mcp_app):
+async def test_mcp_sse_unauthenticated_rejected(mcp_app, offline_mcp_auth):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mcp_app), base_url="http://testserver") as client:
         # GET /sse without auth header or query param
         res = await client.get("/sse")
@@ -30,7 +40,7 @@ async def test_mcp_sse_unauthenticated_rejected(mcp_app):
 
 
 @pytest.mark.anyio
-async def test_mcp_sse_invalid_token_rejected(mcp_app):
+async def test_mcp_sse_invalid_token_rejected(mcp_app, offline_mcp_auth):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=mcp_app), base_url="http://testserver") as client:
         # GET /sse with bad Bearer token
         res = await client.get("/sse", headers={"Authorization": "Bearer invalid.jwt.token"})
@@ -46,7 +56,7 @@ async def test_mcp_sse_invalid_token_rejected(mcp_app):
 
 
 @pytest.mark.anyio
-async def test_mcp_streamable_http_auth_and_handshake():
+async def test_mcp_streamable_http_auth_and_handshake(offline_mcp_auth):
     """Verify StreamableHTTP transport authentication and initialize handshake."""
     streamable_app = get_mcp_streamable_http_app(streamable_http_path="/")
 
@@ -96,7 +106,7 @@ async def test_mcp_streamable_http_auth_and_handshake():
 
 
 @pytest.mark.anyio
-async def test_mcp_streamable_http_via_main_app_lifespan():
+async def test_mcp_streamable_http_via_main_app_lifespan(offline_mcp_auth):
     """Verify StreamableHTTP transport accessed via FastAPI root /mcp with lifespan."""
     from gosmart_graphite.main import create_app
 

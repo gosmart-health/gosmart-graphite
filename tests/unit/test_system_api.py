@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gosmart_graphite.core.auth_dependency import get_current_user
+from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
 from gosmart_graphite.main import app
 from gosmart_graphite.service.system_service import system_service
 
@@ -16,6 +16,9 @@ def client(isolated_app_lifespan):
         "system_roles": ["PLATFORM_ADMIN"],
         "is_active": True,
     }
+    # The system router also applies the router-level get_current_group_context dependency;
+    # override it so group-affiliation resolution never queries the external Neo4j database.
+    app.dependency_overrides[get_current_group_context] = lambda: None
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
