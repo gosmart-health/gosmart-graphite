@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from enum import StrEnum
-from typing import Any, Literal, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
 
 import numpy as np
 from genkit import Genkit
@@ -14,8 +15,14 @@ from genkit_ollama import Ollama
 
 from gosmart_graphite.core.config import Settings, get_settings
 from gosmart_graphite.core.logging import get_logger
+from gosmart_graphite.model.llm import LLM_Config
+
+if TYPE_CHECKING:
+    from gosmart_graphite.service.llm_config_service import LLMConfigService
 
 logger = get_logger("gosmart_gs.vector_service")
+
+DEFAULT_EMBEDDING_TAG = "embedding"
 
 INSTRUCTION_PREFIXES: dict[str, dict[str, Any]] = {
     "nomic-embed-text": {
@@ -207,48 +214,114 @@ def normalize_vector(vector: Sequence[float], dimensions: Optional[int] = None) 
 
 
 class EmbeddingService:
-    """Computes L2-normalized text embeddings via Genkit (Ollama, Google AI / Gemini, or Vertex AI)."""
+    """Computes L2-normalized text embeddings via dynamic, group-scoped LLM_Config + Genkit."""
 
     def __init__(
         self,
-        settings: Optional[Settings] = None,
+        config: Optional[LLM_Config] = None,
+        llm_config_service: Optional[LLMConfigService] = None,
         ai: Optional[Genkit] = None,
+        settings: Optional[Settings] = None,
     ) -> None:
-        self.settings = settings or get_settings()
+        self._static_config: Optional[LLM_Config] = config
+        self._llm_config_service: Optional[LLMConfigService] = llm_config_service
         self._ai: Optional[Genkit] = ai
+        self.settings: Settings = settings or get_settings()
+        self._client_cache: dict[tuple[Any, ...], Genkit] = {}
+        self._cache_lock = threading.Lock()
 
-    def _get_api_key(self) -> Optional[str]:
-        """Return the configured Google / Vertex AI / Gemini API key if non-empty."""
-        if self.settings.VERTEX_AI_API_KEY is not None:
-            val = self.settings.VERTEX_AI_API_KEY.get_secret_value().strip()
-            if val:
-                return val
+    def _get_llm_config_service(self) -> LLMConfigService:
+        if self._llm_config_service is not None:
+            return self._llm_config_service
+        from gosmart_graphite.service.llm_config_service import llm_config_service as default_llm_config_service
+
+        return default_llm_config_service
+
+    def _encryption_key(self) -> Optional[str]:
+        if self.settings.LLM_CONFIG_ENCRYPTION_KEY is not None:
+            val = self.settings.LLM_CONFIG_ENCRYPTION_KEY.get_secret_value().strip()
+            return val if val else None
         return None
 
-    def is_configured(self) -> bool:
-        """Return True if vector embedding model and required provider settings are configured."""
-        model = (self.settings.VECTOR_EMBED_MODEL or "").strip()
+    def _resolve_api_key(self, cfg: LLM_Config) -> str:
+        return cfg.resolve_api_key(encryption_key=self._encryption_key())
+
+    def _is_config_usable(self, cfg: Optional[LLM_Config]) -> bool:
+        if cfg is None:
+            return False
+        model = (cfg.model or "").strip()
         if not model:
             return False
-
-        provider = self.resolve_provider()
+        provider = self.resolve_provider(config=cfg)
         if provider == "ollama":
-            return bool((self.settings.VECTOR_EMBED_SERVER_URL or "").strip())
+            return bool((cfg.url or "").strip())
         if provider in ("vertexai", "googleai"):
             return True
         return False
 
-    def resolve_provider(self, model: Optional[str] = None) -> str:
-        """Determine the active provider ('ollama', 'googleai', or 'vertexai') from settings or model."""
-        target_model = (model or self.settings.VECTOR_EMBED_MODEL or "").strip()
-        provider = (self.settings.VECTOR_EMBED_PROVIDER or "").strip().lower()
+    def is_configured(
+        self,
+        *,
+        group_id: Optional[str] = None,
+        tag: str = DEFAULT_EMBEDDING_TAG,
+        test_id: Optional[str] = None,
+        llm_config: Optional[LLM_Config] = None,
+    ) -> bool:
+        """Return True if an embedding LLM_Config is configured and usable."""
+        cfg = llm_config or self._static_config
+        if cfg is None:
+            try:
+                cfg = self._get_llm_config_service().resolve_config_for_group_sync(
+                    tag=tag,
+                    group_id=group_id,
+                    test_id=test_id,
+                )
+            except Exception as exc:
+                logger.warning("llm_config_is_configured_lookup_failed", tag=tag, group_id=group_id, error=str(exc))
+                return False
+        return self._is_config_usable(cfg)
+
+    async def is_configured_async(
+        self,
+        *,
+        group_id: Optional[str] = None,
+        tag: str = DEFAULT_EMBEDDING_TAG,
+        test_id: Optional[str] = None,
+        llm_config: Optional[LLM_Config] = None,
+    ) -> bool:
+        """Asynchronously return True if an embedding LLM_Config is configured and usable."""
+        cfg = llm_config or self._static_config
+        if cfg is None:
+            try:
+                cfg = await self._get_llm_config_service().resolve_config_for_group(
+                    tag=tag,
+                    group_id=group_id,
+                    test_id=test_id,
+                )
+            except Exception as exc:
+                logger.warning("llm_config_is_configured_lookup_failed", tag=tag, group_id=group_id, error=str(exc))
+                return False
+        return self._is_config_usable(cfg)
+
+    def resolve_provider(
+        self,
+        config: Optional[LLM_Config] = None,
+        model: Optional[str] = None,
+        resolved_api_key: Optional[str] = None,
+    ) -> str:
+        """Determine the active provider ('ollama', 'googleai', or 'vertexai') from LLM_Config or model."""
+        cfg = config or self._static_config
+        target_model = (model or (cfg.model if cfg else "") or "").strip()
+        provider = (cfg.provider if cfg else "").strip().lower()
+        api_key = resolved_api_key if resolved_api_key is not None else (self._resolve_api_key(cfg) if cfg else "")
+        project_id = (cfg.project_id if cfg else None) or self.settings.GOOGLE_CLOUD_PROJECT
 
         if target_model.startswith("ollama/"):
             return "ollama"
         if target_model.startswith("googleai/"):
             return "googleai"
         if target_model.startswith("vertexai/"):
-            if self._get_api_key() and not self.settings.GOOGLE_CLOUD_PROJECT:
+            if api_key and not project_id:
                 return "googleai"
             return "vertexai"
 
@@ -257,71 +330,124 @@ class EmbeddingService:
         if provider in ("googleai", "google_ai", "gemini"):
             return "googleai"
         if provider in ("vertexai", "vertex", "vertex_ai", "google", "google_vertex"):
-            if self._get_api_key() and not self.settings.GOOGLE_CLOUD_PROJECT:
+            if api_key and not project_id:
                 return "googleai"
             return "vertexai"
 
-        if (self.settings.VECTOR_EMBED_SERVER_URL or "").strip():
+        if cfg and (cfg.url or "").strip():
             return "ollama"
 
         return provider
 
-    def resolve_embedder_name(self, model: Optional[str] = None) -> str:
+    def resolve_embedder_name(
+        self,
+        config: Optional[LLM_Config] = None,
+        model: Optional[str] = None,
+        resolved_api_key: Optional[str] = None,
+    ) -> str:
         """Return the fully-qualified Genkit embedder identifier (e.g. 'ollama/nomic-embed-text:latest')."""
-        target_model = (model or self.settings.VECTOR_EMBED_MODEL or "").strip()
-        if not target_model:
-            raise ValueError("GOSMART_GS_VECTOR_EMBED_MODEL is not configured.")
+        cfg = config or self._static_config
+        raw_model = (model or (cfg.model if cfg else "") or "").strip()
+        if not raw_model:
+            raise ValueError("LLM_Config model is not configured.")
 
+        provider = self.resolve_provider(config=cfg, model=raw_model, resolved_api_key=resolved_api_key)
+
+        target_model = raw_model
         for prefix in ("ollama/", "googleai/", "vertexai/"):
             if target_model.startswith(prefix):
                 target_model = target_model[len(prefix) :]
                 break
 
-        provider = self.resolve_provider(model=target_model)
         if provider in ("ollama", "googleai", "vertexai"):
             return f"{provider}/{target_model}"
 
+        raw_provider = cfg.provider if cfg else ""
         raise ValueError(
-            f"Unsupported or missing vector embedding provider '{self.settings.VECTOR_EMBED_PROVIDER}'. "
+            f"Unsupported or missing vector embedding provider '{raw_provider}'. "
             "Expected 'ollama', 'googleai', or 'vertexai'."
         )
 
-    @property
-    def ai(self) -> Genkit:
-        """Lazily initialize and return the Genkit instance configured for the active provider."""
-        if self._ai is None:
-            self._ai = self._create_genkit()
-        return self._ai
+    def _get_or_create_genkit(
+        self,
+        cfg: LLM_Config,
+        *,
+        provider: str,
+        api_key: str,
+    ) -> Genkit:
+        """Return an injected test client or a thread-safe cached Genkit client keyed by config fingerprint."""
+        if self._ai is not None:
+            return self._ai
 
-    def _create_genkit(self) -> Genkit:
-        """Instantiate Genkit with the Ollama, GoogleAI, or VertexAI plugin."""
-        provider = self.resolve_provider()
+        fingerprint = (
+            provider,
+            cfg.client_fingerprint(
+                resolved_api_key=api_key,
+                fallback_project_id=self.settings.GOOGLE_CLOUD_PROJECT,
+            ),
+        )
+        with self._cache_lock:
+            cached = self._client_cache.get(fingerprint)
+            if cached is not None:
+                return cached
+            client = self._create_genkit(cfg, provider=provider, api_key=api_key)
+            self._client_cache[fingerprint] = client
+            return client
+
+    def _create_genkit(
+        self,
+        cfg: LLM_Config,
+        *,
+        provider: str,
+        api_key: str,
+    ) -> Genkit:
+        """Instantiate Genkit with the Ollama, GoogleAI, or VertexAI plugin from LLM_Config."""
         if provider == "ollama":
-            base_url = (self.settings.VECTOR_EMBED_SERVER_URL or "").strip() or None
-            logger.debug("initializing_genkit_ollama", base_url=base_url)
+            base_url = (cfg.url or "").strip() or None
+            logger.debug("initializing_genkit_ollama", base_url=base_url, tag=cfg.tag)
             return Genkit(plugins=[Ollama(base_url=base_url)])
 
-        api_key = self._get_api_key()
+        effective_key = api_key.strip() or None
 
         if provider == "googleai":
-            logger.debug("initializing_genkit_googleai", has_api_key=bool(api_key))
-            return Genkit(plugins=[GoogleAI(api_key=api_key)])
+            logger.debug("initializing_genkit_googleai", has_api_key=bool(effective_key), tag=cfg.tag)
+            return Genkit(plugins=[GoogleAI(api_key=effective_key)])
 
         if provider == "vertexai":
-            project = self.settings.GOOGLE_CLOUD_PROJECT
-            location = (self.settings.VERTEX_AI_LOCATION or "us-central1").strip()
+            project = cfg.project_id or self.settings.GOOGLE_CLOUD_PROJECT
+            location = (cfg.location or "us-central1").strip()
             logger.debug(
                 "initializing_genkit_vertexai",
                 project=project,
                 location=location,
-                has_api_key=bool(api_key),
+                has_api_key=bool(effective_key),
+                tag=cfg.tag,
             )
-            return Genkit(plugins=[VertexAI(project=project, location=location, api_key=api_key)])
+            return Genkit(plugins=[VertexAI(project=project, location=location, api_key=effective_key)])
 
         raise ValueError(
-            f"Unsupported or missing vector embedding provider '{self.settings.VECTOR_EMBED_PROVIDER}'. "
+            f"Unsupported or missing vector embedding provider '{cfg.provider}'. "
             "Expected 'ollama', 'googleai', or 'vertexai'."
         )
+
+    async def _resolve_runtime_config(
+        self,
+        *,
+        tag: str,
+        group_id: Optional[str],
+        test_id: Optional[str],
+        llm_config: Optional[LLM_Config],
+    ) -> LLM_Config:
+        cfg = llm_config or self._static_config
+        if cfg is None:
+            cfg = await self._get_llm_config_service().resolve_config_for_group(
+                tag=tag,
+                group_id=group_id,
+                test_id=test_id,
+            )
+        if cfg is None:
+            raise ValueError(f"LLM configuration for tag '{tag}' is not configured.")
+        return cfg
 
     async def embed_text_async(
         self,
@@ -329,26 +455,41 @@ class EmbeddingService:
         model: Optional[str] = None,
         is_query: bool = False,
         *,
+        group_id: Optional[str] = None,
+        tag: str = DEFAULT_EMBEDDING_TAG,
+        test_id: Optional[str] = None,
+        llm_config: Optional[LLM_Config] = None,
         config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
         """Asynchronously compute and return an L2-normalized embedding vector for a string."""
         if not isinstance(text, str) or not text.strip():
             raise ValueError("Input text for vector embedding must be a non-empty string.")
 
-        target_model = model or self.settings.VECTOR_EMBED_MODEL
-        embedder_name = self.resolve_embedder_name(model=target_model)
-        provider = self.resolve_provider(model=target_model)
-        dimensions = self.settings.VECTOR_EMBED_DIMENSIONS
+        cfg = await self._resolve_runtime_config(
+            tag=tag,
+            group_id=group_id,
+            test_id=test_id,
+            llm_config=llm_config,
+        )
+        resolved_key = self._resolve_api_key(cfg)
+        target_model = (model or cfg.model or "").strip()
+        provider = self.resolve_provider(config=cfg, model=target_model, resolved_api_key=resolved_key)
+        embedder_name = self.resolve_embedder_name(config=cfg, model=target_model, resolved_api_key=resolved_key)
 
         mode: Literal["search", "document"] = "search" if is_query else "document"
         prefix = self.prefix_by_model(target_model, mode)
         content = f"{prefix}{text}" if prefix else text
 
-        embed_config: dict[str, Any] = dict(config) if config else {}
-        if provider in ("vertexai", "googleai") and dimensions and "output_dimensionality" not in embed_config:
-            embed_config["output_dimensionality"] = dimensions
+        embed_config: dict[str, Any] = {}
+        if cfg.extra_config:
+            embed_config.update(cfg.extra_config)
+        if config:
+            embed_config.update(config)
+        if provider in ("vertexai", "googleai") and cfg.dimensions and "output_dimensionality" not in embed_config:
+            embed_config["output_dimensionality"] = cfg.dimensions
 
-        response = await self.ai.embed(
+        ai_client = self._get_or_create_genkit(cfg, provider=provider, api_key=resolved_key)
+        response = await ai_client.embed(
             embedder=embedder_name,
             content=content,
             config=embed_config if embed_config else None,
@@ -357,7 +498,13 @@ class EmbeddingService:
             raise RuntimeError(f"Empty embedding response returned from embedder '{embedder_name}'.")
 
         raw_vector = response[0].embedding
-        return normalize_vector(raw_vector, dimensions=dimensions)
+        if cfg.dimensions is not None and len(raw_vector) < cfg.dimensions:
+            raise ValueError(
+                f"Embedding vector length ({len(raw_vector)}) is smaller than configured dimensions ({cfg.dimensions})."
+            )
+
+        target_dim = cfg.dimensions_truncated or cfg.dimensions
+        return normalize_vector(raw_vector, dimensions=target_dim)
 
     def embed_text(
         self,
@@ -365,6 +512,10 @@ class EmbeddingService:
         model: Optional[str] = None,
         is_query: bool = False,
         *,
+        group_id: Optional[str] = None,
+        tag: str = DEFAULT_EMBEDDING_TAG,
+        test_id: Optional[str] = None,
+        llm_config: Optional[LLM_Config] = None,
         config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
         """Compute and return an L2-normalized embedding vector for the given string.
@@ -372,6 +523,16 @@ class EmbeddingService:
         Safe to call from both synchronous scripts and environments with an active
         asyncio event loop (such as Jupyter notebooks or FastAPI endpoints).
         """
+        coro = self.embed_text_async(
+            text,
+            model=model,
+            is_query=is_query,
+            group_id=group_id,
+            tag=tag,
+            test_id=test_id,
+            llm_config=llm_config,
+            config=config,
+        )
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -379,13 +540,10 @@ class EmbeddingService:
 
         if loop is not None and loop.is_running():
             with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    asyncio.run,
-                    self.embed_text_async(text, model=model, is_query=is_query, config=config),
-                )
+                future = executor.submit(asyncio.run, coro)
                 return future.result()
 
-        return asyncio.run(self.embed_text_async(text, model=model, is_query=is_query, config=config))
+        return asyncio.run(coro)
 
     @staticmethod
     def cosine_scores(

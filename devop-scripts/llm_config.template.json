@@ -1,0 +1,13 @@
+{
+  "tag": "embedding-v1",
+  "provider": "ollama",
+  "model": "nomic-embed-text:latest",
+  "url": "http://localhost:11434",
+  "dimensions": 768,
+  "dimensions_truncated": null,
+  "api_key": "",
+  "location": "us-central1",
+  "project_id": null,
+  "extra_config": null,
+  "description": "A local development model"
+  }

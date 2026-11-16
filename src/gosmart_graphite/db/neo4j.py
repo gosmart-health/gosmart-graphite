@@ -1,5 +1,6 @@
 import logging
-from typing import Any, AsyncGenerator, Dict, List, Optional
+import ssl
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from gosmart_graphite.core.config import Settings, get_settings
 from neo4j import (
@@ -12,6 +13,32 @@ from neo4j import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_driver_uri_and_tls(uri: str) -> Tuple[str, Dict[str, Any]]:
+    """Build a strict TLS SSLContext combining system/env CAs with certifi for '+s://' URIs.
+
+    Neo4j Aura uses certificates chained to CAs (such as SSL.com TLS RSA Root CA 2022) that
+    may not exist in older OS bundles or custom SSL_CERT_FILE bundles, while 'neo4j+s://' /
+    'bolt+s://' URIs forbid passing custom ssl_context/trusted_certificates directly.
+    """
+    lower_uri = uri.lower()
+    if lower_uri.startswith("neo4j+s://"):
+        base_uri = "neo4j://" + uri[len("neo4j+s://") :]
+    elif lower_uri.startswith("bolt+s://"):
+        base_uri = "bolt://" + uri[len("bolt+s://") :]
+    else:
+        return uri, {}
+
+    try:
+        import certifi
+    except ImportError:
+        return uri, {}
+
+    ssl_context = ssl.create_default_context()
+    ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+    ssl_context.load_verify_locations(cafile=certifi.where())
+    return base_uri, {"ssl_context": ssl_context}
 
 
 class Neo4jClient:
@@ -32,13 +59,15 @@ class Neo4jClient:
                 else str(self.settings.DB_PASSWORD)
             )
             auth = (self.settings.DB_USER, password) if password else None
+            driver_uri, tls_kwargs = _resolve_driver_uri_and_tls(self.settings.DB_CONNECTION_URI)
             self._async_driver = AsyncGraphDatabase.driver(
-                self.settings.DB_CONNECTION_URI,
+                driver_uri,
                 auth=auth,
                 max_connection_lifetime=self.settings.DB_MAX_CONNECTION_LIFETIME,
                 max_connection_pool_size=self.settings.DB_MAX_CONNECTION_POOL_SIZE,
                 notifications_min_severity=NotificationMinimumSeverity.WARNING,
                 notifications_disabled_classifications=[NotificationDisabledClassification.SCHEMA],
+                **tls_kwargs,
             )
             import asyncio
 
@@ -56,13 +85,15 @@ class Neo4jClient:
                 else str(self.settings.DB_PASSWORD)
             )
             auth = (self.settings.DB_USER, password) if password else None
+            driver_uri, tls_kwargs = _resolve_driver_uri_and_tls(self.settings.DB_CONNECTION_URI)
             self._sync_driver = GraphDatabase.driver(
-                self.settings.DB_CONNECTION_URI,
+                driver_uri,
                 auth=auth,
                 max_connection_lifetime=self.settings.DB_MAX_CONNECTION_LIFETIME,
                 max_connection_pool_size=self.settings.DB_MAX_CONNECTION_POOL_SIZE,
                 notifications_min_severity=NotificationMinimumSeverity.WARNING,
                 notifications_disabled_classifications=[NotificationDisabledClassification.SCHEMA],
+                **tls_kwargs,
             )
         return self._sync_driver
 

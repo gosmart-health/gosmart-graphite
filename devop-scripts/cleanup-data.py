@@ -2,7 +2,7 @@
 """
 CLI DevOps utility to clean up database nodes and DICOM media files
 to prepare for a fresh test while strictly preserving basic configurations
-(e.g., User, Group, Identity, Authenticator, DICOMConfiguration, System, Schema Constraints).
+(e.g., User, Group, Identity, Authenticator, DICOMConfiguration, LLM_Config, System, Schema Constraints).
 """
 
 import argparse
@@ -33,6 +33,7 @@ PRESERVED_CONFIGURATION_LABELS: Set[str] = {
     "Authenticator",
     "Group",
     "DICOMConfiguration",
+    "LLM_Config",
     "System",
     "ClientApp",
     "Role",

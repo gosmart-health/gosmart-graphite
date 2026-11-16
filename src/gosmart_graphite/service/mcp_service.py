@@ -7,10 +7,12 @@ from starlette.datastructures import Headers, QueryParams
 from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
+from gosmart_graphite.core.auth_dependency import reset_active_group_id, set_active_group_id
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.core.security import decode_token
 from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.llm import LLMConfigCreateRequest
 from gosmart_graphite.model.system import (
     DICOMConfigurationCreateRequest,
     DICOMConfigurationUpdateRequest,
@@ -18,6 +20,7 @@ from gosmart_graphite.model.system import (
 )
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.graph_service import graph_service
+from gosmart_graphite.service.llm_config_service import llm_config_service
 from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 from gosmart_graphite.service.system_service import system_service
 from gosmart_graphite.service.user_service import user_service
@@ -26,13 +29,19 @@ logger = get_logger("gosmart_gs.mcp")
 
 mcp = MCPServer("gosmart-graphite")
 
-# Context variable to hold authenticated user across MCP tool invocations
+# Context variables to hold authenticated user and active group across MCP tool invocations
 _current_mcp_user: ContextVar[Optional[Dict[str, Any]]] = ContextVar("_current_mcp_user", default=None)
+_current_mcp_group: ContextVar[Optional[str]] = ContextVar("_current_mcp_group", default=None)
 
 
 def get_current_mcp_user() -> Optional[Dict[str, Any]]:
     """Retrieve the currently authenticated MCP user from context."""
     return _current_mcp_user.get()
+
+
+def get_current_mcp_group() -> Optional[str]:
+    """Retrieve the active Group ID bound to the current MCP request context, if any."""
+    return _current_mcp_group.get()
 
 
 def get_current_mcp_acted_by(fallback: str = "mcp_agent") -> str:
@@ -422,6 +431,174 @@ async def restore_dicom_configuration(
     }
 
 
+# -----------------------------------------------------------------------------
+# Dynamic LLM Configuration MCP Tools
+# -----------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_llm_configurations(
+    tag: Optional[str] = None,
+    provider: Optional[str] = None,
+    group_id: Optional[str] = None,
+    include_tests: bool = False,
+    test_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List active group-scoped LLM_Config nodes (with api_key redacted)."""
+    configs = await llm_config_service.list_llm_configs(
+        tag=tag,
+        provider=provider,
+        group_id=group_id,
+        include_tests=include_tests,
+        test_id=test_id,
+    )
+    logger.info("mcp_list_llm_configurations_executed", count=len(configs))
+    return configs
+
+
+@mcp.tool()
+async def get_llm_configuration(
+    config_id: Optional[str] = None,
+    tag: Optional[str] = None,
+    test_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Retrieve a single active LLM_Config by deterministic ID or tag (api_key redacted)."""
+    cfg = await llm_config_service.get_llm_config(config_id=config_id, tag=tag, test_id=test_id)
+    logger.info("mcp_get_llm_configuration_executed", config_id=config_id, tag=tag, found=bool(cfg))
+    return cfg
+
+
+@mcp.tool()
+async def upsert_llm_configuration(
+    tag: str,
+    provider: str,
+    model: str,
+    url: str = "",
+    dimensions: Optional[int] = None,
+    dimensions_truncated: Optional[int] = None,
+    api_key: str = "",
+    location: str = "us-central1",
+    project_id: Optional[str] = None,
+    extra_config_json: Optional[str] = None,
+    description: Optional[str] = None,
+    assign_group: Optional[str] = None,
+    test_id: Optional[str] = None,
+    acted_by: str = "mcp_agent",
+) -> Dict[str, Any]:
+    """Create or overwrite a purpose-tagged LLM_Config node and assign it to a sponsoring Group."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    extra_config = json.loads(extra_config_json) if extra_config_json else None
+    req = LLMConfigCreateRequest(
+        tag=tag,
+        provider=provider,
+        model=model,
+        url=url,
+        dimensions=dimensions,
+        dimensions_truncated=dimensions_truncated,
+        api_key=api_key,
+        location=location,
+        project_id=project_id,
+        extra_config=extra_config,
+        description=description,
+        assign_group=assign_group,
+        test_id=test_id,
+    )
+    saved = await llm_config_service.upsert_llm_config(
+        config_data=req,
+        assign_group=assign_group,
+        acted_by=effective_acted_by,
+        test_id=test_id,
+    )
+    logger.info("mcp_upsert_llm_configuration_executed", config_id=saved.get("id"), tag=tag)
+    return saved
+
+
+@mcp.tool()
+async def assign_llm_configuration_to_group(
+    config_id: str,
+    group: str,
+    test_id: Optional[str] = None,
+    acted_by: str = "mcp_agent",
+) -> Optional[Dict[str, Any]]:
+    """Assign an existing active LLM_Config to a target sponsoring Group via HAS_LLM_CONFIG."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    res = await llm_config_service.assign_to_group(
+        config_id=config_id,
+        group_identifier=group,
+        acted_by=effective_acted_by,
+        test_id=test_id,
+    )
+    logger.info("mcp_assign_llm_configuration_executed", config_id=config_id, group=group, assigned=bool(res))
+    return res
+
+
+@mcp.tool()
+async def dissociate_llm_configuration_from_group(
+    config_id: str,
+    group_id: str,
+    acted_by: str = "mcp_agent",
+) -> Dict[str, Any]:
+    """Soft-dissociate a Group from an LLM_Config (swapping HAS_LLM_CONFIG to NOT_HAS_LLM_CONFIG)."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    success = await llm_config_service.dissociate_from_group(
+        config_id=config_id,
+        group_id=group_id,
+        acted_by=effective_acted_by,
+    )
+    logger.info(
+        "mcp_dissociate_llm_configuration_executed",
+        config_id=config_id,
+        group_id=group_id,
+        success=success,
+    )
+    return {
+        "success": success,
+        "config_id": config_id,
+        "group_id": group_id,
+    }
+
+
+@mcp.tool()
+async def delete_llm_configuration(
+    config_id: str,
+    hard: bool = False,
+    acted_by: str = "mcp_agent",
+) -> Dict[str, Any]:
+    """Soft-delete (or hard-delete if specified) an LLM_Config node."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    deleted = await llm_config_service.delete_llm_config(
+        config_id=config_id,
+        acted_by=effective_acted_by,
+        hard_delete=hard,
+    )
+    logger.info("mcp_delete_llm_configuration_executed", config_id=config_id, success=deleted)
+    return {
+        "success": deleted,
+        "config_id": config_id,
+        "hard_deleted": hard,
+    }
+
+
+@mcp.tool()
+async def restore_llm_configuration(
+    config_id: str,
+    acted_by: str = "mcp_agent",
+) -> Dict[str, Any]:
+    """Restore a previously soft-deleted LLM_Config node."""
+    check_mcp_admin_role()
+    effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
+    restored = await llm_config_service.restore_llm_config(config_id=config_id, acted_by=effective_acted_by)
+    logger.info("mcp_restore_llm_configuration_executed", config_id=config_id, restored=bool(restored))
+    return {
+        "success": bool(restored),
+        "configuration": restored,
+    }
+
+
 @mcp.tool()
 async def store_scu(
     destination_aet: str,
@@ -548,7 +725,12 @@ class MCPAuthMiddleware:
             await response(scope, receive, send)
             return
 
+        raw_group_id = headers.get("x-group-id") or query_params.get("group_id")
+        clean_group_id = raw_group_id.strip() if isinstance(raw_group_id, str) and raw_group_id.strip() else None
+
         token_ctx = _current_mcp_user.set(user)
+        group_ctx = _current_mcp_group.set(clean_group_id)
+        active_group_ctx = set_active_group_id(clean_group_id)
 
         async def send_wrapper(message: Dict[str, Any]) -> None:
             # 1. Capture mcp-session-id from response headers for Streamable HTTP
@@ -578,6 +760,8 @@ class MCPAuthMiddleware:
         try:
             await self.app(scope, receive, send_wrapper)
         finally:
+            reset_active_group_id(active_group_ctx)
+            _current_mcp_group.reset(group_ctx)
             _current_mcp_user.reset(token_ctx)
 
 

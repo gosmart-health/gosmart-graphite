@@ -533,6 +533,8 @@ class GraphService:
             "CREATE CONSTRAINT group_sys_id_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.id IS UNIQUE",
             "CREATE CONSTRAINT group_code_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.code IS UNIQUE",
             "CREATE CONSTRAINT audit_log_sys_id_unique IF NOT EXISTS FOR (a:AuditLog) REQUIRE a.id IS UNIQUE",
+            "CREATE CONSTRAINT llm_config_sys_id_unique IF NOT EXISTS FOR (l:LLM_Config) REQUIRE l.id IS UNIQUE",
+            "CREATE INDEX llm_config_tag_idx IF NOT EXISTS FOR (l:LLM_Config) ON (l.tag)",
             *FHIR_ALL_SCHEMA_DDL,
         ]
         if not await self.client.verify_connectivity():

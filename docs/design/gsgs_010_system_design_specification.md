@@ -57,6 +57,9 @@ graph TD
   - `HOST`, `PORT`, `RELOAD`
   - `LOG_LEVEL`, `LOG_FORMAT`, `LOG_DIR`, `LOG_FILE`, `LOG_ROTATION_DAYS`, `LOG_BACKUP_COUNT`, `LOG_TO_FILE`
   - `DICOM_AE_TITLE`, `DICOM_SCP_PORT`, `DICOM_MAX_PDU`
+  - `LLM_CONFIG_ENCRYPTION_KEY`: Optional Fernet key or passphrase for encrypting stored `LLM_Config` `api_key` values at rest in Neo4j
+* **`security.py`**: Password hashing (Argon2id), JWT signing/decoding, API key hashing, and `LLM_Config` secret utilities (`is_env_var_reference`, `classify_llm_api_key`, `encrypt_llm_api_key`, `resolve_llm_api_key`, `mask_llm_api_key`).
+* **`auth_dependency.py`**: FastAPI dependencies (`get_current_user`, `get_current_group_context`, `require_roles`) plus `ContextVar` active group propagation (`get_active_group_id`, `set_active_group_id`, `reset_active_group_id`).
 * **`logging.py`**: Industrial-strength `structlog` logging engine:
   - Dual output: Console (`JSONRenderer` or `ConsoleRenderer`) and File (`TimedRotatingFileHandler` with `JSONRenderer`).
   - 7-day auto-rotation (`when="D", interval=7`) with backup retention (`backupCount=8`).
@@ -72,6 +75,7 @@ graph TD
   - Schema constraint initialization:
     - Deterministic ID uniqueness: `Patient.id`, `Study.id`, `Series.id`, `Instance.id IS UNIQUE`
     - DICOM natural key uniqueness: `Patient.patient_id`, `Study.study_instance_uid`, `Series.series_instance_uid`, `Instance.sop_instance_uid IS UNIQUE`
+    - LLM configuration constraints & indexes: `LLM_Config.id IS UNIQUE` (`llm_config_sys_id_unique`), index on `LLM_Config.tag` (`llm_config_tag_idx`)
 
 ### 3.3 Data Models Subsystem (`model/`)
 * **`graph.py`**: Graph domain, auditable base entities, and query models:
@@ -86,6 +90,10 @@ graph TD
   - `SystemResponse`, `SystemUpdateRequest`: Root environment metadata with owner contact information and serial numbers.
   - `DICOMConfigurationResponse`, `DICOMConfigurationCreateRequest`, `DICOMConfigurationUpdateRequest`: DIMSE/DICOMweb parameters, TLS security settings, services, transfer syntaxes, and promiscuous mode support.
   - `SystemBootstrapResponse`: Idempotent environment initialization status.
+* **`llm.py`**: Dynamic, group-scoped LLM configuration models:
+  - `LLM_Config` (`LLMConfigNode`, `__label__ = "LLM_Config"`): Auditable node capturing `tag` (globally unique purpose key), normalized `provider`, `model`, `url`, `dimensions`, `dimensions_truncated` (validated `<= dimensions`), `api_key`, `location`, `project_id`, `extra_config`, and `description`.
+  - `HasLlmConfigRelation` (`__type__ = "HAS_LLM_CONFIG"`): Links sponsoring `(:Group)` to `(:LLM_Config)`.
+  - API/CLI DTOs: `LLMConfigCreateRequest`, `LLMConfigUpdateRequest`, `LLMConfigAssignRequest`, `LLMConfigGroupSummary`, `LLMConfigResponse` (always masks `api_key` and exposes `has_api_key` and `api_key_source`).
 * **`dicom.py`**: Pydantic models for domain entities:
   - `PatientModel`: `patient_id`, `patient_name`, `patient_birth_date`, `patient_sex`
   - `StudyModel`: `study_instance_uid`, `study_date`, `study_time`, `study_description`, `accession_number`
@@ -101,6 +109,15 @@ graph TD
   - `cleanup_all_test_data()`: Full test cleanup routine across property graph labels (`System`, `DICOMConfiguration`, `Instance`, `Patient`, `Series`, `Study`) where `test_id` is defined and non-empty. Drains associated ephemeral test SCP instances and detaches/deletes nodes with label breakdown.
   - Manages full CRUD operations for `System` and `DICOMConfiguration` nodes.
   - Handles relationship soft-deletion (`NOT_HAS_DICOM_CONFIGURATION`) and restoration (`HAS_DICOM_CONFIGURATION`).
+* **`llm_config_service.py`**:
+  - Async and `_sync` Neo4j persistence for `(:LLM_Config)` nodes and `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` links.
+  - `resolve_target_group()`: Matches active `Group` by `id`, `name`, or `code` (defaults to `'GoSmart Health'`; fails on 0 or `>1` matches).
+  - `upsert_llm_config()`: Overwrite clones prior canonical state to `<id>__archived__<hex>` (`Action='DELETE'`) with `[:NOT_HAS_LLM_CONFIG]` links on previously linked groups while preserving active `[:HAS_LLM_CONFIG]` links across all sponsoring groups.
+  - `resolve_config_for_group()` / `resolve_config_for_group_sync()`: Upward `(:Group)-[:SUB_GROUP_OF*0..]->(:Group)` shortest-path resolution with `'GoSmart Health'` fallback; raises on same-depth ambiguity.
+* **`embedding_service.py`**:
+  - `EmbeddingService` (aliased as `VectorService`) dynamically resolves active `LLM_Config` (default `tag='embedding'`) for the active `Group` (`ContextVar` or explicit `group_id`).
+  - Maintains a thread-safe Genkit client cache keyed by resolved config fingerprint (`provider`, `url`, resolved `api_key`, `location`, `project_id`).
+  - Supports `dimensions` (e.g., `output_dimensionality`) and Matryoshka `dimensions_truncated` post-truncation with L2 vector normalization and similarity scoring.
 * **`media_service.py`**:
   - Storage-agnostic media service implementing unified read, write, exists, delete, stat, list_files, copy, move, and DICOM dataset read/write.
   - Multi-provider URI support: Local files (`file://`), Windows UNC (`\\server\share`), Google Cloud Storage (`gs://`), Amazon S3 (`s3://`), and Azure Blob (`az://` or `azure://`).
@@ -130,7 +147,7 @@ graph TD
   - WADO-RS: Single instance Part-10 file retrieval and multipart/related bulk retrieval for studies and series by resolving `storage_uri` via `media_service`.
   - STOW-RS: Ingestion endpoint supporting raw binary and `multipart/related` payloads with blackbox persistence and instance provenance tracking.
 * **`mcp_service.py`**:
-  - Exposes administrative and diagnostic MCP tools: `health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `soft_delete_relationship`, `restore_relationship`, `execute_cypher`, `echo_scu`, `get_system_info`, `update_system_info`, `bootstrap_system_defaults`, `list_dicom_configurations`, `get_dicom_configuration`, `create_dicom_configuration`, `update_dicom_configuration`, `delete_dicom_configuration`, `restore_dicom_configuration`.
+  - Exposes administrative and diagnostic MCP tools: `health_check`, `generate_mock_dicom`, `ingest_dicom_file`, `list_patients`, `get_patient_graph`, `soft_delete_relationship`, `restore_relationship`, `execute_cypher`, `echo_scu`, `get_system_info`, `update_system_info`, `bootstrap_system_defaults`, `list_dicom_configurations`, `get_dicom_configuration`, `create_dicom_configuration`, `update_dicom_configuration`, `delete_dicom_configuration`, `restore_dicom_configuration`, `list_llm_configurations`, `get_llm_configuration`, `upsert_llm_configuration`, `assign_llm_configuration_to_group`, `dissociate_llm_configuration_from_group`, `delete_llm_configuration`, `restore_llm_configuration`.
 
 
 ### 3.5 Actor Subsystem (`actor/`)
@@ -144,8 +161,10 @@ graph TD
   - FastAPI application factory with lifespan managing driver startup and shutdown.
   - Mounts MCP SSE server at `/mcp`.
   - HTTP middleware binding request ID and timing to structlog context.
-* **`cli.py`**:
-  - Typer CLI (`gosmart-graphite`) providing terminal management: `start`, `health`, `mock`, `ingest`, `patients`, `query`, `echo`, `mcp`.
+* **`api/v1/endpoints/llm.py`**:
+  - REST endpoints under `/api/v1/configurations/llm` (`GET`, `POST`, `GET /{config_id}`, `PUT /{config_id}`, `POST /{config_id}/assign`, `DELETE /{config_id}/groups/{group_id}`, `DELETE /{config_id}`, `POST /{config_id}/restore`) enforcing `PLATFORM_ADMIN`/`Admin` roles on mutations and masking `api_key`.
+* **`cli.py` & `cli/configure.py`**:
+  - Typer CLI (`gosmart-graphite`) providing terminal management: `start`, `health`, `mock`, `ingest`, `patients`, `query`, `echo`, `mcp`, `admin`, and `configure llm-config`.
 
 ---
 
@@ -211,8 +230,23 @@ erDiagram
         boolean tls_enabled
         datetime created_at
     }
+    GROUP {
+        string id PK
+        string name
+        string code
+        string group_type
+    }
+    LLM_CONFIG {
+        string id PK
+        string tag
+        string provider
+        string model
+        int dimensions
+        int dimensions_truncated
+    }
 
     SYSTEM ||--o{ DICOM_CONFIGURATION : HAS_DICOM_CONFIGURATION
+    GROUP ||--o{ LLM_CONFIG : HAS_LLM_CONFIG
     PATIENT ||--o{ STUDY : HAS_STUDY
     STUDY ||--o{ SERIES : HAS_SERIES
     SERIES ||--o{ INSTANCE : HAS_INSTANCE

@@ -41,17 +41,19 @@ A high-performance DICOM Knowledge Graph backend server powered by **Python
   StreamableHTTP, and STDIO transports for AI agent integration (Cursor, Cline,
   AntiGravity).
 - **Vector Embedding Computation Service**: Unified text embedding generation
-  (`VectorService`) powered by **Genkit** (`genkit-ollama` and
-  `genkit-google-genai`) supporting both local/network Ollama models (e.g.,
-  `nomic-embed-text:latest`) and Google Vertex AI embedding models with L2
-  vector normalization.
+  (`EmbeddingService` / `VectorService`) powered by **Genkit** (`genkit-ollama`
+  and `genkit-google-genai`) dynamically resolved from Neo4j `(:LLM_Config)`
+  nodes scoped to sponsoring `(:Group)` hierarchies (with `'GoSmart Health'`
+  fallback), supporting Ollama and Google Vertex AI / Gemini models,
+  Matryoshka `dimensions_truncated`, and L2 vector normalization.
 - **Audit Trail**: Structured audit logging with configurable retention, Neo4j
   persistence, and background `AuditActor` for non-blocking audit writes.
 - **Docker & Docker Compose**: Multi-stage Dockerfile with full-stack
   `docker compose` orchestration (Graph Server + Neo4j), health checks, named
   volumes, and unprivileged runtime user.
 - **CLI Management Tool**: Typer-based CLI (`src/gosmart_graphite/cli.py` /
-  `gosmart-graphite`) with `start`, `health`, `echo`, `send`, `mcp`, and `admin`
+  `gosmart-graphite`) with `start`, `health`, `echo`, `send`, `mcp`, `admin`,
+  and `configure`
   commands for server operation and administration.
 - **CI/CD Pipeline**: GitHub Actions workflow with Ruff linting, pip-audit
   vulnerability scanning, CycloneDX SBOM generation, multi-platform unit tests,
@@ -82,11 +84,13 @@ gosmart-graphite/
 │   │       │   ├── dicomweb.py  # DICOMweb RESTful services (STOW-RS, WADO-RS, QIDO-RS)
 │   │       │   ├── graph.py     # Graph traversal and Cypher query endpoints
 │   │       │   ├── health.py    # Health status (Neo4j, Pykka, Storage)
+│   │       │   ├── llm.py       # Dynamic group-scoped LLM configuration endpoints
 │   │       │   └── system.py    # System metadata, DICOM configurations, bootstrap
 │   │       └── router.py        # Aggregated v1 API router
 │   ├── cli/                     # Administrative CLI subcommands
 │   │   ├── __init__.py
-│   │   └── admin.py             # Admin bootstrap & API key generation commands
+│   │   ├── admin.py             # Admin bootstrap & API key generation commands
+│   │   └── configure.py         # Neo4j runtime configuration commands (configure llm-config)
 │   ├── core/                    # Application settings & logging
 │   │   ├── __init__.py
 │   │   ├── auth_dependency.py   # FastAPI dependency for JWT / API key authentication
@@ -106,6 +110,7 @@ gosmart-graphite/
 │   │   ├── graph.py             # Cypher and graph schema models
 │   │   ├── health.py            # Health response models
 │   │   ├── media.py             # StorageScheme, ParsedStorageUri, MediaMetadata
+│   │   ├── llm.py               # LLM_Config, HasLlmConfigRelation, and LLM API DTOs
 │   │   └── system.py            # System, DICOMConfiguration, User, Group models
 │   ├── service/                 # Business logic services
 │   │   ├── __init__.py
@@ -115,6 +120,7 @@ gosmart-graphite/
 │   │   ├── fhir_service.py      # FHIR R4B batch fetching and Neo4j graph upsert
 │   │   ├── graph_service.py     # Cypher queries for DICOM & FHIR hierarchy
 │   │   ├── group_service.py     # Organization and group management
+│   │   ├── llm_config_service.py# Group-scoped LLM_Config persistence & resolution
 │   │   ├── mcp_service.py       # MCP server (SSE, StreamableHTTP, STDIO transports)
 │   │   ├── media_service.py     # Storage-agnostic async media (Local, UNC, GCS, S3, Azure)
 │   │   ├── pynetdicom_service.py# Dynamic SCP lifecycle, C-STORE/C-ECHO, network AE
@@ -157,6 +163,7 @@ gosmart-graphite/
     ├── test_fhir_service.py
     ├── test_graph_service.py
     ├── test_group_service.py
+    ├── test_llm_config.py
     ├── test_live_mdicom_move.py
     ├── test_logging.py
     ├── test_mcp.py
@@ -236,13 +243,8 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_FHIR_POLL_SEC`                   | `120`                                | FHIR polling interval to check for DiagnosticReport                                                                   |
 | `GOSMART_GS_FHIR_ACCESSION_SYSTEM`           | `""`                                 | System for the Accession Number                                                                                       |
 | `GOSMART_GS_FHIR_PATIENT_ID_SYSTEM`          | `"urn:oid:2.16.840.1.113883.4.3.25"` | System for the Patient ID/ MRN                                                                                        |
-| **Vector Embedding**                         |                                      |                                                                                                                       |
-| `GOSMART_GS_VECTOR_EMBED_PROVIDER`           | `""`                                 | Vector embedding provider (`ollama` or `vertexai`; empty disables)                                                    |
-| `GOSMART_GS_VECTOR_EMBED_SERVER_URL`         | `""`                                 | Base URL for local/network Ollama server (e.g. `http://10.200.0.103:11434`)                                           |
-| `GOSMART_GS_VECTOR_EMBED_MODEL`              | `""`                                 | Embedding model name (e.g. `nomic-embed-text:latest` or `gemini-embedding-001`)                                       |
-| `GOSMART_GS_VECTOR_EMBED_DIMENSIONS`         | *(None)*                             | Expected / target vector dimensionality (e.g. `768`)                                                                  |
-| `GOSMART_GS_VERTEX_AI_API_KEY`               | *(None)*                             | API key for Google Vertex AI (Express Mode) / Gemini API (`VERTEX_AI_API_KEY`, `GOOGLE_API_KEY`, or `GEMINI_API_KEY`) |
-| `GOSMART_GS_VERTEX_AI_LOCATION`              | `us-central1`                        | Google Cloud region for Vertex AI embeddings                                                                          |
+| **LLM Configuration Security**               |                                      | *(LLM providers/models/URLs are persisted dynamically in Neo4j as `LLM_Config` nodes; see `configure llm-config`)*    |
+| `GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY`       | *(None)*                             | Optional Fernet key or passphrase for encrypting stored `LLM_Config` `api_key` values at rest in Neo4j              |
 | **Storage**                                  |                                      |                                                                                                                       |
 | `GOSMART_GS_STORAGE_ROOT_URI`                | `file:///tmp/gosmart_dicom_storage`  | Storage root URI (file://, gs://, s3://, az://, \\\\unc\\share)                                                       |
 | **Server**                                   |                                      |                                                                                                                       |
@@ -481,6 +483,10 @@ uv run python src/gosmart_graphite/cli.py send /path/to/dicom/ --dest-aet REMOTE
 # Run standalone MCP server (SSE, StreamableHTTP, or STDIO)
 uv run python src/gosmart_graphite/cli.py mcp --transport sse --port 8001
 uv run python src/gosmart_graphite/cli.py mcp --transport stdio
+
+# Register or overwrite a purpose-tagged, group-scoped LLM_Config in Neo4j
+uv run gosmart-graphite configure llm-config --file devop-scripts/llm_config.template.json
+uv run gosmart-graphite configure llm-config --file /path/to/llm_config.json --assign "GoSmart Health"
 ```
 
 Administrative commands are available via `src/cli/admin.py`
@@ -542,6 +548,17 @@ generate the API key.
   active association counts for all running and draining SCP instances.
 - `GET /api/v1/configurations/dicom-instances/{id}` — Inspect runtime status of
   a specific SCP instance.
+- `GET /api/v1/configurations/llm` — List active group-scoped `LLM_Config` nodes
+  (with `api_key` always masked; filterable by `tag`, `provider`, `group_id`).
+- `POST /api/v1/configurations/llm` — Register or overwrite a purpose-tagged
+  `LLM_Config` (archives prior version via `NOT_HAS_LLM_CONFIG`) and assign it to
+  a sponsoring `Group` (defaults to `'GoSmart Health'`; admin only).
+- `GET /api/v1/configurations/llm/{id}` / `PUT /api/v1/configurations/llm/{id}` —
+  Retrieve or update an `LLM_Config` (admin required for updates).
+- `POST /api/v1/configurations/llm/{id}/assign` / `DELETE /api/v1/configurations/llm/{id}/groups/{group_id}` —
+  Assign a sponsoring `Group` or soft-dissociate (`NOT_HAS_LLM_CONFIG`) (admin only).
+- `DELETE /api/v1/configurations/llm/{id}` / `POST /api/v1/configurations/llm/{id}/restore` —
+  Soft/hard delete or restore an `LLM_Config` (admin only).
 
 #### Dynamic SCP Lifecycle & Presentation Context Enforcement:
 
@@ -562,6 +579,10 @@ generate the API key.
 - `list_dicom_configurations`, `get_dicom_configuration`,
   `create_dicom_configuration`, `update_dicom_configuration`,
   `delete_dicom_configuration`, `restore_dicom_configuration`
+- `list_llm_configurations`, `get_llm_configuration`,
+  `upsert_llm_configuration`, `assign_llm_configuration_to_group`,
+  `dissociate_llm_configuration_from_group`, `delete_llm_configuration`,
+  `restore_llm_configuration`
 
 ---
 

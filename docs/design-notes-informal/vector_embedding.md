@@ -103,42 +103,55 @@ if norm > 0:
     normalized_vector = vector / norm
 ```
 
-## GoSmart `VectorService` (Genkit Integration)
+## GoSmart `EmbeddingService` / `VectorService` (Dynamic `LLM_Config` + Genkit)
 
-`VectorService` (`service/vector_service.py`) uses **Genkit** (`genkit`, `genkit-ollama`, and `genkit-google-genai`) to compute L2-normalized vector embeddings from either a local/network **Ollama** server or **Google Vertex AI**.
+`EmbeddingService` (`src/gosmart_graphite/service/embedding_service.py`, aliased as `VectorService`) uses **Genkit** (`genkit`, `genkit-ollama`, and `genkit-google-genai`) to compute L2-normalized vector embeddings from either a local/network **Ollama** server or **Google Vertex AI / Gemini API**.
 
-### Environment Configuration (`.env`)
+Runtime parameters are **not** read from static `VECTOR_*` / `VERTEX_*` environment variables. Instead, `EmbeddingService` dynamically resolves the active `(:LLM_Config {tag: "embedding"})` node in Neo4j for the active `(:Group)` (traversing upward via `(:Group)-[:SUB_GROUP_OF*0..]->(:Group)` with `'GoSmart Health'` fallback), caches Genkit clients per configuration fingerprint, applies optional Matryoshka truncation (`dimensions_truncated <= dimensions`), and performs L2 normalization.
 
-```dotenv
-# Provider: 'ollama' or 'vertexai'
-GOSMART_GS_VECTOR_EMBED_PROVIDER=ollama
-GOSMART_GS_VECTOR_EMBED_SERVER_URL=http://10.200.0.103:11434
-GOSMART_GS_VECTOR_EMBED_MODEL=nomic-embed-text:latest
-GOSMART_GS_VECTOR_EMBED_DIMENSIONS=768
+### Registering an Embedding `LLM_Config` in Neo4j
 
-# Optional for Vertex AI provider (supports API Key or ADC / Service Account):
-# GOSMART_GS_VECTOR_EMBED_PROVIDER=vertexai
-# GOSMART_GS_VECTOR_EMBED_MODEL=gemini-embedding-001
-# GOSMART_GS_VECTOR_EMBED_DIMENSIONS=768
-# GOSMART_GS_VERTEX_AI_API_KEY=your-vertex-ai-or-gemini-api-key
-# GOSMART_GS_VERTEX_AI_LOCATION=us-central1
-# GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+Create a local JSON file (for example starting from `devop-scripts/llm_config.template.json`):
+
+```json
+{
+  "tag": "embedding",
+  "provider": "ollama",
+  "model": "nomic-embed-text:latest",
+  "url": "http://localhost:11434",
+  "dimensions": 768,
+  "dimensions_truncated": null,
+  "api_key": "",
+  "location": "us-central1"
+}
 ```
+
+Register or overwrite it in Neo4j via CLI:
+
+```bash
+uv run gosmart-graphite configure llm-config --file devop-scripts/llm_config.template.json --assign "GoSmart Health"
+```
+
+For cloud providers, `api_key` may store an environment variable reference such as `"${GOSMART_GS_VERTEX_AI_API_KEY}"`, or be encrypted at rest (`enc:fernet:...`) when `GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY` is configured.
 
 ### Usage Example
 
 ```python
-from service.vector_service import VectorService
+from gosmart_graphite.service.embedding_service import EmbeddingService
 
-vector_service = VectorService()
+embedding_service = EmbeddingService()
 clinical_note = "Patient presents with acute onset dyspnea and denies chest pain."
 
-# Synchronous call (also safe inside Jupyter notebooks)
-normalized_vector = vector_service.embed_text(clinical_note)
+# Synchronous call (resolves active Group from ContextVar or 'GoSmart Health')
+normalized_vector = embedding_service.embed_text(clinical_note)
 print(f"Dimension: {len(normalized_vector)}")
 
-# Asynchronous call
-# normalized_vector = await vector_service.embed_text_async(clinical_note)
+# Scoped to a specific Group or custom purpose tag
+# normalized_vector = await embedding_service.embed_text_async(
+#     clinical_note,
+#     group_id="<group-id>",
+#     tag="embedding",
+# )
 ```
 
 ## Practical Python Example Code
@@ -261,4 +274,3 @@ The meaning of the score:
 ## Schema Design Pattern
 
 Please continue to [Decoupled Vector Index Graph Pattern Design](./decoupled_vec_index_graph.md)
-

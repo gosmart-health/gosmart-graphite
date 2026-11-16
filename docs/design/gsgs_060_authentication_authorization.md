@@ -106,6 +106,7 @@ graph TD
 * `(:Study)-[:PERFORMED_AT]->(:Group)`
 * `(:Patient)-[:BELONGS_TO]->(:Group)`
 * `(:DICOMConfiguration)-[:SCOPED_TO]->(:Group)`
+* `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` *(upward traversal via `SUB_GROUP_OF*0..` resolves active group LLM settings with `'GoSmart Health'` fallback; negated as `NOT_HAS_LLM_CONFIG`)*
 
 ---
 
@@ -240,3 +241,4 @@ gantt
 | Version | Date | Author | Description of Changes |
 | :--- | :--- | :--- | :--- |
 | **1.0.0** | 2026-10-04 | Core Architecture Team | Initial design specification covering JWT, OAuth2, Shadow Accounts, Groups, and MCP protection. |
+| **1.1.0** | 2026-11-15 | Core Architecture Team | Added `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` group-scoped LLM configuration relationship and MCP `X-Group-ID` active group propagation. |

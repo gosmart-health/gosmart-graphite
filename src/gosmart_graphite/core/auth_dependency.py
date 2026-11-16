@@ -1,3 +1,4 @@
+from contextvars import ContextVar, Token
 from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -12,6 +13,25 @@ logger = get_logger("gosmart_gs.auth_dep")
 
 # Optional Bearer schema for swagger UI & header extraction
 bearer_scheme = HTTPBearer(auto_error=False)
+
+# Request/MCP-scoped active Group ID for downstream services (e.g. dynamic LLM resolution)
+_active_group_id_ctx: ContextVar[Optional[str]] = ContextVar("_active_group_id_ctx", default=None)
+
+
+def get_active_group_id() -> Optional[str]:
+    """Return the active Group ID bound to the current execution context, if any."""
+    return _active_group_id_ctx.get()
+
+
+def set_active_group_id(group_id: Optional[str]) -> Token[Optional[str]]:
+    """Bind an active Group ID to the current execution context."""
+    cleaned = group_id.strip() if isinstance(group_id, str) and group_id.strip() else None
+    return _active_group_id_ctx.set(cleaned)
+
+
+def reset_active_group_id(token: Token[Optional[str]]) -> None:
+    """Reset the active Group ID context variable using its token."""
+    _active_group_id_ctx.reset(token)
 
 
 async def get_current_user(
@@ -114,6 +134,7 @@ async def get_current_group_context(
         # Resolve user's primary affiliation if available
         affiliations = await group_service.get_user_affiliations(current_user["id"])
         primary = next((a for a in affiliations if a.get("is_primary")), None)
+        set_active_group_id(primary.get("group_id") if primary else None)
         return primary
 
     target_group_id = x_group_id.strip()
@@ -126,6 +147,9 @@ async def get_current_group_context(
         if "PLATFORM_ADMIN" in system_roles or "ADMIN" in system_roles:
             group = await group_service.get_group_by_id(target_group_id)
             if group:
+                set_active_group_id(group.get("id"))
+                request.state.current_group = group
+                bind_log_context(group_id=group["id"], group_code=group.get("code"))
                 return group
 
         raise HTTPException(
@@ -133,6 +157,7 @@ async def get_current_group_context(
             detail=f"User does not have active access to facility/group '{target_group_id}'",
         )
 
+    set_active_group_id(matched.get("id"))
     request.state.current_group = matched
     bind_log_context(group_id=matched["id"], group_code=matched.get("code"))
     return matched

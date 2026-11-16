@@ -29,32 +29,23 @@ def test_fhir_settings_env_override():
         assert settings.FHIR_PATIENT_ID_SYSTEM == "http://hospital.org/mrn"
 
 
-def test_vector_embed_settings_defaults():
+def test_llm_settings_legacy_vars_removed_and_encryption_key_default():
     with patch.dict(os.environ, {}, clear=True):
         settings = Settings(_env_file=None)
-        assert settings.VECTOR_EMBED_PROVIDER == ""
-        assert settings.VECTOR_EMBED_MODEL == ""
-        assert settings.VECTOR_EMBED_SERVER_URL == ""
-        assert settings.VECTOR_EMBED_DIMENSIONS is None
-        assert settings.VERTEX_AI_API_KEY is None
-        assert settings.VERTEX_AI_LOCATION == "us-central1"
+        assert not hasattr(settings, "VECTOR_EMBED_PROVIDER")
+        assert not hasattr(settings, "VECTOR_EMBED_MODEL")
+        assert not hasattr(settings, "VECTOR_EMBED_SERVER_URL")
+        assert not hasattr(settings, "VECTOR_EMBED_DIMENSIONS")
+        assert not hasattr(settings, "VERTEX_AI_API_KEY")
+        assert not hasattr(settings, "VERTEX_AI_LOCATION")
+        assert settings.LLM_CONFIG_ENCRYPTION_KEY is None
 
 
-def test_vector_embed_settings_env_override():
+def test_llm_config_encryption_key_env_override():
     custom_env = {
-        "GOSMART_GS_VECTOR_EMBED_PROVIDER": "ollama",
-        "GOSMART_GS_VECTOR_EMBED_MODEL": "nomic-embed-text:latest",
-        "GOSMART_GS_VECTOR_EMBED_SERVER_URL": "http://10.200.0.103:11434",
-        "GOSMART_GS_VECTOR_EMBED_DIMENSIONS": "768",
-        "GOSMART_GS_VERTEX_AI_API_KEY": "AIzaSyTestKey123",
-        "GOSMART_GS_VERTEX_AI_LOCATION": "us-east4",
+        "GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY": "test-passphrase-for-llm-keys",
     }
     with patch.dict(os.environ, custom_env, clear=True):
         settings = Settings(_env_file=None)
-        assert settings.VECTOR_EMBED_PROVIDER == "ollama"
-        assert settings.VECTOR_EMBED_MODEL == "nomic-embed-text:latest"
-        assert settings.VECTOR_EMBED_SERVER_URL == "http://10.200.0.103:11434"
-        assert settings.VECTOR_EMBED_DIMENSIONS == 768
-        assert settings.VERTEX_AI_API_KEY is not None
-        assert settings.VERTEX_AI_API_KEY.get_secret_value() == "AIzaSyTestKey123"
-        assert settings.VERTEX_AI_LOCATION == "us-east4"
+        assert settings.LLM_CONFIG_ENCRYPTION_KEY is not None
+        assert settings.LLM_CONFIG_ENCRYPTION_KEY.get_secret_value() == "test-passphrase-for-llm-keys"

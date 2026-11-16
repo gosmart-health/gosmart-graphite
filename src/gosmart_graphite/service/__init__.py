@@ -1,5 +1,6 @@
 from gosmart_graphite.service.dicom_service import DicomService, dicom_service
 from gosmart_graphite.service.embedding_service import (
+    DEFAULT_EMBEDDING_TAG,
     EmbeddingService,
     SimilarityMetric,
     compute_cosine_scores,
@@ -18,6 +19,7 @@ from gosmart_graphite.service.fhir_service import (
 )
 from gosmart_graphite.service.graph_service import GraphService, graph_service
 from gosmart_graphite.service.group_service import GroupService, group_service
+from gosmart_graphite.service.llm_config_service import LLMConfigService, llm_config_service
 from gosmart_graphite.service.media_service import MediaService, media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService, pynetdicom_service
 from gosmart_graphite.service.user_service import UserService, user_service
@@ -26,6 +28,7 @@ VectorService = EmbeddingService
 embedding_service = vector_service
 
 __all__ = [
+    "DEFAULT_EMBEDDING_TAG",
     "DicomService",
     "dicom_service",
     "EmbeddingService",
@@ -36,6 +39,8 @@ __all__ = [
     "FhirService",
     "GraphService",
     "graph_service",
+    "LLMConfigService",
+    "llm_config_service",
     "MediaService",
     "media_service",
     "PyNetDicomService",

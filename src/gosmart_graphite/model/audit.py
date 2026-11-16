@@ -49,6 +49,14 @@ class AuditAction(str, Enum):
     DICOM_CONFIGURATION_SERVES_GROUP = "DICOM Configuration Associated with Group"
     DICOM_CONFIGURATION_DISSOCIATED = "DICOM Configuration Dissociated from Group"
 
+    # LLM Configuration Actions
+    LLM_CONFIGURATION_CREATED = "LLM Configuration Created"
+    LLM_CONFIGURATION_CHANGED = "LLM Configuration Changed"
+    LLM_CONFIGURATION_REMOVED = "LLM Configuration Removed"
+    LLM_CONFIGURATION_RESTORED = "LLM Configuration Restored"
+    LLM_CONFIGURATION_ASSIGNED = "LLM Configuration Associated with Group"
+    LLM_CONFIGURATION_DISSOCIATED = "LLM Configuration Dissociated from Group"
+
     # DICOM Protocol / DIMSE Actions
     DICOM_ASSOCIATION_ESTABLISHED = "DICOM Association Established"
     DICOM_ASSOCIATION_REJECTED = "DICOM Association Rejected"
