@@ -128,7 +128,7 @@ class CleanupData:
 
         try:
             candidate = Path(fsspec_path).resolve()
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return False
 
         return any(
@@ -406,7 +406,13 @@ class CleanupData:
     def cleanup_test_nodes(self, dry_run: bool = False) -> Dict[str, Any]:
         """Cleanup nodes that contain test_id from the database."""
         nodes = [
-            "Authenticator", "Group", "Identity", "LLM_Config", "DICOMConfiguration", "System", "User",
+            "Authenticator",
+            "Group",
+            "Identity",
+            "LLM_Config",
+            "DICOMConfiguration",
+            "System",
+            "User",
         ]
         deduped_nodes = list(dict.fromkeys(nodes))
 
@@ -422,9 +428,7 @@ class CleanupData:
             try:
                 # First get count of existing test nodes
                 count_query = (
-                    f"MATCH (n:{clean_label}) "
-                    "WHERE n.test_id IS NOT NULL AND n.test_id <> '' "
-                    "RETURN count(n) AS count"
+                    f"MATCH (n:{clean_label}) WHERE n.test_id IS NOT NULL AND n.test_id <> '' RETURN count(n) AS count"
                 )
                 count_records = self.run_query(count_query)
                 existing_count = count_records[0]["count"] if count_records else 0
