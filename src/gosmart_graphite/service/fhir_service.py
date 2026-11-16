@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from typing import Any, Mapping, Optional, Sequence, Union
 
@@ -11,8 +12,11 @@ from fhir.resources.R4B.condition import Condition
 from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.encounter import Encounter
 from fhir.resources.R4B.imagingstudy import ImagingStudy
+from fhir.resources.R4B.location import Location
 from fhir.resources.R4B.observation import Observation
+from fhir.resources.R4B.organization import Organization
 from fhir.resources.R4B.patient import Patient
+from fhir.resources.R4B.practitioner import Practitioner
 from fhir.resources.R4B.procedure import Procedure
 from fhir.resources.R4B.servicerequest import ServiceRequest
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,20 +29,30 @@ from gosmart_graphite.model.fhir import (
     BasedOnStudyRelation,
     ConditionNode,
     ContainsRelation,
+    CreatesRelation,
     DiagnosticReportNode,
     EncounterNode,
+    FhirBelongsToRelation,
     FHIRDomainResourceNode,
     FHIRPatientNode,
+    FhirPerformedAtRelation,
     FulfilledByRelation,
     HasEncounterRelation,
     ImagingStudyNode,
+    LocationNode,
     ObservationNode,
+    OrganizationNode,
+    PartOfRelation,
     PerformedInRelation,
+    PerformsRelation,
+    PractitionerNode,
     ProcedureNode,
     ReferencesInstanceRelation,
     ReferencesSeriesRelation,
     ReferencesStudyRelation,
+    RequestsRelation,
     SameAsRelation,
+    ServiceProviderRelation,
     ServiceRequestNode,
     SubjectRelation,
     SupportsReportRelation,
@@ -68,6 +82,9 @@ class EncounterContext(BaseModel):
     observations: list[dict[str, Any]] = Field(default_factory=list)
     procedures: list[dict[str, Any]] = Field(default_factory=list)
     serviceRequests: list[dict[str, Any]] = Field(default_factory=list)
+    locations: list[dict[str, Any]] = Field(default_factory=list)
+    organizations: list[dict[str, Any]] = Field(default_factory=list)
+    practitioners: list[dict[str, Any]] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 
@@ -84,6 +101,9 @@ class EncRelevantResources(BaseModel):
     observations: list[Observation] = Field(default_factory=list)
     procedures: list[Procedure] = Field(default_factory=list)
     serviceRequests: list[ServiceRequest] = Field(default_factory=list)
+    locations: list[Location] = Field(default_factory=list)
+    organizations: list[Organization] = Field(default_factory=list)
+    practitioners: list[Practitioner] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 
@@ -119,20 +139,155 @@ def _extract_identifier_types(identifiers: Optional[Sequence[Mapping[str, Any]]]
     return codings if codings else None
 
 
+def _parse_reference_macro(
+    ref_macro: Optional[str],
+    default_type: Optional[str] = None,
+) -> Optional[tuple[str, str, Optional[str]]]:
+    """Parse a Reference Macro ('Type/id|display' or 'id|display') into (resource_type, resource_id, display)."""
+    if not ref_macro:
+        return None
+    parts = ref_macro.split("|", 1)
+    ref_part = parts[0].strip().rstrip("/")
+    display = parts[1].strip() or None if len(parts) > 1 else None
+    if not ref_part or ref_part.startswith("#"):
+        return None
+    if "/" in ref_part:
+        segments = [p for p in ref_part.split("/") if p]
+        if len(segments) >= 4 and segments[-2] == "_history":
+            return segments[-4], segments[-3], display
+        if len(segments) >= 2:
+            return segments[-2], segments[-1], display
+    if default_type:
+        return default_type, ref_part, display
+    return None
+
+
 def _normalize_reference_target(ref_macro: Optional[str], default_type: Optional[str] = None) -> Optional[str]:
     """Normalize a Reference Macro (e.g. 'Patient/3426|Jane Doe') into 'ResourceType/id'."""
+    parsed = _parse_reference_macro(ref_macro, default_type=default_type)
+    if parsed:
+        return f"{parsed[0]}/{parsed[1]}"
     if not ref_macro:
         return None
     ref_part = ref_macro.split("|", 1)[0].strip().rstrip("/")
-    if not ref_part:
+    return ref_part if ref_part and not ref_part.startswith("#") else None
+
+
+def _format_telecom(telecoms: Optional[Sequence[Any]]) -> Optional[list[str]]:
+    """Format a list of FHIR ContactPoint dicts into 'system|value|use' strings."""
+    if not telecoms:
         return None
-    if "/" in ref_part:
-        parts = [p for p in ref_part.split("/") if p]
-        if len(parts) >= 2:
-            return f"{parts[-2]}/{parts[-1]}"
-    if default_type:
-        return f"{default_type}/{ref_part}"
-    return ref_part
+    formatted: list[str] = []
+    for t in telecoms:
+        if not isinstance(t, Mapping):
+            continue
+        sys_str = str(t.get("system") or "").strip()
+        val_str = str(t.get("value") or "").strip()
+        use_str = str(t.get("use") or "").strip()
+        if not (sys_str or val_str):
+            continue
+        formatted.append(f"{sys_str}|{val_str}|{use_str}" if use_str else f"{sys_str}|{val_str}")
+    return formatted if formatted else None
+
+
+def _format_address(addr: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """Format a single FHIR Address dict into a human-readable string."""
+    if not isinstance(addr, Mapping):
+        return None
+    text = (addr.get("text") or "").strip()
+    if text:
+        return text
+    parts: list[str] = []
+    for line in addr.get("line") or []:
+        if line and str(line).strip():
+            parts.append(str(line).strip())
+    for field in ("city", "state", "postalCode", "country"):
+        val = addr.get(field)
+        if val and str(val).strip():
+            parts.append(str(val).strip())
+    joined = ", ".join(parts)
+    return joined if joined else None
+
+
+def _format_addresses(addrs: Optional[Sequence[Any]]) -> Optional[list[str]]:
+    """Format a list of FHIR Address dicts into human-readable strings."""
+    if not addrs:
+        return None
+    formatted: list[str] = []
+    for addr in addrs:
+        formatted_addr = _format_address(addr)
+        if formatted_addr:
+            formatted.append(formatted_addr)
+    return formatted if formatted else None
+
+
+def _collect_referenced_org_loc_pract(context_data: Mapping[str, Any]) -> dict[str, str]:
+    """Collect unique Location, Organization, and Practitioner fetch references from encounter context."""
+    targets: dict[str, str] = {}
+
+    def _register(
+        ref_obj: Any,
+        allowed_types: set[str],
+        default_type: Optional[str] = None,
+    ) -> None:
+        if not isinstance(ref_obj, Mapping):
+            return
+        raw_ref = ref_obj.get("reference")
+        if not isinstance(raw_ref, str) or not raw_ref.strip():
+            return
+        parsed = _parse_reference_macro(raw_ref.strip(), default_type=default_type)
+        if not parsed:
+            return
+        res_type, res_id, _ = parsed
+        if res_type not in allowed_types:
+            return
+        key = f"{res_type}/{res_id}"
+        if key not in targets:
+            clean_ref = raw_ref.strip()
+            targets[key] = clean_ref if "/" in clean_ref else key
+
+    enc = context_data.get("encounter")
+    if isinstance(enc, Mapping):
+        for loc in enc.get("location") or []:
+            if isinstance(loc, Mapping):
+                _register(loc.get("location"), {"Location"}, default_type="Location")
+        _register(enc.get("serviceProvider"), {"Organization"}, default_type="Organization")
+        for part in enc.get("participant") or []:
+            if isinstance(part, Mapping):
+                _register(part.get("individual"), {"Practitioner", "Organization"})
+
+    pat = context_data.get("patient")
+    if isinstance(pat, Mapping):
+        _register(pat.get("managingOrganization"), {"Organization"}, default_type="Organization")
+
+    for img in context_data.get("imaging_studies") or []:
+        if isinstance(img, Mapping):
+            _register(img.get("location"), {"Location"}, default_type="Location")
+
+    for proc in context_data.get("procedures") or []:
+        if isinstance(proc, Mapping):
+            _register(proc.get("location"), {"Location"}, default_type="Location")
+            for perf in proc.get("performer") or []:
+                if isinstance(perf, Mapping):
+                    _register(perf.get("actor"), {"Practitioner", "Organization"})
+            _register(proc.get("recorder"), {"Practitioner", "Organization"})
+            _register(proc.get("asserter"), {"Practitioner", "Organization"})
+
+    for sr in context_data.get("serviceRequests") or []:
+        if isinstance(sr, Mapping):
+            _register(sr.get("requester"), {"Practitioner", "Organization"})
+
+    for dr in context_data.get("diagnostic_reports") or []:
+        if isinstance(dr, Mapping):
+            for perf in dr.get("performer") or []:
+                _register(perf, {"Practitioner", "Organization"})
+
+    for obs in context_data.get("observations") or []:
+        if isinstance(obs, Mapping):
+            for perf in obs.get("performer") or []:
+                _register(perf, {"Practitioner", "Organization"})
+
+    return targets
 
 
 def _format_human_names(names: Optional[Sequence[Mapping[str, Any]]]) -> Optional[list[str]]:
@@ -596,6 +751,186 @@ def service_request_to_node(
     )
 
 
+def location_to_node(
+    location: Location,
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> LocationNode:
+    """Convert a FHIR R4B Location resource into a LocationNode."""
+    raw = location.model_dump(mode="json", exclude_none=True)
+    raw_json = location.model_dump_json(exclude_none=True)
+    res_id = str(raw.get("id") or "")
+    raw_identifiers = raw.get("identifier") or []
+    idents = flatten_identifiers(raw_identifiers)
+    op_status = raw.get("operationalStatus")
+    op_status_macro = (
+        format_coding_macro(op_status.get("system"), op_status.get("code"), op_status.get("display"))
+        if isinstance(op_status, Mapping)
+        else None
+    )
+    loc_types = flatten_codings(raw.get("type"))
+    phys_types = flatten_codings(raw.get("physicalType"))
+    aliases = [str(a) for a in (raw.get("alias") or []) if a]
+
+    return LocationNode(
+        resource_id=res_id,
+        status=raw.get("status"),
+        resource=raw_json,
+        identifiers=idents if idents else None,
+        identifierType=_extract_identifier_types(raw_identifiers),
+        operationalStatus=op_status_macro,
+        name=raw.get("name"),
+        alias=aliases if aliases else None,
+        description=raw.get("description"),
+        mode=raw.get("mode"),
+        type=loc_types if loc_types else None,
+        physicalType=phys_types[0] if phys_types else None,
+        telecom=_format_telecom(raw.get("telecom")),
+        address=_format_address(raw.get("address")),
+        managingOrganization=_extract_reference(raw.get("managingOrganization")),
+        partOf=_extract_reference(raw.get("partOf")),
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+
+
+def organization_to_node(
+    organization: Organization,
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> OrganizationNode:
+    """Convert a FHIR R4B Organization resource into an OrganizationNode."""
+    raw = organization.model_dump(mode="json", exclude_none=True)
+    raw_json = organization.model_dump_json(exclude_none=True)
+    res_id = str(raw.get("id") or "")
+    raw_identifiers = raw.get("identifier") or []
+    idents = flatten_identifiers(raw_identifiers)
+    active = raw.get("active")
+    status = "active" if active is True else ("inactive" if active is False else raw.get("status"))
+    org_types = flatten_codings(raw.get("type"))
+    aliases = [str(a) for a in (raw.get("alias") or []) if a]
+
+    return OrganizationNode(
+        resource_id=res_id,
+        status=status,
+        resource=raw_json,
+        identifiers=idents if idents else None,
+        identifierType=_extract_identifier_types(raw_identifiers),
+        active=active,
+        type=org_types if org_types else None,
+        name=raw.get("name"),
+        alias=aliases if aliases else None,
+        telecom=_format_telecom(raw.get("telecom")),
+        address=_format_addresses(raw.get("address")),
+        partOf=_extract_reference(raw.get("partOf")),
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+
+
+def practitioner_to_node(
+    practitioner: Practitioner,
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> PractitionerNode:
+    """Convert a FHIR R4B Practitioner resource into a PractitionerNode."""
+    raw = practitioner.model_dump(mode="json", exclude_none=True)
+    raw_json = practitioner.model_dump_json(exclude_none=True)
+    res_id = str(raw.get("id") or "")
+    raw_identifiers = raw.get("identifier") or []
+    idents = flatten_identifiers(raw_identifiers)
+    active = raw.get("active")
+    status = "active" if active is True else ("inactive" if active is False else raw.get("status"))
+
+    qualifications = raw.get("qualification") or []
+    qual_codes = flatten_codings(
+        [q["code"] for q in qualifications if isinstance(q, Mapping) and isinstance(q.get("code"), Mapping)]
+    )
+    qual_issuers: list[str] = []
+    for q in qualifications:
+        if isinstance(q, Mapping):
+            issuer_ref = _extract_reference(q.get("issuer"))
+            if issuer_ref:
+                qual_issuers.append(issuer_ref)
+    comms = flatten_codings(raw.get("communication"))
+
+    return PractitionerNode(
+        resource_id=res_id,
+        status=status,
+        resource=raw_json,
+        identifiers=idents if idents else None,
+        identifierType=_extract_identifier_types(raw_identifiers),
+        active=active,
+        name=_format_human_names(raw.get("name")),
+        telecom=_format_telecom(raw.get("telecom")),
+        address=_format_addresses(raw.get("address")),
+        gender=raw.get("gender"),
+        birthDate=str(raw["birthDate"]) if raw.get("birthDate") is not None else None,
+        qualificationCode=qual_codes if qual_codes else None,
+        qualificationIssuer=qual_issuers if qual_issuers else None,
+        communication=comms if comms else None,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+
+
+def reference_to_location_node(
+    resource_id: str,
+    display: Optional[str] = None,
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> LocationNode:
+    """Synthesize a stub LocationNode from a FHIR Reference element."""
+    stub_payload: dict[str, Any] = {"resourceType": "Location", "id": resource_id}
+    if display:
+        stub_payload["name"] = display
+    return LocationNode(
+        resource_id=resource_id,
+        resource=json.dumps(stub_payload, separators=(",", ":")),
+        name=display or None,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+
+
+def reference_to_organization_node(
+    resource_id: str,
+    display: Optional[str] = None,
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> OrganizationNode:
+    """Synthesize a stub OrganizationNode from a FHIR Reference element."""
+    stub_payload: dict[str, Any] = {"resourceType": "Organization", "id": resource_id}
+    if display:
+        stub_payload["name"] = display
+    return OrganizationNode(
+        resource_id=resource_id,
+        resource=json.dumps(stub_payload, separators=(",", ":")),
+        name=display or None,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+
+
+def reference_to_practitioner_node(
+    resource_id: str,
+    display: Optional[str] = None,
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> PractitionerNode:
+    """Synthesize a stub PractitionerNode from a FHIR Reference element."""
+    stub_payload: dict[str, Any] = {"resourceType": "Practitioner", "id": resource_id}
+    if display:
+        stub_payload["name"] = [{"text": display}]
+    return PractitionerNode(
+        resource_id=resource_id,
+        resource=json.dumps(stub_payload, separators=(",", ":")),
+        name=[display] if display else None,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+
+
 class FHIRBatchFetcher:
     """Handles low-level async HTTP requests and concurrent batch queries against FHIR R4 server."""
 
@@ -736,6 +1071,9 @@ class FHIRBatchFetcher:
             "observations": [],
             "procedures": [],
             "serviceRequests": [],
+            "locations": [],
+            "organizations": [],
+            "practitioners": [],
         }
         errors: list[str] = []
 
@@ -744,6 +1082,28 @@ class FHIRBatchFetcher:
                 errors.append(f"Failed to fetch {key}: {res}")
             else:
                 context_data[key] = res
+
+        ref_targets = _collect_referenced_org_loc_pract(context_data)
+        if ref_targets:
+            ref_keys = list(ref_targets.keys())
+            ref_results = await asyncio.gather(
+                *(self.fetch_by_reference(ref_targets[k]) for k in ref_keys),
+                return_exceptions=True,
+            )
+            type_to_bucket = {
+                "Location": "locations",
+                "Organization": "organizations",
+                "Practitioner": "practitioners",
+            }
+            for key, res in zip(ref_keys, ref_results):
+                if isinstance(res, Exception):
+                    errors.append(f"Failed to fetch {key}: {res}")
+                elif isinstance(res, dict):
+                    expected_type = key.split("/", 1)[0]
+                    actual_type = res.get("resourceType") or expected_type
+                    bucket = type_to_bucket.get(actual_type)
+                    if bucket:
+                        context_data[bucket].append(res)
 
         return EncounterContext(**context_data, errors=errors)
 
@@ -842,6 +1202,27 @@ class FhirService:
         procedures = [Procedure.model_validate(z) for z in resources.procedures]
         service_requests = [ServiceRequest.model_validate(z) for z in resources.serviceRequests]
 
+        locations: list[Location] = []
+        for raw_loc in resources.locations:
+            try:
+                locations.append(Location.model_validate(raw_loc))
+            except Exception as e:
+                logger.warning("failed_to_validate_location", error=str(e))
+
+        organizations: list[Organization] = []
+        for raw_org in resources.organizations:
+            try:
+                organizations.append(Organization.model_validate(raw_org))
+            except Exception as e:
+                logger.warning("failed_to_validate_organization", error=str(e))
+
+        practitioners: list[Practitioner] = []
+        for raw_pract in resources.practitioners:
+            try:
+                practitioners.append(Practitioner.model_validate(raw_pract))
+            except Exception as e:
+                logger.warning("failed_to_validate_practitioner", error=str(e))
+
         return EncRelevantResources(
             encounter=enc,
             patient=patient_obj,
@@ -851,6 +1232,9 @@ class FhirService:
             observations=observations,
             procedures=procedures,
             serviceRequests=service_requests,
+            locations=locations,
+            organizations=organizations,
+            practitioners=practitioners,
             errors=resources.errors,
         )
 
@@ -901,13 +1285,13 @@ class FhirService:
     # Graph Conversion, Safe Upsert & Cleanup
     # -------------------------------------------------------------------------
 
-    def convert_relevant_resources(
+    def _convert_relevant_resources_internal(
         self,
         resources: EncRelevantResources,
         test_id: Optional[str] = None,
         acted_by: str = "system",
-    ) -> tuple[list[FHIRDomainResourceNode], list[AuditableRelation]]:
-        """Convert EncRelevantResources into FHIRDomainResourceNode and Intra-FHIR AuditableRelation instances."""
+    ) -> tuple[list[FHIRDomainResourceNode], list[AuditableRelation], set[str]]:
+        """Convert EncRelevantResources into nodes, intra-FHIR relations, and reference-stub node IDs."""
         nodes: list[FHIRDomainResourceNode] = []
         patient_map: dict[str, FHIRPatientNode] = {}
         encounter_map: dict[str, EncounterNode] = {}
@@ -917,6 +1301,10 @@ class FhirService:
         diagnostic_report_map: dict[str, DiagnosticReportNode] = {}
         procedure_map: dict[str, ProcedureNode] = {}
         service_request_map: dict[str, ServiceRequestNode] = {}
+        location_map: dict[str, LocationNode] = {}
+        organization_map: dict[str, OrganizationNode] = {}
+        practitioner_map: dict[str, PractitionerNode] = {}
+        stub_node_ids: set[str] = set()
 
         if resources.patient is not None and getattr(resources.patient, "id", None):
             p_node = patient_to_node(resources.patient, test_id=test_id, acted_by=acted_by)
@@ -982,6 +1370,33 @@ class FhirService:
                 procedure_map[key] = proc_node
                 nodes.append(proc_node)
 
+        for loc in resources.locations:
+            if not getattr(loc, "id", None):
+                continue
+            loc_node = location_to_node(loc, test_id=test_id, acted_by=acted_by)
+            key = f"Location/{loc_node.resource_id}"
+            if key not in location_map:
+                location_map[key] = loc_node
+                nodes.append(loc_node)
+
+        for org in resources.organizations:
+            if not getattr(org, "id", None):
+                continue
+            org_node = organization_to_node(org, test_id=test_id, acted_by=acted_by)
+            key = f"Organization/{org_node.resource_id}"
+            if key not in organization_map:
+                organization_map[key] = org_node
+                nodes.append(org_node)
+
+        for pract in resources.practitioners:
+            if not getattr(pract, "id", None):
+                continue
+            pract_node = practitioner_to_node(pract, test_id=test_id, acted_by=acted_by)
+            key = f"Practitioner/{pract_node.resource_id}"
+            if key not in practitioner_map:
+                practitioner_map[key] = pract_node
+                nodes.append(pract_node)
+
         relations: list[AuditableRelation] = []
         seen_rel_ids: set[str] = set()
 
@@ -989,6 +1404,72 @@ class FhirService:
             if rel.id not in seen_rel_ids:
                 seen_rel_ids.add(rel.id)
                 relations.append(rel)
+
+        def _ensure_referenced_node(
+            ref_macro: Optional[str],
+            allowed_types: set[str],
+            default_type: Optional[str] = None,
+        ) -> Optional[FHIRDomainResourceNode]:
+            parsed = _parse_reference_macro(ref_macro, default_type=default_type)
+            if not parsed:
+                return None
+            res_type, res_id, display = parsed
+            if res_type not in allowed_types:
+                return None
+            key = f"{res_type}/{res_id}"
+
+            if res_type == "Location":
+                existing_loc = location_map.get(key)
+                if existing_loc is not None:
+                    if display and not existing_loc.name:
+                        existing_loc.name = display
+                        if existing_loc.id in stub_node_ids:
+                            existing_loc.resource = json.dumps(
+                                {"resourceType": "Location", "id": res_id, "name": display},
+                                separators=(",", ":"),
+                            )
+                    return existing_loc
+                loc_stub = reference_to_location_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
+                location_map[key] = loc_stub
+                stub_node_ids.add(loc_stub.id)
+                nodes.append(loc_stub)
+                return loc_stub
+
+            if res_type == "Organization":
+                existing_org = organization_map.get(key)
+                if existing_org is not None:
+                    if display and not existing_org.name:
+                        existing_org.name = display
+                        if existing_org.id in stub_node_ids:
+                            existing_org.resource = json.dumps(
+                                {"resourceType": "Organization", "id": res_id, "name": display},
+                                separators=(",", ":"),
+                            )
+                    return existing_org
+                org_stub = reference_to_organization_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
+                organization_map[key] = org_stub
+                stub_node_ids.add(org_stub.id)
+                nodes.append(org_stub)
+                return org_stub
+
+            if res_type == "Practitioner":
+                existing_pract = practitioner_map.get(key)
+                if existing_pract is not None:
+                    if display and not existing_pract.name:
+                        existing_pract.name = [display]
+                        if existing_pract.id in stub_node_ids:
+                            existing_pract.resource = json.dumps(
+                                {"resourceType": "Practitioner", "id": res_id, "name": [{"text": display}]},
+                                separators=(",", ":"),
+                            )
+                    return existing_pract
+                pract_stub = reference_to_practitioner_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
+                practitioner_map[key] = pract_stub
+                stub_node_ids.add(pract_stub.id)
+                nodes.append(pract_stub)
+                return pract_stub
+
+            return None
 
         # 1. (:SUBJECT) -> (:FHIR_Patient)
         subject_sources: list[FHIRDomainResourceNode] = [
@@ -1115,6 +1596,210 @@ class FhirService:
                         )
                     )
 
+        # 8. (:Encounter | :ImagingStudy | :Procedure)-[:PERFORMED_AT]->(:Location)
+        for e_node in encounter_map.values():
+            for ref in e_node.location or []:
+                loc_target = _ensure_referenced_node(ref, {"Location"}, default_type="Location")
+                if loc_target is not None:
+                    _add_rel(
+                        FhirPerformedAtRelation(
+                            start_node_id=e_node.id,
+                            end_node_id=loc_target.id,
+                            test_id=test_id,
+                            ActedBy=acted_by,
+                        )
+                    )
+        for is_node in imaging_study_map.values():
+            loc_target = _ensure_referenced_node(is_node.location, {"Location"}, default_type="Location")
+            if loc_target is not None:
+                _add_rel(
+                    FhirPerformedAtRelation(
+                        start_node_id=is_node.id,
+                        end_node_id=loc_target.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+        for proc_node in procedure_map.values():
+            loc_target = _ensure_referenced_node(proc_node.location, {"Location"}, default_type="Location")
+            if loc_target is not None:
+                _add_rel(
+                    FhirPerformedAtRelation(
+                        start_node_id=proc_node.id,
+                        end_node_id=loc_target.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+
+        # 9. (:Encounter)-[:SERVICE_PROVIDER]->(:Organization)
+        for e_node in encounter_map.values():
+            org_target = _ensure_referenced_node(
+                e_node.serviceProvider,
+                {"Organization"},
+                default_type="Organization",
+            )
+            if org_target is not None:
+                _add_rel(
+                    ServiceProviderRelation(
+                        start_node_id=e_node.id,
+                        end_node_id=org_target.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+
+        # 10. (:FHIR_Patient)-[:PART_OF]->(:Organization) via managingOrganization
+        for p_node in patient_map.values():
+            org_target = _ensure_referenced_node(
+                p_node.managingOrganization,
+                {"Organization"},
+                default_type="Organization",
+            )
+            if org_target is not None:
+                _add_rel(
+                    PartOfRelation(
+                        start_node_id=p_node.id,
+                        end_node_id=org_target.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+
+        # 11. (:Practitioner | :Organization)-[:REQUESTS]->(:ServiceRequest) via requester
+        for sr_node in service_request_map.values():
+            req_target = _ensure_referenced_node(sr_node.requester, {"Practitioner", "Organization"})
+            if req_target is not None:
+                _add_rel(
+                    RequestsRelation(
+                        start_node_id=req_target.id,
+                        end_node_id=sr_node.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+
+        # 12. (:Practitioner | :Organization)-[:CREATES]->(:DiagnosticReport) via performer
+        for dr_node in diagnostic_report_map.values():
+            for ref in dr_node.performer or []:
+                perf_target = _ensure_referenced_node(ref, {"Practitioner", "Organization"})
+                if perf_target is not None:
+                    _add_rel(
+                        CreatesRelation(
+                            start_node_id=perf_target.id,
+                            end_node_id=dr_node.id,
+                            test_id=test_id,
+                            ActedBy=acted_by,
+                        )
+                    )
+
+        # 13. (:Practitioner | :Organization)-[:PERFORMS]->(:Encounter | :Observation | :Procedure)
+        for e_node in encounter_map.values():
+            for ref in e_node.participantIndividual or []:
+                part_target = _ensure_referenced_node(ref, {"Practitioner", "Organization"})
+                if part_target is not None:
+                    _add_rel(
+                        PerformsRelation(
+                            start_node_id=part_target.id,
+                            end_node_id=e_node.id,
+                            test_id=test_id,
+                            ActedBy=acted_by,
+                        )
+                    )
+        for obs_node in observation_map.values():
+            for ref in obs_node.performer or []:
+                perf_target = _ensure_referenced_node(ref, {"Practitioner", "Organization"})
+                if perf_target is not None:
+                    _add_rel(
+                        PerformsRelation(
+                            start_node_id=perf_target.id,
+                            end_node_id=obs_node.id,
+                            test_id=test_id,
+                            ActedBy=acted_by,
+                        )
+                    )
+        for proc_node in procedure_map.values():
+            for ref in proc_node.performer or []:
+                perf_target = _ensure_referenced_node(ref, {"Practitioner", "Organization"})
+                if perf_target is not None:
+                    _add_rel(
+                        PerformsRelation(
+                            start_node_id=perf_target.id,
+                            end_node_id=proc_node.id,
+                            test_id=test_id,
+                            ActedBy=acted_by,
+                        )
+                    )
+            # Ensure nodes referenced as Procedure recorder / asserter are also generated
+            _ensure_referenced_node(proc_node.recorder, {"Practitioner", "Organization"})
+            _ensure_referenced_node(proc_node.asserter, {"Practitioner", "Organization"})
+
+        # 14. (:Location | :Organization)-[:PART_OF]->(:Location | :Organization)
+        for loc_node in list(location_map.values()):
+            org_target = _ensure_referenced_node(
+                loc_node.managingOrganization,
+                {"Organization"},
+                default_type="Organization",
+            )
+            if org_target is not None:
+                _add_rel(
+                    PartOfRelation(
+                        start_node_id=loc_node.id,
+                        end_node_id=org_target.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+            parent_loc = _ensure_referenced_node(loc_node.partOf, {"Location"}, default_type="Location")
+            if parent_loc is not None:
+                _add_rel(
+                    PartOfRelation(
+                        start_node_id=loc_node.id,
+                        end_node_id=parent_loc.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+        for org_node in list(organization_map.values()):
+            parent_org = _ensure_referenced_node(org_node.partOf, {"Organization"}, default_type="Organization")
+            if parent_org is not None:
+                _add_rel(
+                    PartOfRelation(
+                        start_node_id=org_node.id,
+                        end_node_id=parent_org.id,
+                        test_id=test_id,
+                        ActedBy=acted_by,
+                    )
+                )
+
+        # 15. (:Practitioner)-[:BELONGS_TO]->(:Organization)
+        for pract_node in list(practitioner_map.values()):
+            for ref in pract_node.organization or []:
+                org_target = _ensure_referenced_node(ref, {"Organization"}, default_type="Organization")
+                if org_target is not None:
+                    _add_rel(
+                        FhirBelongsToRelation(
+                            start_node_id=pract_node.id,
+                            end_node_id=org_target.id,
+                            test_id=test_id,
+                            ActedBy=acted_by,
+                        )
+                    )
+
+        return nodes, relations, stub_node_ids
+
+    def convert_relevant_resources(
+        self,
+        resources: EncRelevantResources,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
+    ) -> tuple[list[FHIRDomainResourceNode], list[AuditableRelation]]:
+        """Convert EncRelevantResources into FHIRDomainResourceNode and Intra-FHIR AuditableRelation instances."""
+        nodes, relations, _ = self._convert_relevant_resources_internal(
+            resources=resources,
+            test_id=test_id,
+            acted_by=acted_by,
+        )
         return nodes, relations
 
     @staticmethod
@@ -1268,7 +1953,7 @@ class FhirService:
         """Safely upsert all FHIR resources and relationships from EncRelevantResources into Neo4j."""
         await self.graph_service.init_schema_constraints()
 
-        nodes, intra_relations = self.convert_relevant_resources(
+        nodes, intra_relations, stub_node_ids = self._convert_relevant_resources_internal(
             resources=resources,
             test_id=test_id,
             acted_by=acted_by,
@@ -1279,36 +1964,66 @@ class FhirService:
             label = node.__label__
             props = self._serialize_node_props(node)
             expires_at = node.ExpiresAt.isoformat() if node.ExpiresAt else None
-            query = f"""
-            MERGE (n:{label} {{id: $id}})
-            ON CREATE SET n += $props,
-                          n.Action = "CREATE",
-                          n.ActedAt = datetime({{timezone: 'UTC'}}),
-                          n.ActedBy = $acted_by,
-                          n.CreatedAt = datetime({{timezone: 'UTC'}}),
-                          n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END
-            ON MATCH SET  n += $props,
-                          n.Action = "UPDATE",
-                          n.ActedAt = datetime({{timezone: 'UTC'}}),
-                          n.ActedBy = $acted_by,
-                          n.UpdatedAt = datetime({{timezone: 'UTC'}}),
-                          n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
-                                             THEN datetime($expires_at)
-                                             ELSE n.ExpiresAt END
-            RETURN n.id AS id,
-                   n.uid AS uid,
-                   n.resource_id AS resource_id,
-                   n.Action AS action
-            """
-            records = await self.client.execute_query(
-                query,
-                {
+            if node.id in stub_node_ids:
+                query = f"""
+                MERGE (n:{label} {{id: $id}})
+                ON CREATE SET n += $props,
+                              n.Action = "CREATE",
+                              n.ActedAt = datetime({{timezone: 'UTC'}}),
+                              n.ActedBy = $acted_by,
+                              n.CreatedAt = datetime({{timezone: 'UTC'}}),
+                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END
+                ON MATCH SET  n.name = coalesce(n.name, $stub_name),
+                              n.test_id = coalesce($test_id, n.test_id),
+                              n.Action = "UPDATE",
+                              n.ActedAt = datetime({{timezone: 'UTC'}}),
+                              n.ActedBy = $acted_by,
+                              n.UpdatedAt = datetime({{timezone: 'UTC'}}),
+                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
+                                                 THEN datetime($expires_at)
+                                                 ELSE n.ExpiresAt END
+                RETURN n.id AS id,
+                       n.uid AS uid,
+                       n.resource_id AS resource_id,
+                       n.Action AS action
+                """
+                params: dict[str, Any] = {
+                    "id": node.id,
+                    "props": props,
+                    "stub_name": props.get("name"),
+                    "test_id": node.test_id,
+                    "acted_by": acted_by,
+                    "expires_at": expires_at,
+                }
+            else:
+                query = f"""
+                MERGE (n:{label} {{id: $id}})
+                ON CREATE SET n += $props,
+                              n.Action = "CREATE",
+                              n.ActedAt = datetime({{timezone: 'UTC'}}),
+                              n.ActedBy = $acted_by,
+                              n.CreatedAt = datetime({{timezone: 'UTC'}}),
+                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END
+                ON MATCH SET  n += $props,
+                              n.Action = "UPDATE",
+                              n.ActedAt = datetime({{timezone: 'UTC'}}),
+                              n.ActedBy = $acted_by,
+                              n.UpdatedAt = datetime({{timezone: 'UTC'}}),
+                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
+                                                 THEN datetime($expires_at)
+                                                 ELSE n.ExpiresAt END
+                RETURN n.id AS id,
+                       n.uid AS uid,
+                       n.resource_id AS resource_id,
+                       n.Action AS action
+                """
+                params = {
                     "id": node.id,
                     "props": props,
                     "acted_by": acted_by,
                     "expires_at": expires_at,
-                },
-            )
+                }
+            records = await self.client.execute_query(query, params)
             rec = (
                 records[0]
                 if records

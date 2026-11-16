@@ -2,7 +2,6 @@ import logging
 import ssl
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
-from gosmart_graphite.core.config import Settings, get_settings
 from neo4j import (
     AsyncDriver,
     AsyncGraphDatabase,
@@ -11,6 +10,8 @@ from neo4j import (
     NotificationDisabledClassification,
     NotificationMinimumSeverity,
 )
+
+from gosmart_graphite.core.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 

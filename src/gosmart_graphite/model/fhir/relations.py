@@ -81,6 +81,12 @@ class CreatesRelation(AuditableRelation):
     __type__: ClassVar[str] = "CREATES"
 
 
+class ServiceProviderRelation(AuditableRelation):
+    """Relationship (:SERVICE_PROVIDER) connecting Encounter -> Organization."""
+
+    __type__: ClassVar[str] = "SERVICE_PROVIDER"
+
+
 # Cross-Domain (DICOM <-> FHIR) Relationships
 
 
@@ -128,6 +134,7 @@ FHIR_RELATION_CLASSES: Tuple[Type[AuditableRelation], ...] = (
     PartOfRelation,
     FhirBelongsToRelation,
     CreatesRelation,
+    ServiceProviderRelation,
     SameAsRelation,
     ReferencesStudyRelation,
     ReferencesSeriesRelation,

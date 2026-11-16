@@ -147,42 +147,12 @@ for development
 └── tests/                       # Test suite
     ├── assets/mr/               # 10 MR DICOM validation test assets
     ├── rest-client/             # VS Code REST Client scripts (.http files)
-    ├── conftest.py
-    ├── test_actor.py
-    ├── test_admin_bootstrap.py
-    ├── test_api.py
-    ├── test_audit.py
-    ├── test_auth_api.py
-    ├── test_auth_graph_models.py
-    ├── test_config.py
-    ├── test_dicom_store_scp.py
-    ├── test_dicomweb.py
-    ├── test_dicomweb_audit.py
-    ├── test_dimse_qr.py
-    ├── test_endpoint_security.py
-    ├── test_fhir_models.py
-    ├── test_fhir_service.py
-    ├── test_graph_service.py
-    ├── test_group_service.py
-    ├── test_llm_config.py
-    ├── test_live_mdicom_move.py
-    ├── test_logging.py
-    ├── test_mcp.py
-    ├── test_mcp_security.py
-    ├── test_media_service.py
-    ├── test_neo4j.py
-    ├── test_rebac_dicom_scope.py
-    ├── test_rebac_penetration.py
-    ├── test_scp_lifecycle.py
-    ├── test_scp_local_address.py
-    ├── test_security_core.py
-    ├── test_store_scu_actor.py
-    ├── test_system_api.py
-    ├── test_system_mcp.py
-    ├── test_system_service.py
-    ├── test_transfer_syntax_preservation.py
-    ├── test_user_service.py
-    └── test_vector_service.py
+    ├── conftest.py              # Shared fixtures and actor cleanup
+    ├── configs.json             # Local integration/live test configuration
+    ├── unit/                    # Self-contained tests run in CI
+    ├── integration/             # Neo4j and multi-component tests run locally
+    ├── live/                    # External FHIR, MDICOM, MCP, and Gemini tests
+    └── utils/                   # Shared test configuration utilities
 ```
 
 ---
@@ -881,6 +851,30 @@ Or using STDIO command:
 ## 🧪 Testing & Verification
 
 ### 1. Run Tests
+
+Run the self-contained unit suite used by CI. It does not require Neo4j,
+external API credentials, or a running application server:
+
+```bash
+uv run pytest tests/unit --verbose
+```
+
+Run integration tests locally with Neo4j configured and running. These tests
+use `test_id` values to isolate their data and retain post-run data for inspection:
+
+```bash
+uv run pytest tests/integration --verbose
+```
+
+Run live tests only after configuring the required external FHIR proxy,
+MDICOM server, MCP server, or Gemini API key. Unavailable services are skipped
+where supported by the individual test:
+
+```bash
+uv run pytest tests/live --verbose
+```
+
+To run all suites locally:
 
 ```bash
 uv run pytest

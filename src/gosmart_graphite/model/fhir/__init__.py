@@ -41,6 +41,7 @@ from gosmart_graphite.model.fhir.relations import (
     ReferencesStudyRelation,
     RequestsRelation,
     SameAsRelation,
+    ServiceProviderRelation,
     SubjectRelation,
     SupportsReportRelation,
 )
@@ -89,6 +90,7 @@ __all__ = [
     "PartOfRelation",
     "FhirBelongsToRelation",
     "CreatesRelation",
+    "ServiceProviderRelation",
     "SameAsRelation",
     "ReferencesStudyRelation",
     "ReferencesSeriesRelation",

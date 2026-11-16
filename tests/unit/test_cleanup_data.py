@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 script_path = PROJECT_ROOT / "devop-scripts" / "cleanup-data.py"
 
 spec = importlib.util.spec_from_file_location("cleanup_data", script_path)

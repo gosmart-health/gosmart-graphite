@@ -2,10 +2,10 @@ import ssl
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from neo4j import NotificationDisabledClassification, NotificationMinimumSeverity
 from neo4j.exceptions import ServiceUnavailable
 
 from gosmart_graphite.db.neo4j import Neo4jClient, _resolve_driver_uri_and_tls
-from neo4j import NotificationDisabledClassification, NotificationMinimumSeverity
 
 
 @pytest.mark.anyio
@@ -49,17 +49,6 @@ async def test_verify_connectivity_failure():
         assert is_connected is False
 
     await client.close()
-
-
-@pytest.mark.anyio
-async def test_verify_connectivity_real_client():
-    """Verify that verify_connectivity on real client returns a boolean without raising unhandled errors."""
-    client = Neo4jClient()
-    try:
-        result = await client.verify_connectivity()
-        assert isinstance(result, bool)
-    finally:
-        await client.close()
 
 
 @pytest.mark.anyio

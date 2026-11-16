@@ -337,9 +337,7 @@ class LLMConfigService:
             test_id=test_id,
         )
         scoped_id = (
-            LLM_Config.compute_group_scoped_id(tag=req.tag, group_id=group_id, test_id=norm_test_id)
-            if group_id
-            else ""
+            LLM_Config.compute_group_scoped_id(tag=req.tag, group_id=group_id, test_id=norm_test_id) if group_id else ""
         )
         cfg_node = LLM_Config(
             id=scoped_id,
@@ -374,9 +372,7 @@ class LLMConfigService:
             [gid for gid in (check_rec.get("grp_existing_group_ids") or []) if gid] if check_rec else []
         )
         scoped_existing = check_rec.get("scoped_existing") if check_rec else None
-        scoped_group_ids = (
-            [gid for gid in (check_rec.get("scoped_group_ids") or []) if gid] if check_rec else []
-        )
+        scoped_group_ids = [gid for gid in (check_rec.get("scoped_group_ids") or []) if gid] if check_rec else []
 
         dissociate_shared_cfg_id: Optional[str] = None
         if grp_existing:
@@ -1048,10 +1044,7 @@ class LLMConfigService:
                 matching_active = [
                     r
                     for r in valid_records
-                    if any(
-                        grp and _clean_neo4j_value(grp).get("id") == active_gid
-                        for grp in (r.get("groups") or [])
-                    )
+                    if any(grp and _clean_neo4j_value(grp).get("id") == active_gid for grp in (r.get("groups") or []))
                 ]
                 if len(matching_active) == 1:
                     return _dict_to_llm_config_response(

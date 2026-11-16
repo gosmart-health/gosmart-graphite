@@ -13,7 +13,7 @@ from gosmart_graphite.service.media_service import MediaService, media_service
 @pytest.fixture
 def mr_dir() -> Path:
     """Path to the 10 MR DICOM test assets."""
-    return Path(__file__).parent / "assets" / "mr"
+    return Path(__file__).parent.parent / "assets" / "mr"
 
 
 @pytest.fixture

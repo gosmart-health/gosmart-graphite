@@ -1,3 +1,4 @@
+import hashlib
 import socket
 import uuid
 from datetime import datetime, timezone
@@ -5,6 +6,7 @@ from datetime import datetime, timezone
 import pydicom
 import pytest
 from pydicom.dataset import Dataset
+from pydicom.uid import generate_uid
 from pynetdicom import AE, evt
 from pynetdicom.presentation import build_role
 from pynetdicom.sop_class import (
@@ -35,33 +37,38 @@ def get_free_port() -> int:
 
 
 @pytest.fixture
-def dicom_qr_env():
+def dicom_qr_env(request: pytest.FixtureRequest):
     """Sets up a running DICOM SCP server and seeded test data in Neo4j and storage."""
     settings = get_settings()
-    test_id = f"test_qr_{uuid.uuid4().hex[:8]}"
+    test_id = f"test_dimse_qr_{request.node.name}"
 
     # Clean pre-existing test data BEFORE running the test
-    driver = neo4j_client.get_sync_driver()
-    with driver.session() as session:
-        session.run("MATCH (n {test_id: $test_id}) DETACH DELETE n", test_id=test_id)
+    graph_service.cleanup_test_data_sync(test_id)
 
-    # Seed test asset
+    # Seed isolated test asset with deterministic test-scoped identifiers
     assert TEST_ASSET_DCM.exists(), f"Asset missing: {TEST_ASSET_DCM}"
     ds = pydicom.dcmread(TEST_ASSET_DCM)
-    sop_uid = str(ds.SOPInstanceUID)
-    study_uid = str(ds.StudyInstanceUID)
-    series_uid = str(ds.SeriesInstanceUID)
-    patient_id = str(ds.PatientID)
+    sop_uid = generate_uid(entropy_srcs=[test_id, "sop"])
+    study_uid = generate_uid(entropy_srcs=[test_id, "study"])
+    series_uid = generate_uid(entropy_srcs=[test_id, "series"])
+    patient_id = f"TEST-QR-{hashlib.sha256(test_id.encode()).hexdigest()[:12].upper()}"
+    ds.PatientID = patient_id
+    ds.StudyInstanceUID = study_uid
+    ds.SeriesInstanceUID = series_uid
+    ds.SOPInstanceUID = sop_uid
+    if hasattr(ds, "file_meta") and ds.file_meta:
+        ds.file_meta.MediaStorageSOPInstanceUID = sop_uid
     patient_name = str(getattr(ds, "PatientName", "UNKNOWN"))
 
     storage_uri = f"{settings.STORAGE_ROOT_URI.rstrip('/')}/{sop_uid}.dcm"
+    if media_service.exists_sync(storage_uri):
+        media_service.delete_sync(storage_uri)
     media_service.write_dicom_sync(storage_uri, ds)
 
     # Parse and register hierarchy into Neo4j
-    hierarchy = dicom_service.parse_file(TEST_ASSET_DCM)
+    hierarchy = dicom_service.parse_dataset(ds, storage_uri=storage_uri)
     hierarchy.test_id = test_id
     hierarchy.acted_by = "test_qr_runner"
-    hierarchy.instance.storage_uri = storage_uri
     graph_service.save_hierarchy_sync(hierarchy)
 
     # Start SCP on dynamic free port

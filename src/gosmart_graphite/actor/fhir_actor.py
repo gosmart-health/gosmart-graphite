@@ -70,6 +70,9 @@ class FhirActor(pykka.ThreadingActor):
             or resources.observations
             or resources.procedures
             or resources.serviceRequests
+            or resources.locations
+            or resources.organizations
+            or resources.practitioners
         )
 
     def on_receive(self, message: Any) -> Any:
@@ -120,6 +123,9 @@ class FhirActor(pykka.ThreadingActor):
                         procedures=len(resources.procedures),
                         conditions=len(resources.conditions),
                         service_requests=len(resources.serviceRequests),
+                        locations=len(resources.locations),
+                        organizations=len(resources.organizations),
+                        practitioners=len(resources.practitioners),
                         errors=resources.errors,
                     )
                     upsert_result = self._loop.run_until_complete(

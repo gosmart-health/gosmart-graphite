@@ -68,10 +68,16 @@ graph TD
         Practitioner -->|":REQUESTS"| Procedure
         Practitioner -->|":PERFORMS"| Procedure
         ImagingStudy -->|":PERFORMED_AT"| Location
+        Encounter -->|":PERFORMED_AT"| Location
+        Procedure -->|":PERFORMED_AT"| Location
+        Encounter -->|":SERVICE_PROVIDER"| Organization
+        FHIR_Patient -->|":PART_OF"| Organization
         ServiceRequest -->|":CONTAINS"| Practitioner
+        Practitioner -->|":REQUESTS"| ServiceRequest
         Location -->|":PART_OF"| Organization
         Practitioner -->|":BELONGS_TO"| Organization
         Practitioner -->|":CREATES"| DiagnosticReport
+        Practitioner -->|":PERFORMS"| Observation
     end
 
     %% Cross-Domain Relationships (DICOM <-> FHIR)

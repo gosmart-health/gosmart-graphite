@@ -9,7 +9,7 @@ from gosmart_graphite.service.system_service import system_service
 
 
 @pytest.fixture
-def client():
+def client(isolated_app_lifespan):
     app.dependency_overrides[get_current_user] = lambda: {
         "id": "usr_test_sys_admin",
         "primary_email": "admin@gosmart.health",

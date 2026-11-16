@@ -25,6 +25,7 @@ from gosmart_graphite.model.fhir import (
     PractitionerNode,
     ProcedureNode,
     SameAsRelation,
+    ServiceProviderRelation,
     ServiceRequestNode,
     SubjectRelation,
     flatten_codings,
@@ -299,7 +300,7 @@ def test_all_fhir_resource_nodes_instantiation() -> None:
 
 
 def test_fhir_relations_and_negation() -> None:
-    assert len(FHIR_RELATION_CLASSES) == 18
+    assert len(FHIR_RELATION_CLASSES) == 19
     rel = SameAsRelation(start_node_id="dicom-pat-uuid", end_node_id="fhir-pat-uuid")
     assert rel.__type__ == "SAME_AS"
     assert rel.to_negated_type() == "NOT_SAME_AS"
@@ -310,6 +311,9 @@ def test_fhir_relations_and_negation() -> None:
 
     fulfilled_rel = FulfilledByRelation(start_node_id="sr-uuid", end_node_id="dicom-study-uuid")
     assert fulfilled_rel.__type__ == "FULFILLED_BY"
+
+    sp_rel = ServiceProviderRelation(start_node_id="enc-uuid", end_node_id="org-uuid")
+    assert sp_rel.__type__ == "SERVICE_PROVIDER"
 
 
 def test_cypher_schema_constraints_and_indexes_synchronization() -> None:
@@ -332,6 +336,6 @@ def test_cypher_schema_constraints_and_indexes_synchronization() -> None:
             assert f"FOR (n:{label}) ON ({expected_prop})" in joined_indexes
 
     # Verify src/db/fhir_schema.cypher matches generate_fhir_cypher_script()
-    cypher_file = Path(__file__).resolve().parent.parent / "src" / "gosmart_graphite" / "db" / "fhir_schema.cypher"
+    cypher_file = Path(__file__).resolve().parents[2] / "src" / "gosmart_graphite" / "db" / "fhir_schema.cypher"
     assert cypher_file.exists()
     assert cypher_file.read_text(encoding="utf-8") == generate_fhir_cypher_script()

@@ -1,3 +1,4 @@
+import hashlib
 import socket
 import uuid
 from datetime import datetime, timezone
@@ -6,7 +7,7 @@ from typing import Generator
 import pydicom
 import pytest
 from pydicom.dataset import Dataset
-from pydicom.uid import ExplicitVRLittleEndian, SecondaryCaptureImageStorage
+from pydicom.uid import ExplicitVRLittleEndian, SecondaryCaptureImageStorage, generate_uid
 from pynetdicom import AE, evt
 from pynetdicom.presentation import build_role
 from pynetdicom.sop_class import (
@@ -19,6 +20,7 @@ from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.db.neo4j import neo4j_client
 from gosmart_graphite.model.graph import DICOMConfigurationNode
 from gosmart_graphite.service.dicom_service import dicom_service
+from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.media_service import media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
 from tests.utils.config_utils import ConfigUtils
@@ -33,16 +35,53 @@ def get_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _short_patient_id(test_id: str) -> str:
+    """Return a deterministic PatientID well within DICOM VR LO (64 chars)."""
+    return f"TEST-TS-{hashlib.sha256(test_id.encode()).hexdigest()[:12].upper()}"
+
+
+def _clone_asset_for_test(test_id: str) -> pydicom.Dataset:
+    """Load the compressed MR test asset with deterministic test-scoped identifiers."""
+    ds = pydicom.dcmread(TEST_ASSET_DCM)
+    sop_uid = generate_uid(entropy_srcs=[test_id, "sop"])
+    ds.PatientID = _short_patient_id(test_id)
+    ds.StudyInstanceUID = generate_uid(entropy_srcs=[test_id, "study"])
+    ds.SeriesInstanceUID = generate_uid(entropy_srcs=[test_id, "series"])
+    ds.SOPInstanceUID = sop_uid
+    if hasattr(ds, "file_meta") and ds.file_meta:
+        ds.file_meta.MediaStorageSOPInstanceUID = sop_uid
+    return ds
+
+
+def _tag_hierarchy_test_id(sop_uid: str, test_id: str) -> None:
+    """Tag the Patient -> Study -> Series -> Instance hierarchy with test_id for cleanup."""
+    driver = neo4j_client.get_sync_driver()
+    with driver.session(database=neo4j_client.settings.DB_DATABASE) as session:
+        session.run(
+            """
+            MATCH (p:Patient)-[r1:HAS_STUDY]->(s:Study)-[r2:HAS_SERIES]->(se:Series)
+                  -[r3:HAS_INSTANCE]->(i:Instance {sop_instance_uid: $sop_uid})
+            SET p.test_id = $test_id,
+                s.test_id = $test_id,
+                se.test_id = $test_id,
+                i.test_id = $test_id,
+                r1.test_id = $test_id,
+                r2.test_id = $test_id,
+                r3.test_id = $test_id
+            """,
+            sop_uid=sop_uid,
+            test_id=test_id,
+        )
+
+
 @pytest.fixture
-def ts_preservation_env() -> Generator[dict, None, None]:
+def ts_preservation_env(request: pytest.FixtureRequest) -> Generator[dict, None, None]:
     """Sets up an isolated SCP server instance and clean test state."""
     settings = get_settings()
-    test_id = f"test_ts_{uuid.uuid4().hex[:8]}"
+    test_id = f"test_ts_{request.node.name}"
 
     # Clean pre-existing test data BEFORE running the test
-    driver = neo4j_client.get_sync_driver()
-    with driver.session() as session:
-        session.run("MATCH (n {test_id: $test_id}) DETACH DELETE n", test_id=test_id)
+    graph_service.cleanup_test_data_sync(test_id)
 
     port = get_free_port()
     service = PyNetDicomService(settings=settings)
@@ -81,10 +120,15 @@ def test_transfer_syntax_c_store_to_c_get_preservation(ts_preservation_env):
     test_id = ts_preservation_env["test_id"]
 
     assert TEST_ASSET_DCM.exists(), f"Asset missing: {TEST_ASSET_DCM}"
-    raw_ds = pydicom.dcmread(TEST_ASSET_DCM)
+    raw_ds = _clone_asset_for_test(test_id)
     orig_ts = raw_ds.file_meta.TransferSyntaxUID
     sop_uid = str(raw_ds.SOPInstanceUID)
     study_uid = str(raw_ds.StudyInstanceUID)
+
+    storage_root = ts_preservation_env["settings"].STORAGE_ROOT_URI.rstrip("/")
+    storage_uri = f"{storage_root}/{sop_uid}.dcm"
+    if media_service.exists_sync(storage_uri):
+        media_service.delete_sync(storage_uri)
 
     # 1. Client pushes dataset via C-STORE
     client_ae = AE(ae_title="TEST_STORE_SCU")
@@ -96,8 +140,6 @@ def test_transfer_syntax_c_store_to_c_get_preservation(ts_preservation_env):
     assert status is not None and status.Status == 0x0000
 
     # 2. Verify stored Part-10 file preserves original TransferSyntaxUID
-    storage_root = ts_preservation_env["settings"].STORAGE_ROOT_URI.rstrip("/")
-    storage_uri = f"{storage_root}/{sop_uid}.dcm"
     assert media_service.exists_sync(storage_uri)
     stored_ds = media_service.read_dicom_sync(storage_uri)
     assert stored_ds.file_meta.TransferSyntaxUID == orig_ts
@@ -112,10 +154,7 @@ def test_transfer_syntax_c_store_to_c_get_preservation(ts_preservation_env):
         rec = result.single()
         assert rec is not None
         assert rec["ts_uid"] == str(orig_ts)
-        # Tag with test_id for cleanup tracking
-        session.run(
-            "MATCH (i:Instance {sop_instance_uid: $sop_uid}) SET i.test_id = $test_id", sop_uid=sop_uid, test_id=test_id
-        )
+    _tag_hierarchy_test_id(sop_uid, test_id)
 
     # 4. Client retrieves dataset via C-GET
     received_contexts = []
@@ -159,10 +198,15 @@ def test_transfer_syntax_c_store_to_c_move_preservation(ts_preservation_env):
     test_id = ts_preservation_env["test_id"]
 
     assert TEST_ASSET_DCM.exists(), f"Asset missing: {TEST_ASSET_DCM}"
-    raw_ds = pydicom.dcmread(TEST_ASSET_DCM)
+    raw_ds = _clone_asset_for_test(test_id)
     orig_ts = raw_ds.file_meta.TransferSyntaxUID
     sop_uid = str(raw_ds.SOPInstanceUID)
     study_uid = str(raw_ds.StudyInstanceUID)
+
+    storage_root = ts_preservation_env["settings"].STORAGE_ROOT_URI.rstrip("/")
+    storage_uri = f"{storage_root}/{sop_uid}.dcm"
+    if media_service.exists_sync(storage_uri):
+        media_service.delete_sync(storage_uri)
 
     # 1. Ingest via C-STORE
     client_ae = AE(ae_title="TEST_STORE_SCU")
@@ -173,12 +217,7 @@ def test_transfer_syntax_c_store_to_c_move_preservation(ts_preservation_env):
     assoc.release()
     assert status is not None and status.Status == 0x0000
 
-    # Tag instance in Neo4j
-    driver = neo4j_client.get_sync_driver()
-    with driver.session() as session:
-        session.run(
-            "MATCH (i:Instance {sop_instance_uid: $sop_uid}) SET i.test_id = $test_id", sop_uid=sop_uid, test_id=test_id
-        )
+    _tag_hierarchy_test_id(sop_uid, test_id)
 
     # 2. Setup Destination Storage SCP that supports the original transfer syntax
     received_move_ts = []
@@ -197,6 +236,7 @@ def test_transfer_syntax_c_store_to_c_move_preservation(ts_preservation_env):
     )
     dest_port = dest_server.server_address[1]
 
+    driver = neo4j_client.get_sync_driver()
     try:
         # Register Destination AE in Neo4j
         dest_cfg = DICOMConfigurationNode(
@@ -241,11 +281,16 @@ def test_compressed_syntax_transcoding_protection(ts_preservation_env):
     scp_aet = ts_preservation_env["ae_title"]
     test_id = ts_preservation_env["test_id"]
 
-    raw_ds = pydicom.dcmread(TEST_ASSET_DCM)
+    raw_ds = _clone_asset_for_test(test_id)
     orig_ts = raw_ds.file_meta.TransferSyntaxUID
     assert orig_ts.is_compressed, "Test asset must be a compressed transfer syntax"
     sop_uid = str(raw_ds.SOPInstanceUID)
     study_uid = str(raw_ds.StudyInstanceUID)
+
+    storage_root = ts_preservation_env["settings"].STORAGE_ROOT_URI.rstrip("/")
+    storage_uri = f"{storage_root}/{sop_uid}.dcm"
+    if media_service.exists_sync(storage_uri):
+        media_service.delete_sync(storage_uri)
 
     # Ingest compressed asset
     client_ae = AE(ae_title="TEST_STORE_SCU")
@@ -256,12 +301,7 @@ def test_compressed_syntax_transcoding_protection(ts_preservation_env):
     assoc.release()
     assert status is not None and status.Status == 0x0000
 
-    # Tag instance in Neo4j
-    driver = neo4j_client.get_sync_driver()
-    with driver.session() as session:
-        session.run(
-            "MATCH (i:Instance {sop_instance_uid: $sop_uid}) SET i.test_id = $test_id", sop_uid=sop_uid, test_id=test_id
-        )
+    _tag_hierarchy_test_id(sop_uid, test_id)
 
     # Destination AE ONLY accepts uncompressed Explicit VR Little Endian
     received_move = []
@@ -280,6 +320,7 @@ def test_compressed_syntax_transcoding_protection(ts_preservation_env):
     )
     dest_port = dest_server.server_address[1]
 
+    driver = neo4j_client.get_sync_driver()
     try:
         dest_cfg = DICOMConfigurationNode(
             ae_title=dest_aet,
@@ -321,16 +362,25 @@ def test_uncompressed_transfer_syntax_preservation(ts_preservation_env):
     test_id = ts_preservation_env["test_id"]
 
     mock_ds = dicom_service.create_mock_dicom(
-        patient_id="P_UNCOMP_01",
+        patient_id=_short_patient_id(test_id),
         patient_name="UNCOMPRESSED^TEST",
         modality="OT",
         study_description="Uncompressed TS Test",
     )
     mock_ds.SOPClassUID = SecondaryCaptureImageStorage
+    mock_ds.StudyInstanceUID = generate_uid(entropy_srcs=[test_id, "study"])
+    mock_ds.SeriesInstanceUID = generate_uid(entropy_srcs=[test_id, "series"])
+    sop_uid = generate_uid(entropy_srcs=[test_id, "sop"])
+    mock_ds.SOPInstanceUID = sop_uid
+    mock_ds.file_meta.MediaStorageSOPInstanceUID = sop_uid
     orig_ts = mock_ds.file_meta.TransferSyntaxUID
     assert orig_ts == ExplicitVRLittleEndian
-    sop_uid = str(mock_ds.SOPInstanceUID)
     study_uid = str(mock_ds.StudyInstanceUID)
+
+    storage_root = ts_preservation_env["settings"].STORAGE_ROOT_URI.rstrip("/")
+    storage_uri = f"{storage_root}/{sop_uid}.dcm"
+    if media_service.exists_sync(storage_uri):
+        media_service.delete_sync(storage_uri)
 
     # Ingest mock uncompressed dataset via C-STORE
     client_ae = AE(ae_title="TEST_STORE_SCU")
@@ -341,12 +391,7 @@ def test_uncompressed_transfer_syntax_preservation(ts_preservation_env):
     assoc.release()
     assert status is not None and status.Status == 0x0000
 
-    # Tag instance in Neo4j
-    driver = neo4j_client.get_sync_driver()
-    with driver.session() as session:
-        session.run(
-            "MATCH (i:Instance {sop_instance_uid: $sop_uid}) SET i.test_id = $test_id", sop_uid=sop_uid, test_id=test_id
-        )
+    _tag_hierarchy_test_id(sop_uid, test_id)
 
     # C-GET verification
     received_get_ts = []

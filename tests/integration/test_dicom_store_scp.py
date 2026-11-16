@@ -3,14 +3,19 @@ from unittest.mock import patch
 
 import pydicom
 import pytest
+from pydicom.uid import generate_uid
 from pynetdicom import AE
 
 from gosmart_graphite.core.config import get_settings
+from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.media_service import media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
 from tests.utils.config_utils import ConfigUtils
 
 GOSMART_GRAPHITE = "GOSMART_GRAPHITE"
+TEST_ID = "test_dicom_store_scp"
+TEST_PATIENT_ID = "TEST-DICOM-STORE-SCP"
 TEST_ASSET_DCM = ConfigUtils.assets_root() / "mr/MR.2.25.10986282349447326157620829373816019196.dcm"
 
 
@@ -19,6 +24,49 @@ def get_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _build_isolated_dataset(suffix: str) -> pydicom.Dataset:
+    """Load the MR test asset with deterministic test-scoped identifiers."""
+    ds = pydicom.dcmread(TEST_ASSET_DCM)
+    sop_uid = generate_uid(entropy_srcs=[TEST_ID, suffix, "sop"])
+    ds.PatientID = TEST_PATIENT_ID
+    ds.StudyInstanceUID = generate_uid(entropy_srcs=[TEST_ID, suffix, "study"])
+    ds.SeriesInstanceUID = generate_uid(entropy_srcs=[TEST_ID, suffix, "series"])
+    ds.SOPInstanceUID = sop_uid
+    if hasattr(ds, "file_meta") and ds.file_meta:
+        ds.file_meta.MediaStorageSOPInstanceUID = sop_uid
+    return ds
+
+
+def _is_neo4j_reachable() -> bool:
+    """Return True if the configured Neo4j instance is reachable."""
+    try:
+        neo4j_client.get_sync_driver().verify_connectivity()
+        return True
+    except Exception:
+        return False
+
+
+def _tag_hierarchy_test_id(sop_uid: str, test_id: str) -> None:
+    """Tag the Patient -> Study -> Series -> Instance hierarchy with test_id for cleanup."""
+    driver = neo4j_client.get_sync_driver()
+    with driver.session(database=neo4j_client.settings.DB_DATABASE) as session:
+        session.run(
+            """
+            MATCH (p:Patient)-[r1:HAS_STUDY]->(s:Study)-[r2:HAS_SERIES]->(se:Series)
+                  -[r3:HAS_INSTANCE]->(i:Instance {sop_instance_uid: $sop_uid})
+            SET p.test_id = $test_id,
+                s.test_id = $test_id,
+                se.test_id = $test_id,
+                i.test_id = $test_id,
+                r1.test_id = $test_id,
+                r2.test_id = $test_id,
+                r3.test_id = $test_id
+            """,
+            sop_uid=sop_uid,
+            test_id=test_id,
+        )
 
 
 @pytest.fixture
@@ -47,8 +95,13 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
     service, port = dicom_server
     settings = get_settings()
 
+    neo4j_reachable = _is_neo4j_reachable()
+    if neo4j_reachable:
+        # Per AGENTS.md rule: Clean up pre-existing test data BEFORE the test, not after
+        graph_service.cleanup_test_data_sync(TEST_ID)
+
     assert TEST_ASSET_DCM.exists(), f"Asset missing: {TEST_ASSET_DCM}"
-    ds = pydicom.dcmread(TEST_ASSET_DCM)
+    ds = _build_isolated_dataset("blackbox")
     sop_uid = str(ds.SOPInstanceUID)
     expected_storage_uri = f"{settings.STORAGE_ROOT_URI.rstrip('/')}/{sop_uid}.dcm"
 
@@ -78,11 +131,10 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
     assert stored_ds.PatientID == ds.PatientID
 
     # Verify Instance provenance tracking in Neo4j (if connected)
-    from gosmart_graphite.db.neo4j import neo4j_client
-
-    try:
+    if neo4j_reachable:
+        _tag_hierarchy_test_id(sop_uid, TEST_ID)
         driver = neo4j_client.get_sync_driver()
-        with driver.session() as session:
+        with driver.session(database=neo4j_client.settings.DB_DATABASE) as session:
             result = session.run(
                 "MATCH (i:Instance {sop_instance_uid: $sop_uid}) "
                 "RETURN i.Source AS Source, i.SourceIdentity AS SourceIdentity, "
@@ -90,14 +142,12 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
                 sop_uid=sop_uid,
             )
             records = [record.data() for record in result]
-            if records:
-                inst = records[0]
-                assert inst["Source"] == "dimse:127.0.0.1"
-                assert inst["SourceIdentity"] == "ae:TEST_SCU"
-                assert inst["Destination"].startswith("dimse:")
-                assert inst["DestinationIdentity"] == "ae:GOSMART_GS"
-    except Exception:
-        pass
+        assert len(records) == 1
+        inst = records[0]
+        assert inst["Source"] == "dimse:127.0.0.1"
+        assert inst["SourceIdentity"] == "ae:TEST_SCU"
+        assert inst["Destination"].startswith("dimse:")
+        assert inst["DestinationIdentity"] == f"ae:{GOSMART_GRAPHITE}"
 
 
 def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server):
@@ -105,12 +155,7 @@ def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server)
     service, port = dicom_server
     settings = get_settings()
 
-    ds = pydicom.dcmread(TEST_ASSET_DCM)
-    # Generate a unique SOP instance for this failure test
-    ds.SOPInstanceUID = "9.9.9.9.9999.failure.test"
-    if hasattr(ds, "file_meta") and ds.file_meta:
-        ds.file_meta.MediaStorageSOPInstanceUID = ds.SOPInstanceUID
-
+    ds = _build_isolated_dataset("failure")
     sop_uid = str(ds.SOPInstanceUID)
     expected_storage_uri = f"{settings.STORAGE_ROOT_URI.rstrip('/')}/{sop_uid}.dcm"
 

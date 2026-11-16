@@ -1,12 +1,27 @@
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 import pykka
 import pytest
+from fastapi import FastAPI
 
 from tests.utils.config_utils import ConfigUtils
 
 _config_utils = ConfigUtils()
+
+
+@pytest.fixture
+def isolated_app_lifespan(monkeypatch: pytest.MonkeyPatch):
+    """Disable production startup side effects for mocked unit API tests."""
+
+    @asynccontextmanager
+    async def no_lifespan(app: FastAPI):
+        yield
+
+    from gosmart_graphite.main import app
+
+    monkeypatch.setattr(app.router, "lifespan_context", no_lifespan)
 
 
 @pytest.fixture
