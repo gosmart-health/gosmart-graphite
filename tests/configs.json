@@ -1,0 +1,42 @@
+{
+  "cleanup_enable": true,
+  "test_fhir_service": {
+    "test_live_fetch_encounter": {
+      "encounter.id": "3033",
+      "encounter.status": "finished",
+      "subject.reference": "Patient/2977"
+    },
+    "test_live_fetch_patient": {
+      "subject.reference": "Patient/2977",
+      "subject.id": "2977"
+    },
+    "test_live_fetch_imaging_study_by_uid": {
+      "study_uid": "1.2.840.99999999.89216092.1553055938354",
+      "study.status": "available",
+      "study.id": "3051"
+    },
+    "test_live_fetch_diagnostic_report": {
+      "encounter.id": "3033",
+      "report.id": "3052",
+      "report.status": "final",
+      "encounter.reference": "Encounter/3033"
+    },
+    "test_live_fetch_enc_relevant_resources": {
+      "encounter.id": "3033",
+      "patient.id": "2977",
+      "diagnostic.reports.length": "ge1",
+      "diagnostic.reports.id_0": "3052",
+      "imaging_studies.length": "ge1",
+      "imaging_studies.id_0": "3051",
+      "procedures.length": "ge1",
+      "errors.length": "eq0"
+    },
+    "test_live_fetch_and_upsert_study_790735190745_twice": {
+      "study_uid": "1.2.840.99999999.40196652.790735190745",
+      "imaging_studies.length": "ge1",
+      "diagnostic_reports.length": "ge1",
+      "observations.length": "ge1",
+      "procedures.length": "ge1"
+    }
+  }
+}

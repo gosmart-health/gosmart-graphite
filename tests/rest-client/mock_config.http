@@ -1,0 +1,28 @@
+## DICOM Mock Server Configurations
+### ------------------------------------------------------------------------------
+
+### Get Remote Auto Push Status
+GET {{graphServer}}/api/v1/scp/auto-push
+
+### Configure Remote Auto Push
+POST {{graphServer}}/api/v1/scp/auto-push
+Content-Type: application/json
+
+{
+  "intervalSec": 30,
+  "targetAeTitle": "GOSMART_GS",
+  "targetHost": "127.0.0.1",
+  "targetPort": 11112
+}
+
+### Disable Remote Auto Push
+POST {{graphServer}}/api/v1/scp/auto-push
+Content-Type: application/json
+
+{
+  "intervalSec": 30,
+  "targetAeTitle": "GOSMART_GS",
+  "targetHost": "127.0.0.1",
+  "targetPort": 11112
+}
+

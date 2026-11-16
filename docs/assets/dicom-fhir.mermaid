@@ -1,0 +1,30 @@
+---
+config:
+  theme: forest
+  themeCSS: 'background-color: #f3f4f6;'
+---
+flowchart TB
+    Patient --> Study
+    Study --> Series
+    Patient -->|MRN| FHIR_Patient
+    Encounter --> ServiceRequest
+    Encounter --> FHIR_Patient
+    Encounter --> Condition
+    Encounter --> Report
+    Encounter --> Observation
+    Encounter --> Imaging_Study
+    ServiceRequest --> Imaging_Study
+    Series --> DICOM_Instances
+    Imaging_Study -->|UID of| Study
+    Imaging_Study -->|UID of| Series
+    Imaging_Study -->|UID of| DICOM_Instances
+
+    Patient@{ shape: stadium }
+    FHIR_Patient@{ shape: stadium }
+    Encounter@{ shape: rect }
+    style Patient fill:#D50000,color:#fbf8f8
+    style FHIR_Patient fill:#D50000,color:#ffffff
+    style Encounter fill:#00C853
+    style Report fill:#FF6D00
+    style Imaging_Study fill:#FF6D00
+    linkStyle 4 stroke:#FF6D00,fill:none

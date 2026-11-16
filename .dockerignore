@@ -1,0 +1,41 @@
+# Git
+.git
+.github
+.gitignore
+
+# Python bytecode and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Testing, coverage, and caches
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+.ruff_cache/
+
+# IDE and editor settings
+.vscode/
+.idea/
+.cline/
+
+# Local configurations, secrets, and logs
+.env
+.env.*
+*.log
+junk.log
+logs/
+
+# Documentation and exploratory notebooks
+docs/
+notebooks/
+
+# Neo4j local setup and Docker configs
+neo4j/
+docker/
+ImplementationPlan.md
+
