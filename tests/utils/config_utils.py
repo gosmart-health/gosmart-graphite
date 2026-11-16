@@ -36,3 +36,7 @@ class ConfigUtils:
             return val < float(target_str[2:])
         else:
             raise ValueError(f"Invalid target: {target}")
+
+    @staticmethod
+    def assets_root() -> Path:
+        return Path(__file__).resolve().parent.parent / "assets"

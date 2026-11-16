@@ -1,14 +1,31 @@
+import sys
 from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ROOT_ENV_FILE = _PROJECT_ROOT / ".env"
+_TESTS_ENV_FILE = _PROJECT_ROOT / "tests" / ".env"
+
+
+def _resolve_env_files() -> tuple[Path, ...]:
+    """Resolve .env files: project-root .env first, then tests/.env during pytest runs."""
+    env_files: list[Path] = [_ROOT_ENV_FILE]
+    if "pytest" in sys.modules:
+        env_files.append(_TESTS_ENV_FILE)
+    cwd_env = Path(".env").resolve()
+    if cwd_env not in (_ROOT_ENV_FILE, _TESTS_ENV_FILE):
+        env_files.append(cwd_env)
+    return tuple(env_files)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="GOSMART_GS_",
-        env_file=".env",
+        env_file=_resolve_env_files(),
         env_file_encoding="utf-8",
         extra="ignore",
     )

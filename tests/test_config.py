@@ -1,7 +1,8 @@
 import os
+import sys
 from unittest.mock import patch
 
-from gosmart_graphite.core.config import Settings
+from gosmart_graphite.core.config import _ROOT_ENV_FILE, _TESTS_ENV_FILE, Settings, _resolve_env_files
 
 
 def test_fhir_settings_defaults():
@@ -49,3 +50,29 @@ def test_llm_config_encryption_key_env_override():
         settings = Settings(_env_file=None)
         assert settings.LLM_CONFIG_ENCRYPTION_KEY is not None
         assert settings.LLM_CONFIG_ENCRYPTION_KEY.get_secret_value() == "test-passphrase-for-llm-keys"
+
+
+def test_resolve_env_files_pytest_order(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    env_files = _resolve_env_files()
+    assert env_files[0] == _ROOT_ENV_FILE
+    assert env_files[1] == _TESTS_ENV_FILE
+
+
+def test_resolve_env_files_excludes_tests_env_outside_pytest(monkeypatch, tmp_path):
+    monkeypatch.chdir(_ROOT_ENV_FILE.parent)
+    monkeypatch.delitem(sys.modules, "pytest", raising=False)
+    env_files = _resolve_env_files()
+    assert env_files == (_ROOT_ENV_FILE,)
+
+
+def test_tests_env_overrides_root_env(tmp_path):
+    root_env = tmp_path / ".env"
+    tests_env = tmp_path / "tests.env"
+    root_env.write_text("GOSMART_GS_APP_NAME=RootApp\nGOSMART_GS_PORT=9001\n", encoding="utf-8")
+    tests_env.write_text("GOSMART_GS_PORT=9999\n", encoding="utf-8")
+
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=(root_env, tests_env))
+        assert settings.APP_NAME == "RootApp"
+        assert settings.PORT == 9999
