@@ -103,8 +103,65 @@ def test_cleanup_media(mock_cleanup):
     assert summary["unique_uris"] == 2
     assert summary["deleted_count"] == 1
     assert summary["not_found_count"] == 1
+    assert summary["skipped_count"] == 0
     assert summary["failed_count"] == 0
     mock_fs.rm.assert_called_once_with("/tmp/dicom/1.dcm")
+
+
+def test_cleanup_media_skips_protected_tests_assets(mock_cleanup):
+    cleanup, mock_session, mock_ms = mock_cleanup
+
+    asset_uri_1 = f"file://{PROJECT_ROOT / 'tests' / 'assets' / 'mr' / 'sample1.dcm'}"
+    asset_uri_2 = f"file://{PROJECT_ROOT / 'tests' / 'assets' / 'mr' / '..' / 'mr' / 'sample2.dcm'}"
+    deletable_uri = "file:///tmp/dicom/deletable.dcm"
+
+    mock_session.run.return_value = [
+        MagicMock(data=lambda: {"id": "inst-asset-1", "storage_uri": asset_uri_1}),
+        MagicMock(data=lambda: {"id": "inst-asset-2", "storage_uri": asset_uri_2}),
+        MagicMock(data=lambda: {"id": "inst-deletable", "storage_uri": deletable_uri}),
+    ]
+
+    mock_fs = MagicMock()
+    mock_fs.exists.return_value = True
+    mock_ms.parse_uri.side_effect = lambda uri: MagicMock(
+        fsspec_protocol="file",
+        fsspec_path=uri.replace("file://", ""),
+    )
+    mock_ms.get_filesystem.return_value = mock_fs
+
+    summary = cleanup.cleanup_media(dry_run=False)
+
+    assert summary["total_instances"] == 3
+    assert summary["unique_uris"] == 3
+    assert summary["deleted_count"] == 1
+    assert summary["not_found_count"] == 0
+    assert summary["skipped_count"] == 2
+    assert summary["failed_count"] == 0
+    mock_fs.exists.assert_called_once_with("/tmp/dicom/deletable.dcm")
+    mock_fs.rm.assert_called_once_with("/tmp/dicom/deletable.dcm")
+
+
+def test_cleanup_media_does_not_skip_cloud_uri_with_tests_assets_path(mock_cleanup):
+    cleanup, mock_session, mock_ms = mock_cleanup
+
+    cloud_uri = "gs://tests/assets/mr/sample1.dcm"
+    mock_session.run.return_value = [
+        MagicMock(data=lambda: {"id": "inst-gcs", "storage_uri": cloud_uri}),
+    ]
+
+    mock_fs = MagicMock()
+    mock_fs.exists.return_value = True
+    mock_ms.parse_uri.side_effect = lambda uri: MagicMock(
+        fsspec_protocol="gs",
+        fsspec_path=uri.replace("gs://", ""),
+    )
+    mock_ms.get_filesystem.return_value = mock_fs
+
+    summary = cleanup.cleanup_media(dry_run=False)
+
+    assert summary["deleted_count"] == 1
+    assert summary["skipped_count"] == 0
+    mock_fs.rm.assert_called_once_with("tests/assets/mr/sample1.dcm")
 
 
 def test_cleanup_parent_recursion_stops_at_highest_node(mock_cleanup):
@@ -179,5 +236,54 @@ def test_cleanup_all(mock_cleanup):
         summary = cleanup.cleanup_all(dry_run=False)
         assert summary["media"]["deleted_count"] == 3
         assert summary["nodes"]["Instance"] == 3
+        assert "test_nodes" in summary
         mock_media.assert_called_once_with(dry_run=False)
         mock_nodes.assert_called_once_with(dry_run=False)
+
+
+def test_cleanup_test_nodes_dry_run_vs_live(mock_cleanup):
+    cleanup, mock_session, _ = mock_cleanup
+
+    # Mock count query returning 2 nodes for each of the 7 target labels
+    mock_session.run.return_value = [MagicMock(data=lambda: {"count": 2})]
+
+    # Dry-run
+    dry_result = cleanup.cleanup_test_nodes(dry_run=True)
+    assert dry_result["dry_run"] is True
+    assert dry_result["deleted_count"] == 14
+    assert dry_result["failed_count"] == 0
+    assert dry_result["errors"] == []
+    assert dry_result["deleted_by_label"]["User"] == 2
+
+    # Verify DETACH DELETE was NOT called during dry-run and n.test_id filter is used
+    dry_queries = [call[0][0] for call in mock_session.run.call_args_list]
+    assert len(dry_queries) == 7
+    assert not any("DETACH DELETE" in q for q in dry_queries)
+    assert all("n.test_id IS NOT NULL AND n.test_id <> ''" in q for q in dry_queries)
+
+    mock_session.run.reset_mock()
+    mock_session.run.return_value = [MagicMock(data=lambda: {"count": 2})]
+
+    # Live run
+    live_result = cleanup.cleanup_test_nodes(dry_run=False)
+    assert live_result["dry_run"] is False
+    assert live_result["deleted_count"] == 14
+    assert live_result["failed_count"] == 0
+    assert live_result["errors"] == []
+    live_queries = [call[0][0] for call in mock_session.run.call_args_list]
+    delete_queries = [q for q in live_queries if "DETACH DELETE" in q]
+    assert len(delete_queries) == 7
+    assert all("n.test_id IS NOT NULL AND n.test_id <> ''" in q for q in delete_queries)
+
+
+def test_cleanup_test_nodes_zero_count_skips_delete(mock_cleanup):
+    cleanup, mock_session, _ = mock_cleanup
+
+    mock_session.run.return_value = [MagicMock(data=lambda: {"count": 0})]
+
+    result = cleanup.cleanup_test_nodes(dry_run=False)
+    assert result["deleted_count"] == 0
+    assert result["failed_count"] == 0
+    assert all(cnt == 0 for cnt in result["deleted_by_label"].values())
+    queries = [call[0][0] for call in mock_session.run.call_args_list]
+    assert not any("DETACH DELETE" in q for q in queries)
