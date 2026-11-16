@@ -1,6 +1,5 @@
 import socket
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pydicom
 import pytest
@@ -15,8 +14,9 @@ from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.media_service import media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService, pynetdicom_service
+from tests.utils.config_utils import ConfigUtils
 
-TEST_ASSET_DCM = Path("tests/assets/mr/MR.2.25.10986282349447326157620829373816019196.dcm")
+TEST_ASSET_DCM = ConfigUtils.assets_root() / "mr/MR.2.25.10986282349447326157620829373816019196.dcm"
 LIVE_MDICOM_HOST = "10.200.0.103"
 LIVE_MDICOM_PORT = 11113
 LIVE_MDICOM_AET = "MDICOM"

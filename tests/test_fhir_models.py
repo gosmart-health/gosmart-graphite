@@ -332,6 +332,6 @@ def test_cypher_schema_constraints_and_indexes_synchronization() -> None:
             assert f"FOR (n:{label}) ON ({expected_prop})" in joined_indexes
 
     # Verify src/db/fhir_schema.cypher matches generate_fhir_cypher_script()
-    cypher_file = Path(__file__).resolve().parent.parent / "src" / "db" / "fhir_schema.cypher"
+    cypher_file = Path(__file__).resolve().parent.parent / "src" / "gosmart_graphite" / "db" / "fhir_schema.cypher"
     assert cypher_file.exists()
     assert cypher_file.read_text(encoding="utf-8") == generate_fhir_cypher_script()

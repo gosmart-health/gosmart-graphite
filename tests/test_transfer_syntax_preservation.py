@@ -1,7 +1,6 @@
 import socket
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Generator
 
 import pydicom
@@ -22,8 +21,9 @@ from gosmart_graphite.model.graph import DICOMConfigurationNode
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.media_service import media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
+from tests.utils.config_utils import ConfigUtils
 
-TEST_ASSET_DCM = Path("tests/assets/mr/MR.2.25.10986282349447326157620829373816019196.dcm")
+TEST_ASSET_DCM = ConfigUtils.assets_root() / "mr/MR.2.25.10986282349447326157620829373816019196.dcm"
 
 
 def get_free_port() -> int:

@@ -1,5 +1,4 @@
 import socket
-from pathlib import Path
 from unittest.mock import patch
 
 import pydicom
@@ -9,8 +8,10 @@ from pynetdicom import AE
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.service.media_service import media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService
+from tests.utils.config_utils import ConfigUtils
 
-TEST_ASSET_DCM = Path("tests/assets/mr/MR.2.25.10986282349447326157620829373816019196.dcm")
+GOSMART_GRAPHITE = "GOSMART_GRAPHITE"
+TEST_ASSET_DCM = ConfigUtils.assets_root() / "mr/MR.2.25.10986282349447326157620829373816019196.dcm"
 
 
 def get_free_port() -> int:
@@ -36,7 +37,7 @@ def test_dicom_c_echo_success(dicom_server):
     service, port = dicom_server
     assert service.is_running()
 
-    result = service.echo_scu(host="127.0.0.1", port=port, called_aet="GOSMART_GS")
+    result = service.echo_scu(host="127.0.0.1", port=port, called_aet=GOSMART_GRAPHITE)
     assert result["success"] is True
     assert result["status_code"] == "0x0"
 
@@ -59,7 +60,7 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
     client_ae = AE(ae_title="TEST_SCU")
     client_ae.add_requested_context(ds.SOPClassUID, ds.file_meta.TransferSyntaxUID)
 
-    assoc = client_ae.associate("127.0.0.1", port, ae_title="GOSMART_GS")
+    assoc = client_ae.associate("127.0.0.1", port, ae_title=GOSMART_GRAPHITE)
     assert assoc.is_established, "SCU failed to establish association with SCP"
 
     status = assoc.send_c_store(ds)
@@ -120,7 +121,7 @@ def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server)
     client_ae = AE(ae_title="TEST_SCU")
     client_ae.add_requested_context(ds.SOPClassUID, ds.file_meta.TransferSyntaxUID)
 
-    assoc = client_ae.associate("127.0.0.1", port, ae_title="GOSMART_GS")
+    assoc = client_ae.associate("127.0.0.1", port, ae_title=GOSMART_GRAPHITE)
     assert assoc.is_established
 
     # Simulate downstream Neo4j failure
