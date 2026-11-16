@@ -460,11 +460,17 @@ async def list_llm_configurations(
 async def get_llm_configuration(
     config_id: Optional[str] = None,
     tag: Optional[str] = None,
+    group_id: Optional[str] = None,
     test_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Retrieve a single active LLM_Config by deterministic ID or tag (api_key redacted)."""
-    cfg = await llm_config_service.get_llm_config(config_id=config_id, tag=tag, test_id=test_id)
-    logger.info("mcp_get_llm_configuration_executed", config_id=config_id, tag=tag, found=bool(cfg))
+    """Retrieve a single active LLM_Config by ID or (tag[, group_id]) (api_key redacted)."""
+    cfg = await llm_config_service.get_llm_config(
+        config_id=config_id,
+        tag=tag,
+        group_id=group_id,
+        test_id=test_id,
+    )
+    logger.info("mcp_get_llm_configuration_executed", config_id=config_id, tag=tag, group_id=group_id, found=bool(cfg))
     return cfg
 
 

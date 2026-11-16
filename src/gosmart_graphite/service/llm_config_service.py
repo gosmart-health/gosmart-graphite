@@ -148,6 +148,49 @@ def _node_props_payload(cfg_node: LLM_Config, encrypted_api_key: str) -> Dict[st
 class LLMConfigService:
     """Service managing Neo4j-persisted, purpose-tagged, group-scoped LLM configurations."""
 
+    _UPSERT_INSPECT_CYPHER = """
+    MATCH (tg:Group {id: $target_group_id})
+    OPTIONAL MATCH (tg)-[tgr:HAS_LLM_CONFIG]->(grp_existing:LLM_Config {tag: $tag})
+    WHERE (tgr.Action IS NULL OR tgr.Action <> 'DELETE')
+      AND (grp_existing.Action IS NULL OR grp_existing.Action <> 'DELETE')
+      AND (
+        (
+          ($test_id IS NULL OR $test_id = '')
+          AND (grp_existing.test_id IS NULL OR trim(toString(grp_existing.test_id)) = '')
+        )
+        OR ($test_id IS NOT NULL AND $test_id <> '' AND grp_existing.test_id = $test_id)
+      )
+    WITH tg, grp_existing
+    OPTIONAL MATCH (pg:Group)-[pr:HAS_LLM_CONFIG]->(grp_existing)
+    WHERE grp_existing IS NOT NULL
+      AND (pr.Action IS NULL OR pr.Action <> 'DELETE')
+      AND (pg.Action IS NULL OR pg.Action <> 'DELETE')
+    WITH grp_existing, collect(DISTINCT pg.id) AS grp_existing_group_ids
+    OPTIONAL MATCH (scoped:LLM_Config {id: $scoped_cfg_id})
+    OPTIONAL MATCH (spg:Group)-[spr:HAS_LLM_CONFIG]->(scoped)
+    WHERE scoped IS NOT NULL
+      AND (spr.Action IS NULL OR spr.Action <> 'DELETE')
+      AND (spg.Action IS NULL OR spg.Action <> 'DELETE')
+    RETURN properties(grp_existing) AS grp_existing,
+           grp_existing_group_ids,
+           properties(scoped) AS scoped_existing,
+           collect(DISTINCT spg.id) AS scoped_group_ids
+    LIMIT 1
+    """
+
+    _GROUP_TAG_CONFLICT_CYPHER = """
+    MATCH (g:Group {id: $group_id})-[r:HAS_LLM_CONFIG]->(other:LLM_Config {tag: $tag})
+    WHERE other.id <> $config_id
+      AND (r.Action IS NULL OR r.Action <> 'DELETE')
+      AND (other.Action IS NULL OR other.Action <> 'DELETE')
+      AND (
+        (($test_id IS NULL OR $test_id = '') AND (other.test_id IS NULL OR trim(toString(other.test_id)) = ''))
+        OR ($test_id IS NOT NULL AND $test_id <> '' AND other.test_id = $test_id)
+      )
+    RETURN other.id AS conflict_id
+    LIMIT 1
+    """
+
     def __init__(self, client: Optional[Neo4jClient] = None) -> None:
         self.client = client or neo4j_client
 
@@ -246,16 +289,15 @@ class LLMConfigService:
         return self._validate_resolved_group_records(records, clean_ident)
 
     # ------------------------------------------------------------------
-    # Upsert (with Overwrite Cloning & NOT_HAS_LLM_CONFIG History)
+    # Upsert (with Group-Scoped Tag Uniqueness, Overwrite Cloning & History)
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _prepare_upsert_payload(
+    def _parse_upsert_request(
         config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
         assign_group: Optional[str],
-        acted_by: str,
         test_id: Optional[str],
-    ) -> tuple[LLM_Config, Dict[str, Any], Optional[str], Optional[str]]:
+    ) -> tuple[LLMConfigCreateRequest, Optional[str], Optional[str]]:
         if isinstance(config_data, dict):
             req = LLMConfigCreateRequest(**config_data)
         elif isinstance(config_data, LLM_Config):
@@ -278,8 +320,29 @@ class LLMConfigService:
 
         effective_assign = assign_group if assign_group is not None else req.assign_group
         norm_test_id = _normalize_test_id(test_id if test_id is not None else req.test_id)
+        return req, effective_assign, norm_test_id
 
+    @classmethod
+    def _prepare_upsert_payload(
+        cls,
+        config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
+        assign_group: Optional[str],
+        acted_by: str,
+        test_id: Optional[str],
+        group_id: Optional[str] = None,
+    ) -> tuple[LLM_Config, Dict[str, Any], Optional[str], Optional[str]]:
+        req, effective_assign, norm_test_id = cls._parse_upsert_request(
+            config_data=config_data,
+            assign_group=assign_group,
+            test_id=test_id,
+        )
+        scoped_id = (
+            LLM_Config.compute_group_scoped_id(tag=req.tag, group_id=group_id, test_id=norm_test_id)
+            if group_id
+            else ""
+        )
         cfg_node = LLM_Config(
+            id=scoped_id,
             tag=req.tag,
             provider=req.provider,
             model=req.model,
@@ -298,6 +361,55 @@ class LLMConfigService:
         props = _node_props_payload(cfg_node, encrypted_key)
         return cfg_node, props, effective_assign, norm_test_id
 
+    @staticmethod
+    def _plan_upsert_mutation(
+        check_rec: Optional[Dict[str, Any]],
+        target_group_id: str,
+        scoped_cfg_id: str,
+        props: Dict[str, Any],
+    ) -> tuple[str, Dict[str, Any], bool, List[str], Optional[Dict[str, Any]], Optional[str]]:
+        """Determine target node ID, archive flag, prior groups, and shared-config dissociation."""
+        grp_existing = check_rec.get("grp_existing") if check_rec else None
+        grp_existing_group_ids = (
+            [gid for gid in (check_rec.get("grp_existing_group_ids") or []) if gid] if check_rec else []
+        )
+        scoped_existing = check_rec.get("scoped_existing") if check_rec else None
+        scoped_group_ids = (
+            [gid for gid in (check_rec.get("scoped_group_ids") or []) if gid] if check_rec else []
+        )
+
+        dissociate_shared_cfg_id: Optional[str] = None
+        if grp_existing:
+            other_groups = [gid for gid in grp_existing_group_ids if gid != target_group_id]
+            if grp_existing.get("id") == scoped_cfg_id or not other_groups:
+                effective_cfg_id = grp_existing["id"]
+                effective_props = {**props, "id": effective_cfg_id}
+                was_active = True
+                prev_group_ids = grp_existing_group_ids
+                existing_props = grp_existing
+            else:
+                dissociate_shared_cfg_id = grp_existing["id"]
+                effective_cfg_id = scoped_cfg_id
+                effective_props = props
+                was_active = bool(scoped_existing and scoped_existing.get("Action") != "DELETE")
+                prev_group_ids = scoped_group_ids if was_active else []
+                existing_props = scoped_existing
+        else:
+            effective_cfg_id = scoped_cfg_id
+            effective_props = props
+            was_active = bool(scoped_existing and scoped_existing.get("Action") != "DELETE")
+            prev_group_ids = scoped_group_ids if was_active else []
+            existing_props = scoped_existing
+
+        return (
+            effective_cfg_id,
+            effective_props,
+            was_active,
+            prev_group_ids,
+            existing_props,
+            dissociate_shared_cfg_id,
+        )
+
     async def upsert_llm_config(
         self,
         config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
@@ -305,48 +417,79 @@ class LLMConfigService:
         acted_by: str = "system",
         test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create or overwrite an LLM_Config and assign it via (:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config).
+        """Create or overwrite a group-scoped LLM_Config and assign it via (:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config).
 
-        When overwriting an active LLM_Config (same tag/id), clones the previous node as an archived
-        node with Action='DELETE' and links previously associated groups to the archived clone via
-        NOT_HAS_LLM_CONFIG, then updates the canonical node in place so all currently associated
-        groups receive the new truth and adds (:Group)-[:HAS_LLM_CONFIG]->(cfg) for the target group.
+        Tags are unique within an associated Group (not globally), allowing multiple sponsoring Groups
+        to maintain independent configurations (e.g., separate API keys) for the same purpose tag.
+        When overwriting an existing active LLM_Config for the target group/tag, clones the previous
+        node as an archived node with Action='DELETE' and links previously associated groups to the
+        archived clone via NOT_HAS_LLM_CONFIG before updating the canonical node in place.
         """
-        cfg_node, props, effective_assign, norm_test_id = self._prepare_upsert_payload(
+        req, effective_assign, norm_test_id = self._parse_upsert_request(
             config_data=config_data,
             assign_group=assign_group,
-            acted_by=acted_by,
             test_id=test_id,
         )
-
         target_group = await self.resolve_target_group(identifier=effective_assign, test_id=norm_test_id)
         target_group_id = target_group["id"]
-        rel = HasLlmConfigRelation(
-            start_node_id=target_group_id,
-            end_node_id=cfg_node.id,
+
+        cfg_node, props, _, _ = self._prepare_upsert_payload(
+            config_data=req,
+            assign_group=effective_assign,
+            acted_by=acted_by,
             test_id=norm_test_id,
-            ActedBy=acted_by,
+            group_id=target_group_id,
         )
         neg_type = to_negated_relation_type("HAS_LLM_CONFIG")
 
-        async def _upsert_tx(tx: Any) -> tuple[Dict[str, Any], List[Dict[str, Any]], bool]:
+        async def _upsert_tx(tx: Any) -> tuple[Dict[str, Any], List[Dict[str, Any]], bool, str]:
             check_res = await tx.run(
-                """
-                MATCH (existing:LLM_Config {id: $cfg_id})
-                OPTIONAL MATCH (pg:Group)-[pr:HAS_LLM_CONFIG]->(existing)
-                WHERE (pr.Action IS NULL OR pr.Action <> 'DELETE')
-                  AND (pg.Action IS NULL OR pg.Action <> 'DELETE')
-                RETURN properties(existing) AS existing, collect(DISTINCT pg.id) AS prev_group_ids
-                """,
-                cfg_id=cfg_node.id,
+                self._UPSERT_INSPECT_CYPHER,
+                target_group_id=target_group_id,
+                tag=cfg_node.tag,
+                scoped_cfg_id=cfg_node.id,
+                test_id=norm_test_id,
             )
             check_rec = await check_res.single()
-            existing_props = check_rec.get("existing") if check_rec else None
-            prev_group_ids = [gid for gid in (check_rec.get("prev_group_ids") or []) if gid] if check_rec else []
-            was_active = bool(existing_props and existing_props.get("Action") != "DELETE")
+            (
+                effective_cfg_id,
+                effective_props,
+                was_active,
+                prev_group_ids,
+                existing_props,
+                dissociate_shared_cfg_id,
+            ) = self._plan_upsert_mutation(
+                check_rec=check_rec,
+                target_group_id=target_group_id,
+                scoped_cfg_id=cfg_node.id,
+                props=props,
+            )
+
+            if dissociate_shared_cfg_id:
+                dissoc_rel_id = generate_deterministic_id(
+                    {"start_node_id": target_group_id, "type": neg_type, "end_node_id": dissociate_shared_cfg_id}
+                )
+                await tx.run(
+                    f"""
+                    MATCH (tg:Group {{id: $target_group_id}})-[r:HAS_LLM_CONFIG]->
+                          (shared:LLM_Config {{id: $shared_cfg_id}})
+                    WITH tg, shared, r, properties(r) AS old_props
+                    CREATE (tg)-[r_not:{neg_type}]->(shared)
+                    SET r_not = old_props,
+                        r_not.id = $neg_rel_id,
+                        r_not.Action = 'DELETE',
+                        r_not.ActedAt = datetime({{timezone: 'UTC'}}),
+                        r_not.ActedBy = $acted_by
+                    DELETE r
+                    """,
+                    target_group_id=target_group_id,
+                    shared_cfg_id=dissociate_shared_cfg_id,
+                    neg_rel_id=dissoc_rel_id,
+                    acted_by=acted_by,
+                )
 
             if was_active:
-                archive_id = f"{cfg_node.id}__archived__{uuid.uuid4().hex[:12]}"
+                archive_id = f"{effective_cfg_id}__archived__{uuid.uuid4().hex[:12]}"
                 neg_links = [
                     {
                         "group_id": gid,
@@ -375,13 +518,19 @@ class LLMConfigService:
                         r_not.CreatedAt = datetime({{timezone: 'UTC'}}),
                         r_not.test_id = $test_id
                     """,
-                    cfg_id=cfg_node.id,
+                    cfg_id=effective_cfg_id,
                     archive_id=archive_id,
                     acted_by=acted_by,
                     neg_links=neg_links,
                     test_id=existing_props.get("test_id") if existing_props else norm_test_id,
                 )
 
+            rel = HasLlmConfigRelation(
+                start_node_id=target_group_id,
+                end_node_id=effective_cfg_id,
+                test_id=norm_test_id,
+                ActedBy=acted_by,
+            )
             upsert_res = await tx.run(
                 f"""
                 MATCH (tg:Group {{id: $target_group_id}})
@@ -416,7 +565,7 @@ class LLMConfigService:
                 RETURN properties(l) AS config, collect(DISTINCT properties(g)) AS groups
                 """,
                 target_group_id=target_group_id,
-                props=props,
+                props=effective_props,
                 was_active=was_active,
                 rel_id=rel.id,
                 test_id=norm_test_id,
@@ -424,17 +573,17 @@ class LLMConfigService:
             )
             rec = await upsert_res.single()
             if not rec:
-                return {}, [], was_active
-            return rec.get("config", {}), rec.get("groups", []), was_active
+                return {}, [], was_active, effective_cfg_id
+            return rec.get("config", {}), rec.get("groups", []), was_active, effective_cfg_id
 
-        saved_props, groups, was_active = await self.client.execute_write_tx(_upsert_tx)
+        saved_props, groups, was_active, effective_cfg_id = await self.client.execute_write_tx(_upsert_tx)
         resp = _dict_to_llm_config_response(saved_props, groups)
 
         record_audit(
             action=AuditAction.LLM_CONFIGURATION_CHANGED if was_active else AuditAction.LLM_CONFIGURATION_CREATED,
             actor_id=f"user:{acted_by}",
             actor=acted_by,
-            target_id=f"llm_config:{cfg_node.id}",
+            target_id=f"llm_config:{effective_cfg_id}",
             target=f"LLM_Config tag={cfg_node.tag} ({cfg_node.provider}/{cfg_node.model})",
             status_code=200,
             status_message=f"LLM_Config '{cfg_node.tag}' {'updated' if was_active else 'created'}",
@@ -458,42 +607,72 @@ class LLMConfigService:
         acted_by: str = "system",
         test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Synchronously create or overwrite an LLM_Config and assign it to a Group."""
-        cfg_node, props, effective_assign, norm_test_id = self._prepare_upsert_payload(
+        """Synchronously create or overwrite a group-scoped LLM_Config and assign it to a Group."""
+        req, effective_assign, norm_test_id = self._parse_upsert_request(
             config_data=config_data,
             assign_group=assign_group,
-            acted_by=acted_by,
             test_id=test_id,
         )
-
         target_group = self.resolve_target_group_sync(identifier=effective_assign, test_id=norm_test_id)
         target_group_id = target_group["id"]
-        rel = HasLlmConfigRelation(
-            start_node_id=target_group_id,
-            end_node_id=cfg_node.id,
+
+        cfg_node, props, _, _ = self._prepare_upsert_payload(
+            config_data=req,
+            assign_group=effective_assign,
+            acted_by=acted_by,
             test_id=norm_test_id,
-            ActedBy=acted_by,
+            group_id=target_group_id,
         )
         neg_type = to_negated_relation_type("HAS_LLM_CONFIG")
 
-        def _upsert_tx(tx: Any) -> tuple[Dict[str, Any], List[Dict[str, Any]], bool]:
+        def _upsert_tx(tx: Any) -> tuple[Dict[str, Any], List[Dict[str, Any]], bool, str]:
             check_res = tx.run(
-                """
-                MATCH (existing:LLM_Config {id: $cfg_id})
-                OPTIONAL MATCH (pg:Group)-[pr:HAS_LLM_CONFIG]->(existing)
-                WHERE (pr.Action IS NULL OR pr.Action <> 'DELETE')
-                  AND (pg.Action IS NULL OR pg.Action <> 'DELETE')
-                RETURN properties(existing) AS existing, collect(DISTINCT pg.id) AS prev_group_ids
-                """,
-                cfg_id=cfg_node.id,
+                self._UPSERT_INSPECT_CYPHER,
+                target_group_id=target_group_id,
+                tag=cfg_node.tag,
+                scoped_cfg_id=cfg_node.id,
+                test_id=norm_test_id,
             )
             check_rec = check_res.single()
-            existing_props = check_rec.get("existing") if check_rec else None
-            prev_group_ids = [gid for gid in (check_rec.get("prev_group_ids") or []) if gid] if check_rec else []
-            was_active = bool(existing_props and existing_props.get("Action") != "DELETE")
+            (
+                effective_cfg_id,
+                effective_props,
+                was_active,
+                prev_group_ids,
+                existing_props,
+                dissociate_shared_cfg_id,
+            ) = self._plan_upsert_mutation(
+                check_rec=check_rec,
+                target_group_id=target_group_id,
+                scoped_cfg_id=cfg_node.id,
+                props=props,
+            )
+
+            if dissociate_shared_cfg_id:
+                dissoc_rel_id = generate_deterministic_id(
+                    {"start_node_id": target_group_id, "type": neg_type, "end_node_id": dissociate_shared_cfg_id}
+                )
+                tx.run(
+                    f"""
+                    MATCH (tg:Group {{id: $target_group_id}})-[r:HAS_LLM_CONFIG]->
+                          (shared:LLM_Config {{id: $shared_cfg_id}})
+                    WITH tg, shared, r, properties(r) AS old_props
+                    CREATE (tg)-[r_not:{neg_type}]->(shared)
+                    SET r_not = old_props,
+                        r_not.id = $neg_rel_id,
+                        r_not.Action = 'DELETE',
+                        r_not.ActedAt = datetime({{timezone: 'UTC'}}),
+                        r_not.ActedBy = $acted_by
+                    DELETE r
+                    """,
+                    target_group_id=target_group_id,
+                    shared_cfg_id=dissociate_shared_cfg_id,
+                    neg_rel_id=dissoc_rel_id,
+                    acted_by=acted_by,
+                )
 
             if was_active:
-                archive_id = f"{cfg_node.id}__archived__{uuid.uuid4().hex[:12]}"
+                archive_id = f"{effective_cfg_id}__archived__{uuid.uuid4().hex[:12]}"
                 neg_links = [
                     {
                         "group_id": gid,
@@ -522,13 +701,19 @@ class LLMConfigService:
                         r_not.CreatedAt = datetime({{timezone: 'UTC'}}),
                         r_not.test_id = $test_id
                     """,
-                    cfg_id=cfg_node.id,
+                    cfg_id=effective_cfg_id,
                     archive_id=archive_id,
                     acted_by=acted_by,
                     neg_links=neg_links,
                     test_id=existing_props.get("test_id") if existing_props else norm_test_id,
                 )
 
+            rel = HasLlmConfigRelation(
+                start_node_id=target_group_id,
+                end_node_id=effective_cfg_id,
+                test_id=norm_test_id,
+                ActedBy=acted_by,
+            )
             upsert_res = tx.run(
                 f"""
                 MATCH (tg:Group {{id: $target_group_id}})
@@ -563,7 +748,7 @@ class LLMConfigService:
                 RETURN properties(l) AS config, collect(DISTINCT properties(g)) AS groups
                 """,
                 target_group_id=target_group_id,
-                props=props,
+                props=effective_props,
                 was_active=was_active,
                 rel_id=rel.id,
                 test_id=norm_test_id,
@@ -571,17 +756,17 @@ class LLMConfigService:
             )
             rec = upsert_res.single()
             if not rec:
-                return {}, [], was_active
-            return rec.get("config", {}), rec.get("groups", []), was_active
+                return {}, [], was_active, effective_cfg_id
+            return rec.get("config", {}), rec.get("groups", []), was_active, effective_cfg_id
 
-        saved_props, groups, was_active = self.client.execute_write_tx_sync(_upsert_tx)
+        saved_props, groups, was_active, effective_cfg_id = self.client.execute_write_tx_sync(_upsert_tx)
         resp = _dict_to_llm_config_response(saved_props, groups)
 
         record_audit(
             action=AuditAction.LLM_CONFIGURATION_CHANGED if was_active else AuditAction.LLM_CONFIGURATION_CREATED,
             actor_id=f"user:{acted_by}",
             actor=acted_by,
-            target_id=f"llm_config:{cfg_node.id}",
+            target_id=f"llm_config:{effective_cfg_id}",
             target=f"LLM_Config tag={cfg_node.tag} ({cfg_node.provider}/{cfg_node.model})",
             status_code=200,
             status_message=f"LLM_Config '{cfg_node.tag}' {'updated' if was_active else 'created'}",
@@ -756,7 +941,7 @@ class LLMConfigService:
         WITH l, collect(DISTINCT properties(g)) AS groups
         WHERE ($group_id IS NULL OR any(grp IN groups WHERE grp.id = $group_id))
         RETURN properties(l) AS config, groups
-        ORDER BY l.tag ASC
+        ORDER BY l.tag ASC, l.id ASC
         """
         records = await self.client.execute_query(
             query,
@@ -774,10 +959,13 @@ class LLMConfigService:
         self,
         config_id: Optional[str] = None,
         tag: Optional[str] = None,
+        group_id: Optional[str] = None,
         test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Retrieve a single active LLM_Config by deterministic ID or tag (api_key masked)."""
+        """Retrieve a single active LLM_Config by ID or by (tag[, group_id]) (api_key masked)."""
         norm_test_id = _normalize_test_id(test_id)
+        clean_group = group_id.strip() if isinstance(group_id, str) and group_id.strip() else None
+
         if config_id:
             query = """
             MATCH (l:LLM_Config {id: $config_id})
@@ -789,7 +977,51 @@ class LLMConfigService:
             LIMIT 1
             """
             records = await self.client.execute_query(query, {"config_id": config_id})
-        elif tag:
+            if not records or not records[0].get("config"):
+                return None
+            return _dict_to_llm_config_response(records[0]["config"], records[0].get("groups", []))
+
+        if tag:
+            clean_tag = tag.strip()
+            if clean_group:
+                query = """
+                MATCH (target_g:Group)-[tr:HAS_LLM_CONFIG]->(l:LLM_Config {tag: $tag})
+                WHERE (
+                    target_g.id = $group_id
+                    OR target_g.name = $group_id
+                    OR toUpper(target_g.code) = toUpper($group_id)
+                  )
+                  AND (target_g.Action IS NULL OR target_g.Action <> 'DELETE')
+                  AND coalesce(target_g.is_active, true) = true
+                  AND (tr.Action IS NULL OR tr.Action <> 'DELETE')
+                  AND (l.Action IS NULL OR l.Action <> 'DELETE')
+                  AND (
+                    (($test_id IS NULL OR $test_id = '') AND (l.test_id IS NULL OR trim(toString(l.test_id)) = ''))
+                    OR ($test_id IS NOT NULL AND $test_id <> '' AND l.test_id = $test_id)
+                  )
+                WITH DISTINCT l
+                OPTIONAL MATCH (g:Group)-[r:HAS_LLM_CONFIG]->(l)
+                WHERE (r.Action IS NULL OR r.Action <> 'DELETE')
+                  AND (g.Action IS NULL OR g.Action <> 'DELETE')
+                RETURN properties(l) AS config, collect(DISTINCT properties(g)) AS groups
+                """
+                records = await self.client.execute_query(
+                    query,
+                    {"tag": clean_tag, "group_id": clean_group, "test_id": norm_test_id},
+                )
+                valid_records = [r for r in records if r.get("config")]
+                if not valid_records:
+                    return None
+                if len(valid_records) > 1:
+                    raise RuntimeError(
+                        f"Ambiguous LLM_Config for tag '{clean_tag}' and group '{clean_group}': "
+                        f"found {len(valid_records)} matching active configurations."
+                    )
+                return _dict_to_llm_config_response(
+                    valid_records[0]["config"],
+                    valid_records[0].get("groups", []),
+                )
+
             query = """
             MATCH (l:LLM_Config {tag: $tag})
             WHERE (l.Action IS NULL OR l.Action <> 'DELETE')
@@ -801,15 +1033,37 @@ class LLMConfigService:
             WHERE (r.Action IS NULL OR r.Action <> 'DELETE')
               AND (g.Action IS NULL OR g.Action <> 'DELETE')
             RETURN properties(l) AS config, collect(DISTINCT properties(g)) AS groups
-            LIMIT 1
             """
-            records = await self.client.execute_query(query, {"tag": tag.strip(), "test_id": norm_test_id})
-        else:
-            raise ValueError("Either config_id or tag must be provided.")
+            records = await self.client.execute_query(query, {"tag": clean_tag, "test_id": norm_test_id})
+            valid_records = [r for r in records if r.get("config")]
+            if not valid_records:
+                return None
+            if len(valid_records) == 1:
+                return _dict_to_llm_config_response(
+                    valid_records[0]["config"],
+                    valid_records[0].get("groups", []),
+                )
+            active_gid = get_active_group_id()
+            if active_gid:
+                matching_active = [
+                    r
+                    for r in valid_records
+                    if any(
+                        grp and _clean_neo4j_value(grp).get("id") == active_gid
+                        for grp in (r.get("groups") or [])
+                    )
+                ]
+                if len(matching_active) == 1:
+                    return _dict_to_llm_config_response(
+                        matching_active[0]["config"],
+                        matching_active[0].get("groups", []),
+                    )
+            raise RuntimeError(
+                f"Ambiguous LLM_Config for tag '{clean_tag}': found {len(valid_records)} active configurations "
+                "across groups. Please specify config_id or group_id."
+            )
 
-        if not records or not records[0].get("config"):
-            return None
-        return _dict_to_llm_config_response(records[0]["config"], records[0].get("groups", []))
+        raise ValueError("Either config_id or tag must be provided.")
 
     async def update_llm_config(
         self,
@@ -896,6 +1150,22 @@ class LLMConfigService:
         ]
 
         async def _update_tx(tx: Any) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+            if extra_group_id:
+                conflict_res = await tx.run(
+                    self._GROUP_TAG_CONFLICT_CYPHER,
+                    group_id=extra_group_id,
+                    tag=merged_node.tag,
+                    config_id=config_id,
+                    test_id=_normalize_test_id(merged_node.test_id),
+                )
+                conflict_rec = await conflict_res.single()
+                if conflict_rec and conflict_rec.get("conflict_id"):
+                    raise ValueError(
+                        f"Group '{extra_group_id}' already has an active LLM_Config with tag "
+                        f"'{merged_node.tag}' (id='{conflict_rec['conflict_id']}'). "
+                        "Dissociate or update the existing configuration first."
+                    )
+
             await tx.run(
                 f"""
                 MATCH (existing:LLM_Config {{id: $cfg_id}})
@@ -1001,6 +1271,7 @@ class LLMConfigService:
             return None
 
         eff_test_id = _normalize_test_id(test_id if test_id is not None else cfg.get("test_id"))
+        cfg_test_id = _normalize_test_id(cfg.get("test_id"))
         target_group = await self.resolve_target_group(identifier=group_identifier, test_id=eff_test_id)
         group_id = target_group["id"]
         rel = HasLlmConfigRelation(
@@ -1012,6 +1283,20 @@ class LLMConfigService:
         neg_type = to_negated_relation_type("HAS_LLM_CONFIG")
 
         async def _assign_tx(tx: Any) -> Optional[tuple[Dict[str, Any], List[Dict[str, Any]]]]:
+            conflict_res = await tx.run(
+                self._GROUP_TAG_CONFLICT_CYPHER,
+                group_id=group_id,
+                tag=cfg["tag"],
+                config_id=config_id,
+                test_id=cfg_test_id,
+            )
+            conflict_rec = await conflict_res.single()
+            if conflict_rec and conflict_rec.get("conflict_id"):
+                raise ValueError(
+                    f"Group '{group_id}' already has an active LLM_Config with tag '{cfg['tag']}' "
+                    f"(id='{conflict_rec['conflict_id']}'). Dissociate or update the existing configuration first."
+                )
+
             await tx.run(
                 f"""
                 MATCH (g:Group {{id: $group_id}}), (l:LLM_Config {{id: $config_id}})
@@ -1227,7 +1512,7 @@ class LLMConfigService:
                 MATCH (l:LLM_Config {{id: $config_id}})
                 WHERE l.Action = 'DELETE'
                 OPTIONAL MATCH (g:Group)-[r:{neg_type}]->(l)
-                RETURN l.id AS id, collect(DISTINCT g.id) AS group_ids
+                RETURN l.id AS id, l.tag AS tag, l.test_id AS test_id, collect(DISTINCT g.id) AS group_ids
                 """,
                 config_id=config_id,
             )
@@ -1235,7 +1520,26 @@ class LLMConfigService:
             if not rec or not rec.get("id"):
                 return None
 
+            cfg_tag = rec.get("tag")
+            cfg_test_id = _normalize_test_id(rec.get("test_id"))
             group_ids = [gid for gid in (rec.get("group_ids") or []) if gid]
+
+            if cfg_tag:
+                for gid in group_ids:
+                    conflict_res = await tx.run(
+                        self._GROUP_TAG_CONFLICT_CYPHER,
+                        group_id=gid,
+                        tag=cfg_tag,
+                        config_id=config_id,
+                        test_id=cfg_test_id,
+                    )
+                    conflict_rec = await conflict_res.single()
+                    if conflict_rec and conflict_rec.get("conflict_id"):
+                        raise ValueError(
+                            f"Cannot restore LLM_Config '{config_id}': Group '{gid}' already has an active "
+                            f"LLM_Config with tag '{cfg_tag}' (id='{conflict_rec['conflict_id']}')."
+                        )
+
             for gid in group_ids:
                 new_rel_id = generate_deterministic_id(
                     {"start_node_id": gid, "type": pos_type, "end_node_id": config_id}

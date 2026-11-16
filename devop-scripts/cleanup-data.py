@@ -40,6 +40,9 @@ PRESERVED_CONFIGURATION_LABELS: Set[str] = {
     "Scope",
 }
 
+# Protected local asset directories whose files must never be deleted by cleanup_media
+PROTECTED_MEDIA_DIRS: tuple[Path, ...] = ((PROJECT_ROOT / "tests" / "assets").resolve(),)
+
 # Default list of data nodes to clean up (as defined in specifications)
 DEFAULT_DATA_NODES: List[str] = [
     "AuditLog",
@@ -108,10 +111,35 @@ class CleanupData:
             result = session.run(query, parameters or {})  # type: ignore[arg-type]
             return [record.data() for record in result]
 
+    @staticmethod
+    def _is_protected_media(uri: str, parsed: Any) -> bool:
+        """Return True if the parsed media URI resolves inside a protected directory (e.g. tests/assets)."""
+        protocol = getattr(parsed, "fsspec_protocol", None)
+        cloud_prefixes = ("gs://", "gcs://", "s3://", "s3a://", "az://", "azure://", "abfs://", "abfss://")
+        if isinstance(protocol, str):
+            if protocol != "file":
+                return False
+        elif uri.strip().lower().startswith(cloud_prefixes):
+            return False
+
+        fsspec_path = getattr(parsed, "fsspec_path", None)
+        if not isinstance(fsspec_path, str) or not fsspec_path.strip():
+            return False
+
+        try:
+            candidate = Path(fsspec_path).resolve()
+        except (OSError, ValueError):
+            return False
+
+        return any(
+            candidate == protected_dir or candidate.is_relative_to(protected_dir)
+            for protected_dir in PROTECTED_MEDIA_DIRS
+        )
+
     def cleanup_media(self, node: str = "Instance", dry_run: bool = False) -> Dict[str, Any]:
         """
         Get all the nodes of the specified label in the database.
-        The storage_uri points to where the media is; delete it.
+        The storage_uri points to where the media is; delete it unless it is in a protected assets directory.
 
         Returns a dictionary summary with counts and status.
         """
@@ -129,6 +157,7 @@ class CleanupData:
 
         deleted_count = 0
         not_found_count = 0
+        skipped_count = 0
         failed_count = 0
         errors: List[str] = []
 
@@ -143,6 +172,11 @@ class CleanupData:
         for uri in sorted(unique_uris):
             try:
                 parsed = self.media_service.parse_uri(uri)
+                if self._is_protected_media(uri, parsed):
+                    skipped_count += 1
+                    logger.info("protected_media_file_skipped", uri=uri)
+                    continue
+
                 fs = self.media_service.get_filesystem(parsed)
                 exists = bool(fs.exists(parsed.fsspec_path))
 
@@ -170,6 +204,7 @@ class CleanupData:
             "unique_uris": len(unique_uris),
             "deleted_count": deleted_count,
             "not_found_count": not_found_count,
+            "skipped_count": skipped_count,
             "failed_count": failed_count,
             "errors": errors,
             "dry_run": dry_run,
@@ -179,6 +214,7 @@ class CleanupData:
             "cleanup_media_completed",
             deleted=deleted_count,
             not_found=not_found_count,
+            skipped=skipped_count,
             failed=failed_count,
             dry_run=dry_run,
         )
@@ -367,6 +403,72 @@ class CleanupData:
                 "dry_run": dry_run,
             }
 
+    def cleanup_test_nodes(self, dry_run: bool = False) -> Dict[str, Any]:
+        """Cleanup nodes that contain test_id from the database."""
+        nodes = [
+            "Authenticator", "Group", "Identity", "LLM_Config", "DICOMConfiguration", "System", "User",
+        ]
+        deduped_nodes = list(dict.fromkeys(nodes))
+
+        deleted_by_label: Dict[str, int] = {}
+        deleted_count = 0
+        failed_count = 0
+        errors: List[str] = []
+
+        logger.info("cleanup_test_nodes_started", target_labels=deduped_nodes, dry_run=dry_run)
+
+        for label in deduped_nodes:
+            clean_label = "".join(c for c in label if c.isalnum() or c == "_")
+            try:
+                # First get count of existing test nodes
+                count_query = (
+                    f"MATCH (n:{clean_label}) "
+                    "WHERE n.test_id IS NOT NULL AND n.test_id <> '' "
+                    "RETURN count(n) AS count"
+                )
+                count_records = self.run_query(count_query)
+                existing_count = count_records[0]["count"] if count_records else 0
+
+                if existing_count == 0:
+                    deleted_by_label[clean_label] = 0
+                    continue
+
+                if dry_run:
+                    deleted_by_label[clean_label] = existing_count
+                    deleted_count += existing_count
+                    logger.info("dry_run_test_nodes_would_delete", label=clean_label, count=existing_count)
+                else:
+                    delete_query = f"""
+                    MATCH (n:{clean_label})
+                    WHERE n.test_id IS NOT NULL AND n.test_id <> ''
+                    DETACH DELETE n
+                    """
+                    self.run_query(delete_query)
+                    deleted_by_label[clean_label] = existing_count
+                    deleted_count += existing_count
+                    logger.info("test_nodes_deleted", label=clean_label, count=existing_count)
+            except Exception as e:
+                failed_count += 1
+                err_msg = f"Failed to clean test nodes for {clean_label}: {e}"
+                errors.append(err_msg)
+                logger.warning("cleanup_test_nodes_label_failed", label=clean_label, error=str(e))
+
+        logger.info(
+            "cleanup_test_nodes_completed",
+            deleted_summary=deleted_by_label,
+            deleted_count=deleted_count,
+            failed_count=failed_count,
+            dry_run=dry_run,
+        )
+
+        return {
+            "deleted_count": deleted_count,
+            "deleted_by_label": deleted_by_label,
+            "failed_count": failed_count,
+            "errors": errors,
+            "dry_run": dry_run,
+        }
+
     def get_database_status(self) -> Dict[str, Any]:
         """Inspect the database and return counts of data vs configuration nodes."""
         query = "MATCH (n) RETURN labels(n) AS labels, count(n) AS count"
@@ -418,6 +520,7 @@ class CleanupData:
         """
         media_summary = self.cleanup_media(dry_run=dry_run)
         nodes_summary = self.cleanup_nodes(dry_run=dry_run)
+        test_nodes_summary = self.cleanup_test_nodes(dry_run=dry_run)
 
         storage_dir_summary = None
         if clean_storage_dir:
@@ -427,6 +530,7 @@ class CleanupData:
             "media": media_summary,
             "nodes": nodes_summary,
             "storage_dir": storage_dir_summary,
+            "test_nodes": test_nodes_summary,
             "dry_run": dry_run,
         }
 
@@ -634,7 +738,11 @@ Examples:
             summary = cleanup.cleanup_media(dry_run=args.dry_run)
             deleted_cnt = summary["deleted_count"]
             not_found_cnt = summary["not_found_count"]
-            print(f"✅ Media cleanup complete: {deleted_cnt} deleted, {not_found_cnt} not found.")
+            skipped_cnt = summary.get("skipped_count", 0)
+            print(
+                f"✅ Media cleanup complete: {deleted_cnt} deleted, {not_found_cnt} not found, "
+                f"{skipped_cnt} protected skipped."
+            )
         elif args.nodes_only:
             print(f"\n🚀 {'[DRY-RUN] ' if args.dry_run else ''}Executing Database Nodes Cleanup...")
             summary = cleanup.cleanup_nodes(nodes=custom_labels, dry_run=args.dry_run)
@@ -649,7 +757,10 @@ Examples:
             )
             media_s = summary["media"]
             nodes_s = summary["nodes"]
-            print(f"✅ Media files deleted: {media_s['deleted_count']} ({media_s['not_found_count']} missing)")
+            print(
+                f"✅ Media files deleted: {media_s['deleted_count']} "
+                f"({media_s['not_found_count']} missing, {media_s.get('skipped_count', 0)} protected skipped)"
+            )
             print("✅ Nodes deleted:")
             for lbl, cnt in sorted(nodes_s.items(), key=lambda x: x[0]):
                 print(f"   - {lbl}: {cnt}")

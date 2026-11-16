@@ -194,7 +194,12 @@ async def restore_llm_configuration(
 ) -> Dict[str, Any]:
     """Restore a previously soft-deleted LLM_Config node and its negated group links."""
     acted_by = _resolve_actor(x_user_id, current_user)
-    restored = await llm_config_service.restore_llm_config(config_id=config_id, acted_by=acted_by)
+    try:
+        restored = await llm_config_service.restore_llm_config(config_id=config_id, acted_by=acted_by)
+    except (ValueError, RuntimeError) as exc:
+        msg = str(exc)
+        status_code = 404 if "not found" in msg.lower() else 400
+        raise HTTPException(status_code=status_code, detail=msg)
     if not restored:
         raise HTTPException(
             status_code=404,

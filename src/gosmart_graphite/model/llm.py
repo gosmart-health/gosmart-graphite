@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from gosmart_graphite.core.security import resolve_llm_api_key
-from gosmart_graphite.model.graph import AuditableNode, AuditableRelation
+from gosmart_graphite.model.graph import AuditableNode, AuditableRelation, generate_deterministic_id
 
 
 def _parse_extra_config(v: Any) -> Optional[Dict[str, Any]]:
@@ -33,7 +33,10 @@ class LLM_Config(AuditableNode):
 
     __label__: ClassVar[str] = "LLM_Config"
 
-    tag: str = Field(..., description="Globally unique purpose tag/key (e.g. 'embedding', 'router', 'rag')")
+    tag: str = Field(
+        ...,
+        description="Purpose tag/key unique within an associated Group (e.g. 'embedding', 'router', 'rag')",
+    )
     provider: str = Field(
         ...,
         description="LLM provider name normalized lowercase (e.g. 'ollama', 'vertexai', 'googleai')",
@@ -141,6 +144,27 @@ class LLM_Config(AuditableNode):
             subset["test_id"] = self.test_id
         return subset
 
+    @classmethod
+    def compute_group_scoped_id(
+        cls,
+        tag: str,
+        group_id: str,
+        test_id: Optional[str] = None,
+    ) -> str:
+        """Compute a deterministic UUIDv5 scoped to (group_id, tag[, test_id])."""
+        clean_group = group_id.strip()
+        clean_tag = tag.strip()
+        if not clean_group or not clean_tag:
+            raise ValueError("Both group_id and tag must be non-empty to compute a group-scoped LLM_Config ID.")
+        subset: Dict[str, Any] = {
+            "entity": cls.__label__,
+            "group_id": clean_group,
+            "tag": clean_tag,
+        }
+        if test_id and str(test_id).strip():
+            subset["test_id"] = str(test_id).strip()
+        return generate_deterministic_id(subset)
+
     def resolve_api_key(self, encryption_key: Optional[str] = None) -> str:
         """Decrypt and expand any ${ENV_VAR} references in api_key for runtime client use."""
         return resolve_llm_api_key(self.api_key, encryption_key=encryption_key)
@@ -186,7 +210,10 @@ class HasLlmConfigRelation(AuditableRelation):
 class LLMConfigCreateRequest(BaseModel):
     """API / CLI request model to create or overwrite an LLM_Config."""
 
-    tag: str = Field(..., description="Globally unique purpose tag (e.g. 'embedding', 'router', 'rag')")
+    tag: str = Field(
+        ...,
+        description="Purpose tag unique within an associated Group (e.g. 'embedding', 'router', 'rag')",
+    )
     provider: str = Field(..., description="LLM provider ('ollama', 'vertexai', 'googleai', etc.)")
     model: str = Field(..., description="Canonical model name")
     url: str = Field(default="", description="Optional API base URL")

@@ -88,6 +88,16 @@ def test_llm_config_deterministic_id_and_validation() -> None:
     assert cfg1.id != cfg_other_tag.id
     assert cfg1.id != cfg_test_scoped.id
 
+    # Group-scoped deterministic IDs differ across sponsoring groups for the same tag
+    scoped_grp_a = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a")
+    scoped_grp_b = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_b")
+    scoped_grp_a_dup = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a")
+    scoped_grp_a_test = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a", test_id="test_llm_1")
+    assert scoped_grp_a == scoped_grp_a_dup
+    assert scoped_grp_a != scoped_grp_b
+    assert scoped_grp_a != scoped_grp_a_test
+    assert scoped_grp_a != cfg1.id
+
     # Optional fields for chat/routing LLMs
     assert cfg_other_tag.url == ""
     assert cfg_other_tag.dimensions is None
@@ -197,20 +207,22 @@ async def test_upsert_overwrite_clones_archive_and_preserves_groups() -> None:
     target_grp = {"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"}
     mock_client.execute_query = AsyncMock(return_value=[{"group": target_grp}])
 
-    existing_cfg_id = LLM_Config(tag="embedding", provider="ollama", model="old-model").id
+    existing_cfg_id = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_b")
     fake_tx = _FakeAsyncTx(
         [
             # 1. Check existing node & active groups (grp_a and grp_b)
             _FakeAsyncResult(
                 {
-                    "existing": {
+                    "grp_existing": {
                         "id": existing_cfg_id,
                         "tag": "embedding",
                         "provider": "ollama",
                         "model": "old-model",
                         "Action": "CREATE",
                     },
-                    "prev_group_ids": ["grp_a", "grp_b"],
+                    "grp_existing_group_ids": ["grp_a", "grp_b"],
+                    "scoped_existing": None,
+                    "scoped_group_ids": [],
                 }
             ),
             # 2. Archive clone + NOT_HAS_LLM_CONFIG links
@@ -263,6 +275,168 @@ async def test_upsert_overwrite_clones_archive_and_preserves_groups() -> None:
     assert res["api_key"] != "AIzaSyTopSecret9999"
     assert res["has_api_key"] is True
     assert set(res["group_ids"]) == {"grp_a", "grp_b"}
+
+
+@pytest.mark.anyio
+async def test_upsert_shared_config_on_other_group_dissociates_and_creates_group_scoped() -> None:
+    mock_client = MagicMock()
+    svc = LLMConfigService(client=mock_client)
+
+    target_grp = {"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"}
+    mock_client.execute_query = AsyncMock(return_value=[{"group": target_grp}])
+
+    shared_cfg_id = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a")
+    own_cfg_id = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_b")
+    fake_tx = _FakeAsyncTx(
+        [
+            # 1. Inspect: grp_b currently shares grp_a's embedding config
+            _FakeAsyncResult(
+                {
+                    "grp_existing": {
+                        "id": shared_cfg_id,
+                        "tag": "embedding",
+                        "provider": "vertexai",
+                        "model": "gemini-embedding-001",
+                        "Action": "CREATE",
+                    },
+                    "grp_existing_group_ids": ["grp_a", "grp_b"],
+                    "scoped_existing": None,
+                    "scoped_group_ids": [],
+                }
+            ),
+            # 2. Dissociate grp_b from shared_cfg_id
+            _FakeAsyncResult(None),
+            # 3. Create grp_b's own scoped node
+            _FakeAsyncResult(
+                {
+                    "config": {
+                        "id": own_cfg_id,
+                        "tag": "embedding",
+                        "provider": "vertexai",
+                        "model": "gemini-embedding-001",
+                        "api_key": "AIzaSyGroupBKey9999",
+                        "Action": "CREATE",
+                    },
+                    "groups": [{"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"}],
+                }
+            ),
+        ]
+    )
+
+    async def _run_write_tx(fn):
+        return await fn(fake_tx)
+
+    mock_client.execute_write_tx = AsyncMock(side_effect=_run_write_tx)
+
+    with patch("gosmart_graphite.service.llm_config_service.record_audit"):
+        res = await svc.upsert_llm_config(
+            config_data={
+                "tag": "embedding",
+                "provider": "vertexai",
+                "model": "gemini-embedding-001",
+                "api_key": "AIzaSyGroupBKey9999",
+            },
+            assign_group="grp_b",
+            acted_by="tester",
+        )
+
+    assert len(fake_tx.calls) == 3
+    dissoc_query, dissoc_kwargs = fake_tx.calls[1]
+    assert "NOT_HAS_LLM_CONFIG" in dissoc_query
+    assert dissoc_kwargs["shared_cfg_id"] == shared_cfg_id
+    assert res["id"] == own_cfg_id
+    assert res["group_ids"] == ["grp_b"]
+
+
+@pytest.mark.anyio
+async def test_group_tag_uniqueness_enforced_on_assign_update_and_restore() -> None:
+    mock_client = MagicMock()
+    svc = LLMConfigService(client=mock_client)
+
+    async def _run_write_tx(fn):
+        return await fn(fake_tx)
+
+    mock_client.execute_write_tx = AsyncMock(side_effect=_run_write_tx)
+
+    # 1. assign_to_group rejects duplicate tag on target group
+    svc.get_llm_config = AsyncMock(
+        return_value={"id": "cfg_a", "tag": "embedding", "provider": "vertexai", "model": "gemini-embedding-001"}
+    )
+    svc.resolve_target_group = AsyncMock(return_value={"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"})
+    fake_tx = _FakeAsyncTx([_FakeAsyncResult({"conflict_id": "cfg_b"})])
+    with pytest.raises(ValueError, match="already has an active LLM_Config with tag 'embedding'"):
+        await svc.assign_to_group(config_id="cfg_a", group_identifier="grp_b")
+    assert len(fake_tx.calls) == 1
+
+    # 2. update_llm_config with assign_group rejects duplicate tag before archiving
+    mock_client.execute_query = AsyncMock(
+        return_value=[
+            {
+                "config": {
+                    "id": "cfg_a",
+                    "tag": "embedding",
+                    "provider": "vertexai",
+                    "model": "gemini-embedding-001",
+                    "api_key": "",
+                },
+                "groups": [{"id": "grp_a", "name": "Clinic A", "code": "CLINIC_A"}],
+            }
+        ]
+    )
+    from gosmart_graphite.model.llm import LLMConfigUpdateRequest
+
+    fake_tx = _FakeAsyncTx([_FakeAsyncResult({"conflict_id": "cfg_b"})])
+    with pytest.raises(ValueError, match="already has an active LLM_Config with tag 'embedding'"):
+        await svc.update_llm_config(
+            config_id="cfg_a",
+            update_data=LLMConfigUpdateRequest(assign_group="grp_b"),
+        )
+    assert len(fake_tx.calls) == 1
+
+    # 3. restore_llm_config rejects restoring link if group already has another active config with same tag
+    fake_tx = _FakeAsyncTx(
+        [
+            _FakeAsyncResult({"id": "cfg_old", "tag": "embedding", "test_id": None, "group_ids": ["grp_b"]}),
+            _FakeAsyncResult({"conflict_id": "cfg_b"}),
+        ]
+    )
+    with pytest.raises(ValueError, match="Cannot restore LLM_Config 'cfg_old'"):
+        await svc.restore_llm_config(config_id="cfg_old")
+
+
+@pytest.mark.anyio
+async def test_get_llm_config_by_tag_group_disambiguation() -> None:
+    mock_client = MagicMock()
+    svc = LLMConfigService(client=mock_client)
+
+    rec_a = {
+        "config": {"id": "cfg_a", "tag": "embedding", "provider": "vertexai", "model": "gemini-embedding-001"},
+        "groups": [{"id": "grp_a", "name": "Clinic A", "code": "CLINIC_A"}],
+    }
+    rec_b = {
+        "config": {"id": "cfg_b", "tag": "embedding", "provider": "vertexai", "model": "gemini-embedding-001"},
+        "groups": [{"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"}],
+    }
+
+    # 1. Explicit group_id returns matching group's config
+    mock_client.execute_query = AsyncMock(return_value=[rec_b])
+    res_b = await svc.get_llm_config(tag="embedding", group_id="grp_b")
+    assert res_b is not None
+    assert res_b["id"] == "cfg_b"
+
+    # 2. Ambiguous across groups with no group_id or active_group_id raises RuntimeError
+    mock_client.execute_query = AsyncMock(return_value=[rec_a, rec_b])
+    with pytest.raises(RuntimeError, match="Ambiguous LLM_Config for tag 'embedding'"):
+        await svc.get_llm_config(tag="embedding")
+
+    # 3. Active group context disambiguates when multiple configs share a tag
+    token = set_active_group_id("grp_b")
+    try:
+        res_ctx = await svc.get_llm_config(tag="embedding")
+    finally:
+        reset_active_group_id(token)
+    assert res_ctx is not None
+    assert res_ctx["id"] == "cfg_b"
 
 
 @pytest.mark.anyio
@@ -748,5 +922,151 @@ async def test_live_neo4j_hierarchy_resolution_and_overwrite() -> None:
         emb_svc = EmbeddingService(ai=mock_ai)
         vec = await emb_svc.embed_text_async("Dyspnea evaluation", group_id=child_grp["id"], test_id=test_id)
         assert len(vec) == 2
+    finally:
+        await neo4j_client.close()
+
+
+@pytest.mark.anyio
+async def test_live_neo4j_same_tag_across_multiple_sponsor_groups() -> None:
+    """Verify multiple sponsor groups can hold independent configs for the same tag (e.g. different API keys)."""
+    try:
+        ok = await neo4j_client.verify_connectivity()
+    except Exception:
+        ok = False
+    if not ok:
+        await neo4j_client.close()
+        pytest.skip("Neo4j database is unreachable; skipping live multi-group same-tag Neo4j test.")
+
+    test_id = f"test_llm_multi_{uuid.uuid4().hex[:8]}"
+    await graph_service.cleanup_test_data(test_id)
+    await graph_service.init_schema_constraints()
+
+    try:
+        root_grp = await group_service.create_group(
+            name="GoSmart Health",
+            code=f"GSH_{uuid.uuid4().hex[:4]}",
+            group_type="HEALTH_SYSTEM",
+            test_id=test_id,
+        )
+        sponsor_a = await group_service.create_group(
+            name="Sponsor A",
+            code=f"SPA_{uuid.uuid4().hex[:4]}",
+            group_type="HOSPITAL",
+            test_id=test_id,
+        )
+        sponsor_b = await group_service.create_group(
+            name="Sponsor B",
+            code=f"SPB_{uuid.uuid4().hex[:4]}",
+            group_type="HOSPITAL",
+            test_id=test_id,
+        )
+        clinic_a = await group_service.create_group(
+            name="Clinic A",
+            code=f"CLA_{uuid.uuid4().hex[:4]}",
+            group_type="FACILITY",
+            test_id=test_id,
+        )
+        clinic_b = await group_service.create_group(
+            name="Clinic B",
+            code=f"CLB_{uuid.uuid4().hex[:4]}",
+            group_type="FACILITY",
+            test_id=test_id,
+        )
+        await group_service.nest_group(sponsor_a["id"], root_grp["id"], test_id=test_id)
+        await group_service.nest_group(sponsor_b["id"], root_grp["id"], test_id=test_id)
+        await group_service.nest_group(clinic_a["id"], sponsor_a["id"], test_id=test_id)
+        await group_service.nest_group(clinic_b["id"], sponsor_b["id"], test_id=test_id)
+
+        res_root = await llm_config_service.upsert_llm_config(
+            config_data={
+                "tag": "embedding",
+                "provider": "vertexai",
+                "model": "gemini-embedding-001",
+                "api_key": "AIzaSyRootSponsorKey0000",
+                "dimensions": 768,
+            },
+            assign_group=root_grp["id"],
+            acted_by="pytest",
+            test_id=test_id,
+        )
+        res_a = await llm_config_service.upsert_llm_config(
+            config_data={
+                "tag": "embedding",
+                "provider": "vertexai",
+                "model": "gemini-embedding-001",
+                "api_key": "AIzaSySponsorAKey1111",
+                "dimensions": 768,
+            },
+            assign_group=sponsor_a["id"],
+            acted_by="pytest",
+            test_id=test_id,
+        )
+        res_b = await llm_config_service.upsert_llm_config(
+            config_data={
+                "tag": "embedding",
+                "provider": "vertexai",
+                "model": "gemini-embedding-001",
+                "api_key": "AIzaSySponsorBKey2222",
+                "dimensions": 768,
+            },
+            assign_group=sponsor_b["id"],
+            acted_by="pytest",
+            test_id=test_id,
+        )
+
+        assert len({res_root["id"], res_a["id"], res_b["id"]}) == 3
+        listed = await llm_config_service.list_llm_configs(tag="embedding", test_id=test_id)
+        assert len(listed) == 3
+
+        cfg_clinic_a = await llm_config_service.resolve_config_for_group(
+            tag="embedding", group_id=clinic_a["id"], test_id=test_id
+        )
+        cfg_clinic_b = await llm_config_service.resolve_config_for_group(
+            tag="embedding", group_id=clinic_b["id"], test_id=test_id
+        )
+        assert cfg_clinic_a is not None
+        assert cfg_clinic_b is not None
+        assert cfg_clinic_a.resolve_api_key() == "AIzaSySponsorAKey1111"
+        assert cfg_clinic_b.resolve_api_key() == "AIzaSySponsorBKey2222"
+
+        fetched_a = await llm_config_service.get_llm_config(
+            tag="embedding", group_id=sponsor_a["id"], test_id=test_id
+        )
+        assert fetched_a is not None
+        assert fetched_a["id"] == res_a["id"]
+
+        with pytest.raises(RuntimeError, match="Ambiguous LLM_Config"):
+            await llm_config_service.get_llm_config(tag="embedding", test_id=test_id)
+
+        # Duplicate tag assignment onto sponsor_b must be rejected
+        with pytest.raises(ValueError, match="already has an active LLM_Config with tag 'embedding'"):
+            await llm_config_service.assign_to_group(
+                config_id=res_a["id"],
+                group_identifier=sponsor_b["id"],
+                acted_by="pytest",
+                test_id=test_id,
+            )
+
+        # Overwriting sponsor_b's config keeps sponsor_a's config untouched
+        await llm_config_service.upsert_llm_config(
+            config_data={
+                "tag": "embedding",
+                "provider": "vertexai",
+                "model": "gemini-embedding-001",
+                "api_key": "AIzaSySponsorBKey9999",
+                "dimensions": 768,
+            },
+            assign_group=sponsor_b["id"],
+            acted_by="pytest",
+            test_id=test_id,
+        )
+        cfg_clinic_a_after = await llm_config_service.resolve_config_for_group(
+            tag="embedding", group_id=clinic_a["id"], test_id=test_id
+        )
+        cfg_clinic_b_after = await llm_config_service.resolve_config_for_group(
+            tag="embedding", group_id=clinic_b["id"], test_id=test_id
+        )
+        assert cfg_clinic_a_after is not None and cfg_clinic_a_after.resolve_api_key() == "AIzaSySponsorAKey1111"
+        assert cfg_clinic_b_after is not None and cfg_clinic_b_after.resolve_api_key() == "AIzaSySponsorBKey9999"
     finally:
         await neo4j_client.close()
