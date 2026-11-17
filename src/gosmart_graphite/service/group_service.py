@@ -1,19 +1,71 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, LiteralString, Optional, Tuple, Union, cast
 
 from gosmart_graphite.actor.audit_actor import record_audit
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.audit import AuditAction
 from gosmart_graphite.model.auth import (
+    BelongsToRelation,
+    Group,
     GroupNode,
+    HasAuthenticatorRelation,
+    HasIdentityRelation,
+    HasLostAndFoundRelation,
     MemberOfRelation,
     PerformedAtRelation,
+    ScopedToRelation,
     ServesRelation,
     SubGroupOfRelation,
+    UsesAuthenticatorRelation,
 )
-from gosmart_graphite.model.graph import generate_deterministic_id, to_negated_relation_type
+from gosmart_graphite.model.fhir.relations import FHIR_RELATION_CLASSES
+from gosmart_graphite.model.fhir_config import HasFhirConfigRelation
+from gosmart_graphite.model.graph import (
+    HasInstanceRelation,
+    HasSeriesRelation,
+    HasStudyRelation,
+    SystemNode,
+    generate_deterministic_id,
+    to_negated_relation_type,
+)
+from gosmart_graphite.model.llm import HasLlmConfigRelation
 
 logger = get_logger("gosmart_gs.group_service")
+
+DEFAULT_MY_GROUP_MAX_DEPTH: int = 8
+
+LOST_AND_FOUND_GROUP_NAME: str = "LostAndFound"
+LOST_AND_FOUND_GROUP_CODE: str = "LOST_AND_FOUND"
+LOST_AND_FOUND_GROUP_TYPE: str = "SYSTEM"
+LOST_AND_FOUND_GROUP_DESCRIPTION: str = (
+    "Operational recovery group associated with the root System node for unassociated or misconfigured nodes"
+)
+
+UPWARD_GROUP_RELATION_TYPES: Tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            # Group hierarchy & direct tenancy / auth affiliations
+            SubGroupOfRelation.__type__,
+            MemberOfRelation.__type__,
+            HasIdentityRelation.__type__,
+            UsesAuthenticatorRelation.__type__,
+            HasAuthenticatorRelation.__type__,
+            BelongsToRelation.__type__,
+            PerformedAtRelation.__type__,
+            ServesRelation.__type__,
+            ScopedToRelation.__type__,
+            # Configuration sponsorship
+            HasLlmConfigRelation.__type__,
+            HasFhirConfigRelation.__type__,
+            # DICOM hierarchy
+            HasStudyRelation.__type__,
+            HasSeriesRelation.__type__,
+            HasInstanceRelation.__type__,
+            # Cross-domain & clinical FHIR relationships
+            *(rel_cls.__type__ for rel_cls in FHIR_RELATION_CLASSES),
+        )
+    )
+)
 
 
 def _clean_neo4j_value(val: Any) -> Any:
@@ -27,11 +79,270 @@ def _clean_neo4j_value(val: Any) -> Any:
     return val
 
 
+def _dict_to_group_node(data: Optional[Dict[str, Any]]) -> Optional[GroupNode]:
+    """Convert a cleaned Neo4j Group property dictionary into a validated GroupNode."""
+    if not data:
+        return None
+    clean = _clean_neo4j_value(data)
+    if not isinstance(clean, dict) or not clean.get("name") or not clean.get("code"):
+        return None
+    return GroupNode(**clean)
+
+
+def _build_default_lost_and_found_group(
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> GroupNode:
+    """Construct the deterministic LostAndFound GroupNode."""
+    return GroupNode(
+        name=LOST_AND_FOUND_GROUP_NAME,
+        code=LOST_AND_FOUND_GROUP_CODE,
+        group_type=LOST_AND_FOUND_GROUP_TYPE,
+        is_active=True,
+        description=LOST_AND_FOUND_GROUP_DESCRIPTION,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+
+
+def _validate_max_depth(max_depth: int) -> int:
+    """Validate that max_depth is a non-negative integer."""
+    if isinstance(max_depth, bool) or not isinstance(max_depth, int) or max_depth < 0:
+        raise ValueError(f"max_depth must be a non-negative integer, got {max_depth!r}")
+    return max_depth
+
+
+def _build_my_group_query(max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH) -> LiteralString:
+    """Build Cypher query traversing curated upward/group-affiliation relationships up to max_depth."""
+    depth = _validate_max_depth(max_depth)
+    rel_pattern = "|".join(UPWARD_GROUP_RELATION_TYPES)
+    query = f"""
+    MATCH p = (start {{id: $node_id}})-[:{rel_pattern}*0..{depth}]-(g:Group)
+    WHERE (start.Action IS NULL OR start.Action <> 'DELETE')
+      AND (g.Action IS NULL OR g.Action <> 'DELETE')
+      AND coalesce(g.is_active, true) = true
+      AND ALL(
+        n IN nodes(p)
+        WHERE (n.Action IS NULL OR n.Action <> 'DELETE')
+          AND NOT 'System' IN labels(n)
+      )
+      AND ALL(
+        r IN relationships(p)
+        WHERE (r.Action IS NULL OR r.Action <> 'DELETE')
+          AND NOT type(r) STARTS WITH 'NOT_'
+          AND (type(r) <> 'MEMBER_OF' OR coalesce(r.status, 'ACTIVE') = 'ACTIVE')
+      )
+    WITH g, p, relationships(p) AS rels
+    RETURN properties(g) AS group, length(p) AS depth
+    ORDER BY depth ASC,
+             CASE
+               WHEN any(r IN rels WHERE type(r) = 'MEMBER_OF' AND coalesce(r.is_primary, false) = true)
+               THEN 0
+               ELSE 1
+             END ASC,
+             g.code ASC,
+             g.id ASC
+    LIMIT 1
+    """
+    return cast(LiteralString, query)
+
+
+_ENSURE_LOST_AND_FOUND_CYPHER: LiteralString = """
+MERGE (s:System {id: $sys_id})
+ON CREATE SET s.name = $sys_name,
+              s.owner = $sys_owner,
+              s.address = $sys_address,
+              s.email = $sys_email,
+              s.phone = $sys_phone,
+              s.serial_number = $sys_serial_number,
+              s.installed_at = datetime({timezone: 'UTC'}),
+              s.test_id = $test_id,
+              s.Action = 'CREATE',
+              s.ActedAt = datetime({timezone: 'UTC'}),
+              s.ActedBy = $acted_by,
+              s.CreatedAt = datetime({timezone: 'UTC'})
+MERGE (g:Group {code: $code})
+ON CREATE SET g.id = $id,
+              g.name = $name,
+              g.group_type = $group_type,
+              g.is_active = true,
+              g.description = $description,
+              g.test_id = $test_id,
+              g.Action = 'CREATE',
+              g.ActedAt = datetime({timezone: 'UTC'}),
+              g.ActedBy = $acted_by,
+              g.CreatedAt = datetime({timezone: 'UTC'})
+ON MATCH SET  g.name = $name,
+              g.group_type = $group_type,
+              g.is_active = true,
+              g.description = $description,
+              g.test_id = coalesce($test_id, g.test_id),
+              g.Action = 'UPDATE',
+              g.ActedAt = datetime({timezone: 'UTC'}),
+              g.ActedBy = $acted_by,
+              g.UpdatedAt = datetime({timezone: 'UTC'})
+MERGE (s)-[r:HAS_LOST_AND_FOUND {id: $rel_id}]->(g)
+ON CREATE SET r.start_node_id = s.id,
+              r.end_node_id = g.id,
+              r.test_id = $test_id,
+              r.Action = 'CREATE',
+              r.ActedAt = datetime({timezone: 'UTC'}),
+              r.ActedBy = $acted_by,
+              r.CreatedAt = datetime({timezone: 'UTC'})
+ON MATCH SET  r.test_id = coalesce($test_id, r.test_id),
+              r.Action = 'UPDATE',
+              r.ActedAt = datetime({timezone: 'UTC'}),
+              r.ActedBy = $acted_by,
+              r.UpdatedAt = datetime({timezone: 'UTC'})
+RETURN properties(g) AS group
+"""
+
+
+def _build_lost_and_found_params(
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
+) -> Tuple[GroupNode, Dict[str, Any]]:
+    """Build parameters for persisting the System -> HAS_LOST_AND_FOUND -> LostAndFound Group in Neo4j."""
+    sys_node = SystemNode(test_id=test_id, ActedBy=acted_by)
+    grp_node = _build_default_lost_and_found_group(test_id=test_id, acted_by=acted_by)
+    rel = HasLostAndFoundRelation(
+        start_node_id=sys_node.id,
+        end_node_id=grp_node.id,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+    params: Dict[str, Any] = {
+        "sys_id": sys_node.id,
+        "sys_name": sys_node.name,
+        "sys_owner": sys_node.owner,
+        "sys_address": sys_node.address,
+        "sys_email": sys_node.email,
+        "sys_phone": sys_node.phone,
+        "sys_serial_number": sys_node.serial_number,
+        "id": grp_node.id,
+        "name": grp_node.name,
+        "code": grp_node.code,
+        "group_type": grp_node.group_type,
+        "description": grp_node.description,
+        "rel_id": rel.id,
+        "test_id": grp_node.test_id,
+        "acted_by": acted_by,
+    }
+    return grp_node, params
+
+
 class GroupService:
     """Service for managing organizational groups, facility hierarchies, and user affiliations in Neo4j."""
 
     def __init__(self, client: Optional[Neo4jClient] = None) -> None:
         self.client = client or neo4j_client
+        self._lost_and_found_group: GroupNode = _build_default_lost_and_found_group()
+
+    @property
+    def lost_and_found_group(self) -> GroupNode:
+        """Return the cached LostAndFound operational recovery GroupNode."""
+        return self._lost_and_found_group
+
+    def group_or_lost_and_found(
+        self,
+        group: Optional[Union[Group, Dict[str, Any]]] = None,
+    ) -> Group:
+        """Return the provided Group if present, or fall back to the LostAndFound operational recovery Group."""
+        if isinstance(group, GroupNode):
+            return group
+        if isinstance(group, dict):
+            converted = _dict_to_group_node(group)
+            if converted is not None:
+                return converted
+        return self._lost_and_found_group
+
+    async def ensure_lost_and_found_group(
+        self,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
+    ) -> GroupNode:
+        """Ensure the 'LostAndFound' operational recovery Group and its System association exist in Neo4j."""
+        default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
+        try:
+            records = await self.client.execute_query(_ENSURE_LOST_AND_FOUND_CYPHER, params)
+            if records:
+                persisted = _dict_to_group_node(records[0].get("group", records[0]))
+                if persisted is not None:
+                    if not test_id:
+                        self._lost_and_found_group = persisted
+                    return persisted
+        except Exception as e:
+            logger.warning("ensure_lost_and_found_group_error", error=str(e))
+        if not test_id:
+            self._lost_and_found_group = default_node
+        return default_node
+
+    def ensure_lost_and_found_group_sync(
+        self,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
+    ) -> GroupNode:
+        """Synchronously ensure the 'LostAndFound' Group and its System association exist in Neo4j."""
+        default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session(database=self.client.settings.DB_DATABASE) as session:
+                res = session.run(_ENSURE_LOST_AND_FOUND_CYPHER, **params)
+                rec = res.single()
+                if rec:
+                    raw_data = rec.data() if hasattr(rec, "data") else dict(rec)
+                    persisted = _dict_to_group_node(raw_data.get("group", raw_data))
+                    if persisted is not None:
+                        if not test_id:
+                            self._lost_and_found_group = persisted
+                        return persisted
+        except Exception as e:
+            logger.warning("ensure_lost_and_found_group_sync_error", error=str(e))
+        if not test_id:
+            self._lost_and_found_group = default_node
+        return default_node
+
+    async def my_group(
+        self,
+        node_id: str,
+        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+    ) -> Optional[GroupNode]:
+        """Traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
+        depth = _validate_max_depth(max_depth)
+        clean_id = node_id.strip() if isinstance(node_id, str) else ""
+        if not clean_id:
+            return None
+
+        query = _build_my_group_query(max_depth=depth)
+        records = await self.client.execute_query(query, {"node_id": clean_id})
+        if not records:
+            return None
+        return _dict_to_group_node(records[0].get("group", records[0]))
+
+    def my_group_sync(
+        self,
+        node_id: str,
+        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+    ) -> Optional[GroupNode]:
+        """Synchronously traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
+        depth = _validate_max_depth(max_depth)
+        clean_id = node_id.strip() if isinstance(node_id, str) else ""
+        if not clean_id:
+            return None
+
+        query = _build_my_group_query(max_depth=depth)
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session(database=self.client.settings.DB_DATABASE) as session:
+                res = session.run(query, node_id=clean_id)
+                rec = res.single()
+                if not rec:
+                    return None
+                raw_data = rec.data() if hasattr(rec, "data") else dict(rec)
+                return _dict_to_group_node(raw_data.get("group", raw_data))
+        except Exception as e:
+            logger.warning("my_group_sync_failed", node_id=clean_id, error=str(e))
+            return None
 
     async def create_group(
         self,
@@ -784,3 +1095,26 @@ class GroupService:
 
 
 group_service = GroupService()
+
+
+async def my_group(
+    node_id: str,
+    max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+) -> Optional[GroupNode]:
+    """Traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
+    return await group_service.my_group(node_id=node_id, max_depth=max_depth)
+
+
+def my_group_sync(
+    node_id: str,
+    max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+) -> Optional[GroupNode]:
+    """Synchronously traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
+    return group_service.my_group_sync(node_id=node_id, max_depth=max_depth)
+
+
+def group_or_lost_and_found(
+    group: Optional[Union[Group, Dict[str, Any]]] = None,
+) -> Group:
+    """Return the provided Group if present, or fall back to the LostAndFound operational recovery Group."""
+    return group_service.group_or_lost_and_found(group)

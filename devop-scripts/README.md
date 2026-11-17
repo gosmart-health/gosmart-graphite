@@ -36,13 +36,26 @@ For cloud providers such as Vertex AI / Gemini, set `api_key` in your local
 ./configure-llm.sh --file /path/to/my_llm_config.json --assign "GoSmart Health"
 ```
 
+## `dicom_config.template.json` & `fhir_config.template.json` — DICOM & FHIR Configuration Templates
+
+Sanitized single-object JSON templates for registering `(:DICOMConfiguration)`
+and `(:FHIRConfiguration)` nodes via the CLI:
+
+```shell
+uv run gosmart-graphite configure dicom-config --file devop-scripts/dicom_config.template.json
+uv run gosmart-graphite configure dicom-config --file /path/to/my_dicom_config.json --assign <group_id>
+
+uv run gosmart-graphite configure fhir-config --file devop-scripts/fhir_config.template.json
+uv run gosmart-graphite configure fhir-config --file /path/to/my_fhir_config.json --assign <group_id>
+```
+
 ## `cleanup-data.py` — Data Cleanup Tool
 
 This script cleans up the DICOM files and clears all data nodes for both DICOM
 and FHIR data so that you can run DICOM and FHIR data ingestion from scratch.
 
-Configuration and identity data (`System`, `DICOMConfiguration`, `LLM_Config`,
-`User`, `Identity`, `Authenticator`, `Group`) are preserved.
+Configuration and identity data (`System`, `DICOMConfiguration`, `FHIRConfiguration`,
+`LLM_Config`, `User`, `Identity`, `Authenticator`, `Group`) are preserved.
 
 You will be asked to confirm the deletion while running this script.
 

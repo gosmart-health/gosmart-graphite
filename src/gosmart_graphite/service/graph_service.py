@@ -207,8 +207,8 @@ def _prepare_hierarchy_params(hierarchy: DicomHierarchy) -> Dict[str, Any]:
             )
             if catch_all and catch_all.get("id"):
                 group_id = catch_all["id"]
-        except Exception:
-            pass
+        except Exception as why:
+            logger.warning("failed_to_get_or_create_catch_all_group", why=why)
 
     params = {
         "patient": _serialize(p_node),
@@ -526,6 +526,10 @@ class GraphService:
                 "CREATE CONSTRAINT dicom_config_sys_id_unique IF NOT EXISTS "
                 "FOR (c:DICOMConfiguration) REQUIRE c.id IS UNIQUE"
             ),
+            (
+                "CREATE CONSTRAINT fhir_config_sys_id_unique IF NOT EXISTS "
+                "FOR (f:FHIRConfiguration) REQUIRE f.id IS UNIQUE"
+            ),
             "CREATE CONSTRAINT user_sys_id_unique IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
             "CREATE CONSTRAINT user_email_unique IF NOT EXISTS FOR (u:User) REQUIRE u.primary_email IS UNIQUE",
             "CREATE CONSTRAINT identity_sys_id_unique IF NOT EXISTS FOR (i:Identity) REQUIRE i.id IS UNIQUE",
@@ -550,6 +554,14 @@ class GraphService:
                 logger.debug("Applied constraint: %s", constraint)
             except Exception as e:
                 logger.warning("Failed to apply constraint '%s': %s", constraint, e)
+
+        try:
+            from gosmart_graphite.service.group_service import GroupService, group_service
+
+            target_group_svc = group_service if self.client is neo4j_client else GroupService(client=self.client)
+            await target_group_svc.ensure_lost_and_found_group()
+        except Exception as e:
+            logger.warning("Failed to initialize LostAndFound group during schema init: %s", e)
 
         self._constraints_initialized = True
         logger.info("schema_constraints_verified", total_statements=len(constraints))
@@ -1064,7 +1076,6 @@ class GraphService:
 
     def find_instances_for_retrieve_sync(
         self,
-        level: str,
         patient_id: Optional[str] = None,
         study_uid: Optional[str] = None,
         series_uid: Optional[str] = None,
@@ -1142,7 +1153,8 @@ class GraphService:
             logger.warning("find_destination_ae_failed", ae_title=ae_title, error=str(e))
         return None
 
-    def _prepare_transfer_status_params(self, node: TransferStatusNode) -> Dict[str, Any]:
+    @staticmethod
+    def _prepare_transfer_status_params(node: TransferStatusNode) -> Dict[str, Any]:
         """Format TransferStatusNode attributes for Cypher persistence."""
         params = {
             "id": node.id,
@@ -1236,7 +1248,8 @@ class GraphService:
             logger.warning("save_transfer_status_sync_failed", error=str(e), exc_info=True)
             return {"id": node.id, "success": False, "error": str(e)}
 
-    def _prepare_audit_log_params(self, node: AuditNode) -> Dict[str, Any]:
+    @staticmethod
+    def _prepare_audit_log_params(node: AuditNode) -> Dict[str, Any]:
         """Format AuditNode attributes for Cypher persistence."""
         params = {
             "id": node.id,

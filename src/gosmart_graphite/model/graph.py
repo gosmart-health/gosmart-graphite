@@ -291,6 +291,10 @@ class DICOMConfigurationNode(AuditableNode):
     dicomweb_qido_enabled: bool = Field(default=True, description="Enable QIDO-RS")
     dicomweb_wado_enabled: bool = Field(default=True, description="Enable WADO-RS")
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
+    storage_root_uri: Optional[str] = Field(
+        default=None,
+        description="Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})",
+    )
     description: Optional[str] = Field(default=None, description="Human readable description")
 
     @model_validator(mode="before")
@@ -306,12 +310,56 @@ class DICOMConfigurationNode(AuditableNode):
             object.__setattr__(self, "is_promiscuous", True)
         return self
 
+    @model_validator(mode="after")
+    def set_default_storage_root_uri(self) -> "DICOMConfigurationNode":
+        """Default storage_root_uri to /tmp/gosmart_graphite/{ae_title} if missing or blank."""
+        if isinstance(self.storage_root_uri, str):
+            stripped = self.storage_root_uri.strip()
+            if stripped:
+                if stripped != self.storage_root_uri:
+                    object.__setattr__(self, "storage_root_uri", stripped)
+                return self
+        object.__setattr__(self, "storage_root_uri", f"/tmp/gosmart_graphite/{self.ae_title}")
+        return self
+
     def get_identity_subset(self) -> Dict[str, Any]:
         subset: Dict[str, Any] = {
             "entity": self.__label__,
             "ae_title": self.ae_title,
             "host": self.host,
             "port": self.port,
+        }
+        if self.test_id:
+            subset["test_id"] = self.test_id
+        return subset
+
+
+class FHIRConfigurationNode(AuditableNode):
+    """Graph node representing a FHIR endpoint configuration."""
+
+    __label__: ClassVar[str] = "FHIRConfiguration"
+
+    accession_system: str = Field(
+        default="",
+        description="The accession system of the FHIR configuration.",
+    )
+    patient_id_system: str = Field(
+        default="",
+        description="The patient ID system of the FHIR configuration.",
+    )
+    url: str = Field(
+        default="",
+        description="The URL of the FHIR configuration.",
+    )
+    poll_sec: int = Field(
+        default=120,
+        description="The number of seconds between polls of the FHIR configuration.",
+    )
+
+    def get_identity_subset(self) -> Dict[str, Any]:
+        subset: Dict[str, Any] = {
+            "entity": self.__label__,
+            "url": self.url,
         }
         if self.test_id:
             subset["test_id"] = self.test_id

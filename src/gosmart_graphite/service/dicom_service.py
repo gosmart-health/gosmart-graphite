@@ -30,15 +30,15 @@ class DicomService:
         local_path.mkdir(parents=True, exist_ok=True)
         return local_path
 
+    @staticmethod
     def parse_dataset(
-        self,
-        ds: Dataset,
-        storage_uri: Optional[str] = None,
-        file_size: Optional[int] = None,
-        source: Optional[str] = None,
-        source_identity: Optional[str] = None,
-        destination: Optional[str] = None,
-        destination_identity: Optional[str] = None,
+            ds: Dataset,
+            storage_uri: Optional[str] = None,
+            file_size: Optional[int] = None,
+            source: Optional[str] = None,
+            source_identity: Optional[str] = None,
+            destination: Optional[str] = None,
+            destination_identity: Optional[str] = None,
     ) -> DicomHierarchy:
         """Extract structured Pydantic hierarchy from a pydicom Dataset."""
         # Patient Level
@@ -121,12 +121,12 @@ class DicomService:
         )
 
     def parse_file(
-        self,
-        file_path_or_buffer: Union[str, Path, io.BytesIO],
-        source: Optional[str] = None,
-        source_identity: Optional[str] = None,
-        destination: Optional[str] = None,
-        destination_identity: Optional[str] = None,
+            self,
+            file_path_or_buffer: Union[str, Path, io.BytesIO],
+            source: Optional[str] = None,
+            source_identity: Optional[str] = None,
+            destination: Optional[str] = None,
+            destination_identity: Optional[str] = None,
     ) -> DicomHierarchy:
         """Read and parse a DICOM dataset from file or binary buffer."""
         file_size = None
@@ -173,12 +173,12 @@ class DicomService:
         else:
             return media_service.write_sync(target_uri, content_or_dataset)
 
+    @staticmethod
     def create_mock_dicom(
-        self,
-        patient_id: str = "P1001",
-        patient_name: str = "DOE^JOHN",
-        modality: str = "CT",
-        study_description: str = "Brain CT with Contrast",
+            patient_id: str = "P1001",
+            patient_name: str = "DOE^JOHN",
+            modality: str = "CT",
+            study_description: str = "Brain CT with Contrast",
     ) -> FileDataset:
         """Generate a valid in-memory DICOM FileDataset for testing and exploration."""
         file_meta = FileMetaDataset()

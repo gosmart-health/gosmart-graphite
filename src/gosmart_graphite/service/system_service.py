@@ -129,7 +129,7 @@ class SystemService:
 
     async def bootstrap_system(self, acted_by: str = "system", test_id: Optional[str] = None) -> Dict[str, Any]:
         """Ensure the immutable root System node and default promiscuous DICOM entry exist."""
-        test_id = _normalize_test_id(test_id)
+        test_id = normalize_test_id(test_id)
         settings = get_settings()
 
         # 1. Create or ensure root System Node
@@ -186,8 +186,9 @@ class SystemService:
         """
         promiscuous_records = await self.client.execute_query(check_promiscuous_cypher, {"sys_id": sys_node.id})
 
-        # 3. Ensure resilient Catch-All Group "GoSmart Health" exists
+        # 3. Ensure resilient Catch-All Group "GoSmart Health" and operational recovery "LostAndFound" Group exist
         catch_all_grp = await group_service.get_or_create_catch_all_group(test_id=test_id, acted_by=acted_by)
+        lost_and_found_grp = await group_service.ensure_lost_and_found_group(test_id=test_id, acted_by=acted_by)
 
         promiscuous_config: Dict[str, Any] = {}
         if promiscuous_records:
@@ -298,6 +299,7 @@ class SystemService:
             "system": sys_resp,
             "promiscuous_config": promiscuous_config,
             "catch_all_group": catch_all_grp,
+            "lost_and_found_group": lost_and_found_grp.model_dump(),
         }
 
     async def get_system(
@@ -306,7 +308,7 @@ class SystemService:
         test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Retrieve root System node and linked active configurations."""
-        test_id = _normalize_test_id(test_id)
+        test_id = normalize_test_id(test_id)
         query = """
         MATCH (s:System)
         WHERE (($test_id IS NULL OR $test_id = '') AND (s.test_id IS NULL OR s.test_id = ''))
@@ -334,7 +336,7 @@ class SystemService:
         test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Update mutable fields of the root System node."""
-        test_id = _normalize_test_id(test_id)
+        test_id = normalize_test_id(test_id)
         query = """
         MATCH (s:System)
         WHERE (($test_id IS NULL OR $test_id = '') AND (s.test_id IS NULL OR s.test_id = ''))
@@ -383,7 +385,7 @@ class SystemService:
         test_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List active DICOM configurations linked to System or matching filters."""
-        test_id = _normalize_test_id(test_id)
+        test_id = normalize_test_id(test_id)
         query = """
         MATCH (s:System)-[:HAS_DICOM_CONFIGURATION]->(c:DICOMConfiguration)
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
@@ -445,7 +447,7 @@ class SystemService:
         system_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new DICOMConfiguration node, link to System, and associate to target/catch-all Group."""
-        norm_test_id = _normalize_test_id(config_data.test_id)
+        norm_test_id = normalize_test_id(config_data.test_id)
         cfg_node = DICOMConfigurationNode(
             ae_title=config_data.ae_title,
             roles=config_data.roles,
@@ -787,14 +789,14 @@ class SystemService:
 
     async def cleanup_test_data(self, test_id: str) -> int:
         """Detach and delete all System and Configuration nodes tagged with test_id."""
-        clean_test_id = _normalize_test_id(test_id)
+        clean_test_id = normalize_test_id(test_id)
         if not clean_test_id:
             return 0
         try:
             from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
             for inst in list(pynetdicom_service._instances.values()):
-                if _normalize_test_id(inst.all_configs.get("test_id")) == clean_test_id:
+                if normalize_test_id(inst.all_configs.get("test_id")) == clean_test_id:
                     pynetdicom_service.on_configuration_removed(inst.config_id)
         except Exception:
             pass
@@ -817,7 +819,7 @@ class SystemService:
         """Detach and delete test data across specified node labels where test_id is non-null/non-empty."""
         import re
 
-        clean_test_id = _normalize_test_id(test_id)
+        clean_test_id = normalize_test_id(test_id)
         raw_labels = labels if labels is not None else DEFAULT_TEST_CLEANUP_LABELS
         target_labels = [lbl.strip() for lbl in raw_labels if lbl and lbl.strip()]
 
@@ -831,7 +833,7 @@ class SystemService:
             from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
             for inst in list(pynetdicom_service._instances.values()):
-                inst_test_id = _normalize_test_id(inst.all_configs.get("test_id"))
+                inst_test_id = normalize_test_id(inst.all_configs.get("test_id"))
                 if inst_test_id and (clean_test_id is None or inst_test_id == clean_test_id):
                     pynetdicom_service.on_configuration_removed(inst.config_id)
         except Exception as e:

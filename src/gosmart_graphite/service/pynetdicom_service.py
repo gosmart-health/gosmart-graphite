@@ -169,6 +169,7 @@ def is_local_address(host: str) -> bool:
     if not host or host in ("0.0.0.0", "127.0.0.1", "localhost", "::", "::1"):
         return True
     try:
+        # noinspection unresolved-references
         local_ips = {addr[4][0] for addr in socket.getaddrinfo(socket.gethostname(), None)}
         local_ips.update({"127.0.0.1", "0.0.0.0", "::1"})
         return host in local_ips
@@ -1191,7 +1192,7 @@ class PyNetDicomService:
 
         # HAZ-009 Loop Protection: Destination cannot be local SCP AE title
         acceptor = getattr(getattr(event, "assoc", None), "acceptor", None)
-        local_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS"))
+        local_aet: str = getattr(acceptor, "ae_title", None) or getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS_DICOM_AE_TITLE")
         if dest_aet.strip() == local_aet.strip():
             logger.warning("c_move_loop_detected", dest_aet=dest_aet, local_aet=local_aet)
             yield None, None
@@ -1224,7 +1225,6 @@ class PyNetDicomService:
         accessible_group_ids = self._resolve_caller_accessible_groups(calling_aet)
 
         matching_instances = graph_service.find_instances_for_retrieve_sync(
-            level=query["level"],
             patient_id=query["patient_id"],
             study_uid=query["study_instance_uid"],
             series_uid=query["series_instance_uid"],
@@ -1293,7 +1293,6 @@ class PyNetDicomService:
         accessible_group_ids = self._resolve_caller_accessible_groups(calling_aet)
 
         matching_instances = graph_service.find_instances_for_retrieve_sync(
-            level=query["level"],
             patient_id=query["patient_id"],
             study_uid=query["study_instance_uid"],
             series_uid=query["series_instance_uid"],

@@ -123,6 +123,9 @@ class GroupNode(AuditableNode):
         }
 
 
+Group = GroupNode
+
+
 # Graph Relationships for Auth, Groups, and Tenancy
 
 
@@ -192,3 +195,9 @@ class ServesRelation(AuditableRelation):
     """Relationship connecting DICOMConfiguration -> Group with 'SERVES' relation type."""
 
     __type__: ClassVar[str] = "SERVES"
+
+
+class HasLostAndFoundRelation(AuditableRelation):
+    """Relationship connecting System -> LostAndFound Group for operational recovery of unassociated nodes."""
+
+    __type__: ClassVar[str] = "HAS_LOST_AND_FOUND"

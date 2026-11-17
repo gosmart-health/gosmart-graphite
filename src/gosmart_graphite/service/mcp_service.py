@@ -97,10 +97,10 @@ async def health_check() -> Dict[str, Any]:
 
 @mcp.tool()
 async def generate_mock_dicom(
-    patient_id: str = "MOCK-001",
-    patient_name: str = "DOE^JANE",
-    modality: str = "CT",
-    study_description: str = "Head CT Scan",
+        patient_id: str = "MOCK-001",
+        patient_name: str = "DOE^JANE",
+        modality: str = "CT",
+        study_description: str = "Head CT Scan",
 ) -> Dict[str, Any]:
     """Generate a realistic mock DICOM file, store it locally, and index it into Neo4j."""
     ds = dicom_service.create_mock_dicom(
@@ -139,7 +139,7 @@ async def ingest_dicom_file(file_path: str, use_actor: bool = True) -> Dict[str,
         from gosmart_graphite.actor.dicom_actor import get_dicom_actor
 
         actor = get_dicom_actor()
-        res = actor.ask({"type": "INGEST_FILE", "file_path": file_path})
+        res = actor.ask({"type": "INGEST_FILE", "file_path": file_path}, block=True)
         logger.info("mcp_file_ingested_via_actor", file_path=file_path, result=res)
         return res
 
@@ -164,9 +164,9 @@ async def ingest_dicom_file(file_path: str, use_actor: bool = True) -> Dict[str,
 
 @mcp.tool()
 async def list_patients(
-    limit: int = 50,
-    include_tests: bool = False,
-    test_id: Optional[str] = None,
+        limit: int = 50,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Query list of patients and their study counts from Neo4j."""
     patients = await graph_service.list_patients(limit=limit, include_tests=include_tests, test_id=test_id)
@@ -176,8 +176,8 @@ async def list_patients(
 
 @mcp.tool()
 async def get_patient_graph(
-    patient_id: str,
-    include_tests: bool = False,
+        patient_id: str,
+        include_tests: bool = False,
 ) -> Dict[str, Any]:
     """Retrieve full DICOM graph hierarchy (Patient -> Studies -> Series -> Instances) for a patient."""
     graph_data = await graph_service.get_patient_graph(patient_id=patient_id, include_tests=include_tests)
@@ -187,10 +187,10 @@ async def get_patient_graph(
 
 @mcp.tool()
 async def soft_delete_relationship(
-    start_node_id: str,
-    end_node_id: str,
-    rel_type: str,
-    acted_by: str = "mcp_agent",
+        start_node_id: str,
+        end_node_id: str,
+        rel_type: str,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Atomically soft-delete a relationship in Neo4j, cloning properties to NOT_<rel_type> under a transaction."""
     res = await graph_service.soft_delete_relationship(
@@ -204,10 +204,10 @@ async def soft_delete_relationship(
 
 @mcp.tool()
 async def restore_relationship(
-    start_node_id: str,
-    end_node_id: str,
-    rel_type: str,
-    acted_by: str = "mcp_agent",
+        start_node_id: str,
+        end_node_id: str,
+        rel_type: str,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Atomically restore a soft-deleted relationship in Neo4j back to <rel_type> under a write transaction."""
     res = await graph_service.restore_relationship(
@@ -230,10 +230,10 @@ async def execute_cypher(query: str, parameters_json: Optional[str] = None) -> L
 
 @mcp.tool()
 def echo_scu(
-    host: str = "127.0.0.1",
-    port: int = 11112,
-    calling_aet: Optional[str] = None,
-    called_aet: Optional[str] = None,
+        host: str = "127.0.0.1",
+        port: int = 11112,
+        calling_aet: Optional[str] = None,
+        called_aet: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Test network connectivity to a DICOM SCP using C-ECHO (pynetdicom)."""
     res = pynetdicom_service.echo_scu(
@@ -253,8 +253,8 @@ def echo_scu(
 
 @mcp.tool()
 async def get_system_info(
-    include_configs: bool = True,
-    test_id: Optional[str] = None,
+        include_configs: bool = True,
+        test_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Retrieve root System node properties, ownership info, and linked DICOM configurations."""
     sys_info = await system_service.get_system(include_configs=include_configs, test_id=test_id)
@@ -264,14 +264,14 @@ async def get_system_info(
 
 @mcp.tool()
 async def update_system_info(
-    name: Optional[str] = None,
-    owner: Optional[str] = None,
-    address: Optional[str] = None,
-    email: Optional[str] = None,
-    phone: Optional[str] = None,
-    serial_number: Optional[str] = None,
-    acted_by: str = "mcp_agent",
-    test_id: Optional[str] = None,
+        name: Optional[str] = None,
+        owner: Optional[str] = None,
+        address: Optional[str] = None,
+        email: Optional[str] = None,
+        phone: Optional[str] = None,
+        serial_number: Optional[str] = None,
+        acted_by: str = "mcp_agent",
+        test_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Update mutable properties of the root System node (installer configuration)."""
     check_mcp_admin_role()
@@ -301,10 +301,10 @@ async def bootstrap_system_defaults(acted_by: str = "mcp_agent") -> Dict[str, An
 
 @mcp.tool()
 async def list_dicom_configurations(
-    role: Optional[str] = None,
-    is_promiscuous: Optional[bool] = None,
-    include_tests: bool = False,
-    test_id: Optional[str] = None,
+        role: Optional[str] = None,
+        is_promiscuous: Optional[bool] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """List active DICOM configurations linked to the System (supports role and promiscuous filtering)."""
     configs = await system_service.list_configurations(
@@ -327,17 +327,17 @@ async def get_dicom_configuration(config_id: str) -> Optional[Dict[str, Any]]:
 
 @mcp.tool()
 async def create_dicom_configuration(
-    ae_title: str = "*",
-    roles_json: Optional[str] = None,
-    host: str = "0.0.0.0",
-    port: int = 11112,
-    is_local: bool = False,
-    tls_enabled: bool = False,
-    dicom_services_json: Optional[str] = None,
-    transfer_syntaxes_json: Optional[str] = None,
-    description: Optional[str] = None,
-    test_id: Optional[str] = None,
-    acted_by: str = "mcp_agent",
+        ae_title: str = "*",
+        roles_json: Optional[str] = None,
+        host: str = "0.0.0.0",
+        port: int = 11112,
+        is_local: bool = False,
+        tls_enabled: bool = False,
+        dicom_services_json: Optional[str] = None,
+        transfer_syntaxes_json: Optional[str] = None,
+        description: Optional[str] = None,
+        test_id: Optional[str] = None,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Create a new DICOM Configuration (* for promiscuous mode) linked to the System."""
     check_mcp_admin_role()
@@ -365,15 +365,15 @@ async def create_dicom_configuration(
 
 @mcp.tool()
 async def update_dicom_configuration(
-    config_id: str,
-    ae_title: Optional[str] = None,
-    roles_json: Optional[str] = None,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-    is_local: Optional[bool] = None,
-    tls_enabled: Optional[bool] = None,
-    description: Optional[str] = None,
-    acted_by: str = "mcp_agent",
+        config_id: str,
+        ae_title: Optional[str] = None,
+        roles_json: Optional[str] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        is_local: Optional[bool] = None,
+        tls_enabled: Optional[bool] = None,
+        description: Optional[str] = None,
+        acted_by: str = "mcp_agent",
 ) -> Optional[Dict[str, Any]]:
     """Update mutable properties of an existing DICOM Configuration."""
     check_mcp_admin_role()
@@ -397,9 +397,9 @@ async def update_dicom_configuration(
 
 @mcp.tool()
 async def delete_dicom_configuration(
-    config_id: str,
-    hard: bool = False,
-    acted_by: str = "mcp_agent",
+        config_id: str,
+        hard: bool = False,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Soft-delete (or hard-delete if specified) a DICOM Configuration."""
     check_mcp_admin_role()
@@ -417,8 +417,8 @@ async def delete_dicom_configuration(
 
 @mcp.tool()
 async def restore_dicom_configuration(
-    config_id: str,
-    acted_by: str = "mcp_agent",
+        config_id: str,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Restore a previously soft-deleted DICOM Configuration."""
     check_mcp_admin_role()
@@ -438,11 +438,11 @@ async def restore_dicom_configuration(
 
 @mcp.tool()
 async def list_llm_configurations(
-    tag: Optional[str] = None,
-    provider: Optional[str] = None,
-    group_id: Optional[str] = None,
-    include_tests: bool = False,
-    test_id: Optional[str] = None,
+        tag: Optional[str] = None,
+        provider: Optional[str] = None,
+        group_id: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """List active group-scoped LLM_Config nodes (with api_key redacted)."""
     configs = await llm_config_service.list_llm_configs(
@@ -458,10 +458,10 @@ async def list_llm_configurations(
 
 @mcp.tool()
 async def get_llm_configuration(
-    config_id: Optional[str] = None,
-    tag: Optional[str] = None,
-    group_id: Optional[str] = None,
-    test_id: Optional[str] = None,
+        config_id: Optional[str] = None,
+        tag: Optional[str] = None,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Retrieve a single active LLM_Config by ID or (tag[, group_id]) (api_key redacted)."""
     cfg = await llm_config_service.get_llm_config(
@@ -476,20 +476,20 @@ async def get_llm_configuration(
 
 @mcp.tool()
 async def upsert_llm_configuration(
-    tag: str,
-    provider: str,
-    model: str,
-    url: str = "",
-    dimensions: Optional[int] = None,
-    dimensions_truncated: Optional[int] = None,
-    api_key: str = "",
-    location: str = "us-central1",
-    project_id: Optional[str] = None,
-    extra_config_json: Optional[str] = None,
-    description: Optional[str] = None,
-    assign_group: Optional[str] = None,
-    test_id: Optional[str] = None,
-    acted_by: str = "mcp_agent",
+        tag: str,
+        provider: str,
+        model: str,
+        url: str = "",
+        dimensions: Optional[int] = None,
+        dimensions_truncated: Optional[int] = None,
+        api_key: str = "",
+        location: str = "us-central1",
+        project_id: Optional[str] = None,
+        extra_config_json: Optional[str] = None,
+        description: Optional[str] = None,
+        assign_group: Optional[str] = None,
+        test_id: Optional[str] = None,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Create or overwrite a purpose-tagged LLM_Config node and assign it to a sponsoring Group."""
     check_mcp_admin_role()
@@ -522,10 +522,10 @@ async def upsert_llm_configuration(
 
 @mcp.tool()
 async def assign_llm_configuration_to_group(
-    config_id: str,
-    group: str,
-    test_id: Optional[str] = None,
-    acted_by: str = "mcp_agent",
+        config_id: str,
+        group: str,
+        test_id: Optional[str] = None,
+        acted_by: str = "mcp_agent",
 ) -> Optional[Dict[str, Any]]:
     """Assign an existing active LLM_Config to a target sponsoring Group via HAS_LLM_CONFIG."""
     check_mcp_admin_role()
@@ -542,9 +542,9 @@ async def assign_llm_configuration_to_group(
 
 @mcp.tool()
 async def dissociate_llm_configuration_from_group(
-    config_id: str,
-    group_id: str,
-    acted_by: str = "mcp_agent",
+        config_id: str,
+        group_id: str,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Soft-dissociate a Group from an LLM_Config (swapping HAS_LLM_CONFIG to NOT_HAS_LLM_CONFIG)."""
     check_mcp_admin_role()
@@ -569,9 +569,9 @@ async def dissociate_llm_configuration_from_group(
 
 @mcp.tool()
 async def delete_llm_configuration(
-    config_id: str,
-    hard: bool = False,
-    acted_by: str = "mcp_agent",
+        config_id: str,
+        hard: bool = False,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Soft-delete (or hard-delete if specified) an LLM_Config node."""
     check_mcp_admin_role()
@@ -591,8 +591,8 @@ async def delete_llm_configuration(
 
 @mcp.tool()
 async def restore_llm_configuration(
-    config_id: str,
-    acted_by: str = "mcp_agent",
+        config_id: str,
+        acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
     """Restore a previously soft-deleted LLM_Config node."""
     check_mcp_admin_role()
@@ -607,17 +607,17 @@ async def restore_llm_configuration(
 
 @mcp.tool()
 async def store_scu(
-    destination_aet: str,
-    instances_json: Optional[str] = None,
-    study_instance_uid: Optional[str] = None,
-    series_instance_uid: Optional[str] = None,
-    sop_instance_uid: Optional[str] = None,
-    patient_id: Optional[str] = None,
-    host: Optional[str] = None,
-    port: Optional[int] = None,
-    calling_aet: Optional[str] = None,
-    acted_by: str = "mcp_agent",
-    timeout: float = 60.0,
+        destination_aet: str,
+        instances_json: Optional[str] = None,
+        study_instance_uid: Optional[str] = None,
+        series_instance_uid: Optional[str] = None,
+        sop_instance_uid: Optional[str] = None,
+        patient_id: Optional[str] = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        calling_aet: Optional[str] = None,
+        acted_by: str = "mcp_agent",
+        timeout: float = 60.0,
 ) -> Dict[str, Any]:
     """Send DICOM instance(s) or query-matched instances to a remote AE Title using Store SCU Actor."""
     from gosmart_graphite.actor.store_scu_actor import get_store_scu_actor
@@ -626,9 +626,7 @@ async def store_scu(
     instances: List[str] = json.loads(instances_json) if instances_json else []
 
     if not instances and (study_instance_uid or series_instance_uid or sop_instance_uid or patient_id):
-        level = "IMAGE" if sop_instance_uid else ("SERIES" if series_instance_uid else "STUDY")
         matched = graph_service.find_instances_for_retrieve_sync(
-            level=level,
             patient_id=patient_id,
             study_uid=study_instance_uid,
             series_uid=series_instance_uid,
@@ -648,6 +646,7 @@ async def store_scu(
             "instances": instances,
             "acted_by": effective_acted_by,
         },
+        block=True,
         timeout=timeout,
     )
     logger.info("mcp_store_scu_executed", destination_aet=destination_aet, result=res)
@@ -746,9 +745,11 @@ class MCPAuthMiddleware:
                     if k.lower() == b"mcp-session-id":
                         try:
                             sid = v.decode("utf-8").strip()
-                            _active_mcp_sessions[sid] = user
-                        except Exception:
-                            pass
+                            if user:
+                                _active_mcp_sessions[sid] = user
+                        except Exception as why:
+                            logger.warning(f"Failed to capture mcp-session-id: {why}")
+
             # 2. Capture session_id from SSE body declaration
             elif message["type"] == "http.response.body":
                 body_bytes = message.get("body", b"")
@@ -758,8 +759,10 @@ class MCPAuthMiddleware:
                         for line in body_text.splitlines():
                             if "session_id=" in line:
                                 extracted_sid = line.split("session_id=")[1].strip().split("&")[0].split()[0]
-                                _active_mcp_sessions[extracted_sid] = user
-                    except Exception:
+                                if user:
+                                    _active_mcp_sessions[extracted_sid] = user
+                    except Exception as why:
+                        logger.warning(f"Failed to capture mcp-session-id: {why}")
                         pass
             await send(message)
 

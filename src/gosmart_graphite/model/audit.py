@@ -49,6 +49,10 @@ class AuditAction(str, Enum):
     DICOM_CONFIGURATION_SERVES_GROUP = "DICOM Configuration Associated with Group"
     DICOM_CONFIGURATION_DISSOCIATED = "DICOM Configuration Dissociated from Group"
 
+    # FHIR Configuration Actions
+    FHIR_CONFIGURATION_CREATED = "FHIR Configuration Created"
+    FHIR_CONFIGURATION_ASSIGNED = "FHIR Configuration Associated with Group"
+
     # LLM Configuration Actions
     LLM_CONFIGURATION_CREATED = "LLM Configuration Created"
     LLM_CONFIGURATION_CHANGED = "LLM Configuration Changed"
