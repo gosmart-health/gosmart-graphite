@@ -22,18 +22,18 @@ from gosmart_graphite.service.group_service import group_service
 logger = get_logger("gosmart_gs.system")
 
 
-def _clean_neo4j_value(val: Any) -> Any:
+def clean_neo4j_value(val: Any) -> Any:
     """Normalize Neo4j specific types (e.g. neo4j.time.DateTime) to standard Python types."""
     if hasattr(val, "to_native"):
         return val.to_native()
     if isinstance(val, dict):
-        return {k: _clean_neo4j_value(v) for k, v in val.items()}
+        return {k: clean_neo4j_value(v) for k, v in val.items()}
     if isinstance(val, list):
-        return [_clean_neo4j_value(v) for v in val]
+        return [clean_neo4j_value(v) for v in val]
     return val
 
 
-def _normalize_test_id(test_id: Optional[str]) -> Optional[str]:
+def normalize_test_id(test_id: Optional[str]) -> Optional[str]:
     """Normalize test_id so empty strings or whitespace are safely converted to None."""
     if test_id and isinstance(test_id, str):
         stripped = test_id.strip()
@@ -43,7 +43,7 @@ def _normalize_test_id(test_id: Optional[str]) -> Optional[str]:
 
 def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
     """Map raw Neo4j node properties to a standardized DICOMConfigurationResponse dictionary."""
-    clean = _clean_neo4j_value(data)
+    clean = clean_neo4j_value(data)
     roles = clean.get("roles", [])
     if isinstance(roles, str):
         roles = [roles]
@@ -85,7 +85,7 @@ def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
 
 def _dict_to_system_response(data: Dict[str, Any], configs: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Map raw Neo4j node properties to a standardized SystemResponse dictionary."""
-    clean = _clean_neo4j_value(data)
+    clean = clean_neo4j_value(data)
     installed_at = clean.get("installed_at")
     if isinstance(installed_at, str):
         installed_at = datetime.fromisoformat(installed_at)
