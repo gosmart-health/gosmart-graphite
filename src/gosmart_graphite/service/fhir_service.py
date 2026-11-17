@@ -19,7 +19,7 @@ from fhir.resources.R4B.patient import Patient
 from fhir.resources.R4B.practitioner import Practitioner
 from fhir.resources.R4B.procedure import Procedure
 from fhir.resources.R4B.servicerequest import ServiceRequest
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
@@ -67,6 +67,7 @@ from gosmart_graphite.service.graph_service import GraphService, graph_service
 logger = get_logger("gosmart_gs.fhir_service")
 
 _AUDIT_INTERNAL_FIELDS = frozenset({"id", "Action", "ActedAt", "ActedBy", "CreatedAt", "UpdatedAt", "ExpiresAt"})
+_DATETIME_ADAPTER: TypeAdapter[datetime] = TypeAdapter(datetime)
 
 
 class EncounterContext(BaseModel):
@@ -124,12 +125,25 @@ def _extract_references(ref_list: Optional[Sequence[Mapping[str, Any]]]) -> Opti
     """Convert a sequence of raw FHIR Reference dicts into a list of Reference Macros."""
     if not ref_list:
         return None
-    macros = [m for item in ref_list if (m := _extract_reference(item))]
+    macros: list[str] = []
+    for item in ref_list:
+        macro = _extract_reference(item)
+        if macro:
+            macros.append(macro)
     return macros if macros else None
 
 
+def _parse_fhir_datetime(value: Any) -> Optional[datetime]:
+    """Parse a FHIR date/dateTime value into a Python datetime, or None if absent."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return _DATETIME_ADAPTER.validate_python(value)
+
+
 def _extract_identifier_types(identifiers: Optional[Sequence[Mapping[str, Any]]]) -> Optional[list[str]]:
-    """Extract and flatten Identifier.type CodeableConcepts from a list of FHIR Identifiers."""
+    """Extract and flatten Identifier.type CodableConcepts from a list of FHIR Identifiers."""
     if not identifiers:
         return None
     types = [
@@ -209,19 +223,19 @@ def _format_address(addr: Optional[Mapping[str, Any]]) -> Optional[str]:
     return joined if joined else None
 
 
-def _format_addresses(addrs: Optional[Sequence[Any]]) -> Optional[list[str]]:
+def _format_addresses(address: Optional[Sequence[Any]]) -> Optional[list[str]]:
     """Format a list of FHIR Address dicts into human-readable strings."""
-    if not addrs:
+    if not address:
         return None
     formatted: list[str] = []
-    for addr in addrs:
+    for addr in address:
         formatted_addr = _format_address(addr)
         if formatted_addr:
             formatted.append(formatted_addr)
     return formatted if formatted else None
 
 
-def _collect_referenced_org_loc_pract(context_data: Mapping[str, Any]) -> dict[str, str]:
+def _collect_referenced_org_loc_practitioners(context_data: Mapping[str, Any]) -> dict[str, str]:
     """Collect unique Location, Organization, and Practitioner fetch references from encounter context."""
     targets: dict[str, str] = {}
 
@@ -369,42 +383,49 @@ def encounter_to_node(
 
     participants = raw.get("participant") or []
     part_types = flatten_codings([t for p in participants if isinstance(p, Mapping) for t in (p.get("type") or [])])
-    part_starts = [
-        p["period"]["start"]
-        for p in participants
-        if isinstance(p, Mapping) and isinstance(p.get("period"), Mapping) and p["period"].get("start") is not None
-    ]
-    part_ends = [
-        p["period"]["end"]
-        for p in participants
-        if isinstance(p, Mapping) and isinstance(p.get("period"), Mapping) and p["period"].get("end") is not None
-    ]
-    part_individuals = [
-        ref for p in participants if isinstance(p, Mapping) and (ref := _extract_reference(p.get("individual")))
-    ]
+    part_starts: list[datetime] = []
+    part_ends: list[datetime] = []
+    part_individuals: list[str] = []
+    for p in participants:
+        if not isinstance(p, Mapping):
+            continue
+        p_period = p.get("period")
+        if isinstance(p_period, Mapping):
+            start_dt = _parse_fhir_datetime(p_period.get("start"))
+            if start_dt is not None:
+                part_starts.append(start_dt)
+            end_dt = _parse_fhir_datetime(p_period.get("end"))
+            if end_dt is not None:
+                part_ends.append(end_dt)
+        ind_ref = _extract_reference(p.get("individual"))
+        if ind_ref:
+            part_individuals.append(ind_ref)
 
-    locations = [
-        ref
-        for loc in (raw.get("location") or [])
-        if isinstance(loc, Mapping) and (ref := _extract_reference(loc.get("location")))
-    ]
+    locations: list[str] = []
+    for loc in raw.get("location") or []:
+        if isinstance(loc, Mapping):
+            loc_ref = _extract_reference(loc.get("location"))
+            if loc_ref:
+                locations.append(loc_ref)
 
     period = raw.get("period") if isinstance(raw.get("period"), Mapping) else {}
+    period_start = _parse_fhir_datetime(period.get("start")) if period else None
+    period_end = _parse_fhir_datetime(period.get("end")) if period else None
 
     return EncounterNode(
         resource_id=res_id,
         status=raw.get("status"),
         resource=raw_json,
         identifiers=flatten_identifiers(raw.get("identifier")),
-        **{"class": class_macro},
+        class_=class_macro,
         type=flatten_codings(raw.get("type")),
         subject=_extract_reference(raw.get("subject")),
         participantType=part_types if part_types else None,
         participantPeriodStart=part_starts if part_starts else None,
         participantPeriodEnd=part_ends if part_ends else None,
         participantIndividual=part_individuals if part_individuals else None,
-        periodStart=period.get("start"),
-        periodEnd=period.get("end"),
+        periodStart=period_start,
+        periodEnd=period_end,
         location=locations if locations else None,
         serviceProvider=_extract_reference(raw.get("serviceProvider")),
         test_id=test_id,
@@ -640,8 +661,8 @@ def diagnostic_report_to_node(
         performer=_extract_references(raw.get("performer")),
         result=_extract_references(raw.get("result")),
         conclusion=raw.get("conclusion"),
-        textStatus=text_obj.get("status"),
-        textDiv=text_obj.get("div"),
+        textStatus=text_obj.get("status") if text_obj else "",
+        textDiv=text_obj.get("div") if text_obj else "",
         presentedFormData=presented_data if presented_data else None,
         test_id=test_id,
         ActedBy=acted_by,
@@ -667,12 +688,12 @@ def procedure_to_node(
     performed_dt = raw.get("performedDateTime")
     if performed_dt is None and isinstance(raw.get("performedPeriod"), Mapping):
         performed_dt = raw["performedPeriod"].get("start")
-
-    performers = [
-        ref
-        for p in (raw.get("performer") or [])
-        if isinstance(p, Mapping) and (ref := _extract_reference(p.get("actor")))
-    ]
+    performers: list[str] = []
+    for p in raw.get("performer") or []:
+        if isinstance(p, Mapping):
+            actor_ref = _extract_reference(p.get("actor"))
+            if actor_ref:
+                performers.append(actor_ref)
 
     return ProcedureNode(
         resource_id=res_id,
@@ -735,7 +756,7 @@ def service_request_to_node(
         category=categories if categories else None,
         priority=raw.get("priority"),
         code=flatten_codings(code_obj),
-        codeText=code_obj.get("text"),
+        codeText=code_obj.get("text") if code_obj else "",
         subject=_extract_reference(raw.get("subject")),
         encounter=_extract_reference(raw.get("encounter")),
         occurrenceDateTime=occ_dt,
@@ -800,6 +821,7 @@ def organization_to_node(
     acted_by: str = "system",
 ) -> OrganizationNode:
     """Convert a FHIR R4B Organization resource into an OrganizationNode."""
+    # noinspection DuplicatedCode
     raw = organization.model_dump(mode="json", exclude_none=True)
     raw_json = organization.model_dump_json(exclude_none=True)
     res_id = str(raw.get("id") or "")
@@ -834,6 +856,7 @@ def practitioner_to_node(
     acted_by: str = "system",
 ) -> PractitionerNode:
     """Convert a FHIR R4B Practitioner resource into a PractitionerNode."""
+    # noinspection DuplicatedCode
     raw = practitioner.model_dump(mode="json", exclude_none=True)
     raw_json = practitioner.model_dump_json(exclude_none=True)
     res_id = str(raw.get("id") or "")
@@ -951,7 +974,7 @@ class FHIRBatchFetcher:
         self._timeout: float = timeout
 
     @property
-    def client(self) -> httpx.AsyncClient:
+    def client(self) -> httpx.AsyncClient | None:
         if self._custom_client is not None:
             return self._custom_client
 
@@ -991,7 +1014,10 @@ class FHIRBatchFetcher:
             return []
 
         url = f"{self.base_url}/{path.lstrip('/')}"
+        # noinspection unresolved-references
         resp = await self.client.get(url, params=params)
+        if not resp:
+            return []
         if resp.status_code == 404:
             return []
         resp.raise_for_status()
@@ -1014,13 +1040,17 @@ class FHIRBatchFetcher:
             url = ref
         else:
             url = f"{self.base_url}/{ref.lstrip('/')}"
-
-        resp = await self.client.get(url)
-        if resp.status_code == 404:
+        # noinspection unresolved-references
+        resp = await self.client.get(url) if self.client else None
+        if resp:
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+            return data if isinstance(data, dict) else None
+        else:
+            logger.error(f"Failed to fetch resource: {url} response")
             return None
-        resp.raise_for_status()
-        data = resp.json()
-        return data if isinstance(data, dict) else None
 
     async def fetch_resource(self, resource_type: str, resource_id: str) -> Optional[dict[str, Any]]:
         """Fetch a single resource by its resource type and ID."""
@@ -1032,7 +1062,8 @@ class FHIRBatchFetcher:
         """Concurrently fetch all resources related to an Encounter."""
         if isinstance(encounter, Encounter):
             enc_id = getattr(encounter, "id", None)
-            patient_ref = encounter.subject.reference if getattr(encounter, "subject", None) else None
+            subject = getattr(encounter, "subject", None) or None
+            patient_ref = subject.reference if subject else None
             enc_dict = encounter.model_dump(mode="json", exclude_none=True)
         elif isinstance(encounter, dict):
             enc_id = encounter.get("id")
@@ -1083,7 +1114,7 @@ class FHIRBatchFetcher:
             else:
                 context_data[key] = res
 
-        ref_targets = _collect_referenced_org_loc_pract(context_data)
+        ref_targets = _collect_referenced_org_loc_practitioners(context_data)
         if ref_targets:
             ref_keys = list(ref_targets.keys())
             ref_results = await asyncio.gather(
@@ -1217,9 +1248,9 @@ class FhirService:
                 logger.warning("failed_to_validate_organization", error=str(e))
 
         practitioners: list[Practitioner] = []
-        for raw_pract in resources.practitioners:
+        for raw_practitioner in resources.practitioners:
             try:
-                practitioners.append(Practitioner.model_validate(raw_pract))
+                practitioners.append(Practitioner.model_validate(raw_practitioner))
             except Exception as e:
                 logger.warning("failed_to_validate_practitioner", error=str(e))
 
@@ -1256,9 +1287,10 @@ class FhirService:
         enc_id: Optional[str] = None
         if getattr(imaging, "encounter", None):
             if getattr(imaging.encounter, "reference", None):
-                enc_id = imaging.encounter.reference.strip("/").split("/")[-1]
+                if imaging.encounter and imaging.encounter.reference:
+                    enc_id = imaging.encounter.reference.strip("/").split("/")[-1]
             elif getattr(imaging.encounter, "id", None):
-                enc_id = imaging.encounter.id
+                enc_id = imaging.encounter.id if imaging.encounter else None
 
         if not enc_id:
             errors.append(f"failed_to_fetch_encounter ref: {study_uid}")
@@ -1388,14 +1420,14 @@ class FhirService:
                 organization_map[key] = org_node
                 nodes.append(org_node)
 
-        for pract in resources.practitioners:
-            if not getattr(pract, "id", None):
+        for practitioner in resources.practitioners:
+            if not getattr(practitioner, "id", None):
                 continue
-            pract_node = practitioner_to_node(pract, test_id=test_id, acted_by=acted_by)
-            key = f"Practitioner/{pract_node.resource_id}"
+            practitioner_node = practitioner_to_node(practitioner, test_id=test_id, acted_by=acted_by)
+            key = f"Practitioner/{practitioner_node.resource_id}"
             if key not in practitioner_map:
-                practitioner_map[key] = pract_node
-                nodes.append(pract_node)
+                practitioner_map[key] = practitioner_node
+                nodes.append(practitioner_node)
 
         relations: list[AuditableRelation] = []
         seen_rel_ids: set[str] = set()
@@ -1416,10 +1448,10 @@ class FhirService:
             res_type, res_id, display = parsed
             if res_type not in allowed_types:
                 return None
-            key = f"{res_type}/{res_id}"
+            key2 = f"{res_type}/{res_id}"
 
             if res_type == "Location":
-                existing_loc = location_map.get(key)
+                existing_loc = location_map.get(key2)
                 if existing_loc is not None:
                     if display and not existing_loc.name:
                         existing_loc.name = display
@@ -1430,13 +1462,13 @@ class FhirService:
                             )
                     return existing_loc
                 loc_stub = reference_to_location_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
-                location_map[key] = loc_stub
+                location_map[key2] = loc_stub
                 stub_node_ids.add(loc_stub.id)
                 nodes.append(loc_stub)
                 return loc_stub
 
             if res_type == "Organization":
-                existing_org = organization_map.get(key)
+                existing_org = organization_map.get(key2)
                 if existing_org is not None:
                     if display and not existing_org.name:
                         existing_org.name = display
@@ -1447,27 +1479,27 @@ class FhirService:
                             )
                     return existing_org
                 org_stub = reference_to_organization_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
-                organization_map[key] = org_stub
+                organization_map[key2] = org_stub
                 stub_node_ids.add(org_stub.id)
                 nodes.append(org_stub)
                 return org_stub
 
             if res_type == "Practitioner":
-                existing_pract = practitioner_map.get(key)
-                if existing_pract is not None:
-                    if display and not existing_pract.name:
-                        existing_pract.name = [display]
-                        if existing_pract.id in stub_node_ids:
-                            existing_pract.resource = json.dumps(
+                existing_practitioner = practitioner_map.get(key2)
+                if existing_practitioner is not None:
+                    if display and not existing_practitioner.name:
+                        existing_practitioner.name = [display]
+                        if existing_practitioner.id in stub_node_ids:
+                            existing_practitioner.resource = json.dumps(
                                 {"resourceType": "Practitioner", "id": res_id, "name": [{"text": display}]},
                                 separators=(",", ":"),
                             )
-                    return existing_pract
-                pract_stub = reference_to_practitioner_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
-                practitioner_map[key] = pract_stub
-                stub_node_ids.add(pract_stub.id)
-                nodes.append(pract_stub)
-                return pract_stub
+                    return existing_practitioner
+                practitioner_stub = reference_to_practitioner_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
+                practitioner_map[key2] = practitioner_stub
+                stub_node_ids.add(practitioner_stub.id)
+                nodes.append(practitioner_stub)
+                return practitioner_stub
 
             return None
 
@@ -1773,13 +1805,13 @@ class FhirService:
                 )
 
         # 15. (:Practitioner)-[:BELONGS_TO]->(:Organization)
-        for pract_node in list(practitioner_map.values()):
-            for ref in pract_node.organization or []:
+        for practitioner_node in list(practitioner_map.values()):
+            for ref in practitioner_node.organization or []:
                 org_target = _ensure_referenced_node(ref, {"Organization"}, default_type="Organization")
                 if org_target is not None:
                     _add_rel(
                         FhirBelongsToRelation(
-                            start_node_id=pract_node.id,
+                            start_node_id=practitioner_node.id,
                             end_node_id=org_target.id,
                             test_id=test_id,
                             ActedBy=acted_by,
@@ -1804,7 +1836,7 @@ class FhirService:
 
     @staticmethod
     def _serialize_node_props(node: FHIRDomainResourceNode) -> dict[str, Any]:
-        """Serialize domain properties of a FHIRDomainResourceNode for Cypher SET."""
+        """Serialize domain properties of a FHIRDomainResourceNode for CYPHER SET."""
         dumped = node.model_dump(by_alias=True, exclude_none=True)
         props: dict[str, Any] = {}
         for k, v in dumped.items():
