@@ -310,8 +310,6 @@ def _format_human_names(names: Optional[Sequence[Mapping[str, Any]]]) -> Optiona
         return None
     formatted: list[str] = []
     for n in names:
-        if not isinstance(n, Mapping):
-            continue
         text = (n.get("text") or "").strip()
         if text:
             formatted.append(text)
