@@ -24,6 +24,9 @@ logger = get_logger("gosmart_gs.vector_service")
 
 DEFAULT_EMBEDDING_TAG = "embedding"
 
+# These are just the basic prefixes. Refer to the provider's documents for
+# asymmetric Q/A, and symmetric usages.
+
 INSTRUCTION_PREFIXES: dict[str, dict[str, Any]] = {
     "nomic-embed-text": {
         "search": "search_query: ",
@@ -42,6 +45,12 @@ INSTRUCTION_PREFIXES: dict[str, dict[str, Any]] = {
         "is_parametric": False,
         "parameterStyle": "",
     },
+    "embeddinGemma": {
+        "search": "task: search result | query: ",
+        "document": "title none | text: ",  # If you have a title provide it instead of none
+        "is_parametric": False,
+        "parameterStyle": "",
+    }
 }
 
 
@@ -103,12 +112,13 @@ def compute_cosine_scores(
 
     q_norm = float(np.linalg.norm(q))
     t_norms = np.linalg.norm(targets, axis=1)
-    denom = q_norm * t_norms
+    denominator = q_norm * t_norms
 
     dots = targets @ q
-    cos_sim = np.where(denom > 0.0, dots / np.where(denom > 0.0, denom, 1.0), -1.0)
+    cos_sim = np.where(denominator > 0.0, dots / np.where(denominator > 0.0, denominator, 1.0), -1.0)
     cos_sim = np.clip(cos_sim, -1.0, 1.0)
     scores = np.clip((cos_sim + 1.0) / 2.0, 0.0, 1.0)
+    # noinspection bad-return
     return [float(s) for s in scores]
 
 
@@ -126,6 +136,7 @@ def compute_dot_product_scores(
 
     dots = np.clip(targets @ q, -1.0, 1.0)
     scores = np.clip((dots + 1.0) / 2.0, 0.0, 1.0)
+    # noinspection bad-return
     return [float(s) for s in scores]
 
 
@@ -144,6 +155,7 @@ def compute_euclidean_scores(
 
     dists = np.linalg.norm(targets - q, axis=1)
     scores = 1.0 / (1.0 + dists)
+    # noinspection bad-return
     return [float(s) for s in np.clip(scores, 0.0, 1.0)]
 
 
@@ -162,6 +174,7 @@ def compute_manhattan_scores(
 
     dists = np.sum(np.abs(targets - q), axis=1)
     scores = 1.0 / (1.0 + dists)
+    # noinspection bad-return
     return [float(s) for s in np.clip(scores, 0.0, 1.0)]
 
 
