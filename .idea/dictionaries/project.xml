@@ -2,6 +2,7 @@
   <dictionary name="project">
     <words>
       <w>GOSMART</w>
+      <w>SNOMED</w>
       <w>caplog</w>
       <w>cfind</w>
       <w>dicomweb</w>
