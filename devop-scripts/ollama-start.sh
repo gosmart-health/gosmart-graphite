@@ -8,7 +8,7 @@ set -euo pipefail
 # Default configuration (override via env vars or CLI flags)
 # Embedding models like nomic-embed-text need IS_EMBEDDING=true (/api/embed),
 # otherwise Ollama will fail to load the model via /api/generate.
-MODEL_NAME="${MODEL_NAME:-nomic-embed-text:latest}"
+MODEL_NAME="${MODEL_NAME:-embeddinggemma-2:270m}"
 IS_EMBEDDING="${IS_EMBEDDING:-true}"
 OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:--1}"
 OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-1}"
