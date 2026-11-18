@@ -17,6 +17,8 @@ from pynetdicom import AE, ALL_TRANSFER_SYNTAXES, StoragePresentationContexts, V
 from pynetdicom.ae import ApplicationEntity
 from pynetdicom.association import Association
 from pynetdicom.presentation import PresentationContext, build_context
+# These are dynamically generated and will not exist
+# pyrefly: ignore[missing-module-attribute]
 from pynetdicom.sop_class import (
     ModalityWorklistInformationFind,
     PatientRootQueryRetrieveInformationModelFind,
@@ -747,6 +749,10 @@ class PyNetDicomService:
         client_ip = getattr(requestor, "address", "unknown")
         calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
 
+        # TODO: Given the `calling_aet` find them in the DICOMConfiguration then trace to the Group
+        # TODO: Keep the Group context and pass that onto storage actor.
+        # TODO: Pull the storage URI from the configuration
+
         acceptor = getattr(assoc, "acceptor", None)
         server_ip = getattr(acceptor, "address", getattr(self.settings, "DICOM_SCP_HOST", "0.0.0.0"))
         server_port = getattr(acceptor, "port", getattr(self.settings, "DICOM_SCP_PORT", 11112))
@@ -754,6 +760,9 @@ class PyNetDicomService:
 
         # 3. FIRST ORDER OF ACTION: Blackbox Recording
         try:
+            # TODO: This is a temporary local file storage, later we will either
+            # TODO: Copy the media to the final destination (cloud or file share, etc.) Need a new storage actor.
+            # TODO: Once stored, remove the temporary file.
             media_service.write_dicom_sync(storage_uri, dataset)
             logger.info("c_store_blackbox_saved", storage_uri=storage_uri, sop_instance_uid=sop_uid)
         except Exception as e:
@@ -889,6 +898,7 @@ class PyNetDicomService:
                     accession_number=hierarchy.study.accession_number,
                     study_uid=study_uid,
                     series_uid=series_uid,
+                    ## TODO: Need the Group context and pass that onto the FHIR actor
                 )
 
         return 0x0000  # SUCCESS
