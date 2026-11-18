@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 import pykka
 
 from gosmart_graphite.core.logging import get_logger
-from gosmart_graphite.service import EncRelevantResources, FhirService
+from gosmart_graphite.service.fhir_service import EncRelevantResources, FhirService
 
 logger = get_logger("gosmart_gs.fhir_actor")
 
