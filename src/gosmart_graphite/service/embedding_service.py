@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 logger = get_logger("gosmart_gs.vector_service")
 
-DEFAULT_EMBEDDING_TAG = "embedding"
+DEFAULT_EMBEDDING_TAG = "embedding-v1"
 
 # These are just the basic prefixes. Refer to the provider's documents for
 # asymmetric Q/A, and symmetric usages.
@@ -45,9 +45,9 @@ INSTRUCTION_PREFIXES: dict[str, dict[str, Any]] = {
         "is_parametric": False,
         "parameterStyle": "",
     },
-    "embeddinGemma": {
+    "embeddinggemma-2": {
         "search": "task: search result | query: ",
-        "document": "title none | text: ",  # If you have a title provide it instead of none
+        "document": "title: ${title} | text: ",  # If you have a title provide it instead of none
         "is_parametric": False,
         "parameterStyle": "",
     }
@@ -70,8 +70,8 @@ SimilarityMetricType = Union[
 
 
 def _prepare_comparison_arrays(
-    query_vector: Sequence[float],
-    target_vectors: Sequence[Sequence[float]],
+        query_vector: Sequence[float],
+        target_vectors: Sequence[Sequence[float]],
 ) -> tuple[np.ndarray, np.ndarray]:
     """Validate and convert query_vector (1D) and target_vectors (2D) to float32 NumPy arrays."""
     q = np.asarray(query_vector, dtype=np.float32)
@@ -98,8 +98,8 @@ def _prepare_comparison_arrays(
 
 
 def compute_cosine_scores(
-    query_vector: Sequence[float],
-    target_vectors: Sequence[Sequence[float]],
+        query_vector: Sequence[float],
+        target_vectors: Sequence[Sequence[float]],
 ) -> list[float]:
     """Compute cosine similarity against a list of target vectors, mapped to [0.0, 1.0] in index order.
 
@@ -123,8 +123,8 @@ def compute_cosine_scores(
 
 
 def compute_dot_product_scores(
-    query_vector: Sequence[float],
-    target_vectors: Sequence[Sequence[float]],
+        query_vector: Sequence[float],
+        target_vectors: Sequence[Sequence[float]],
 ) -> list[float]:
     """Compute cosine dot-product similarity (assuming L2-normalized vectors) mapped to [0.0, 1.0].
 
@@ -141,8 +141,8 @@ def compute_dot_product_scores(
 
 
 def compute_euclidean_scores(
-    query_vector: Sequence[float],
-    target_vectors: Sequence[Sequence[float]],
+        query_vector: Sequence[float],
+        target_vectors: Sequence[Sequence[float]],
 ) -> list[float]:
     """Compute Euclidean (L2) similarity scores in [0.0, 1.0] in index order.
 
@@ -160,8 +160,8 @@ def compute_euclidean_scores(
 
 
 def compute_manhattan_scores(
-    query_vector: Sequence[float],
-    target_vectors: Sequence[Sequence[float]],
+        query_vector: Sequence[float],
+        target_vectors: Sequence[Sequence[float]],
 ) -> list[float]:
     """Compute Manhattan (L1) similarity scores in [0.0, 1.0] in index order.
 
@@ -179,9 +179,9 @@ def compute_manhattan_scores(
 
 
 def compute_similarity_scores(
-    query_vector: Sequence[float],
-    target_vectors: Sequence[Sequence[float]],
-    metric: SimilarityMetricType = SimilarityMetric.COSINE,
+        query_vector: Sequence[float],
+        target_vectors: Sequence[Sequence[float]],
+        metric: SimilarityMetricType = SimilarityMetric.COSINE,
 ) -> list[float]:
     """Compute similarity scores in [0.0, 1.0] between query_vector and target_vectors in index order."""
     m = str(metric).strip().lower()
@@ -230,11 +230,11 @@ class EmbeddingService:
     """Computes L2-normalized text embeddings via dynamic, group-scoped LLM_Config + Genkit."""
 
     def __init__(
-        self,
-        config: Optional[LLM_Config] = None,
-        llm_config_service: Optional[LLMConfigService] = None,
-        ai: Optional[Genkit] = None,
-        settings: Optional[Settings] = None,
+            self,
+            config: Optional[LLM_Config] = None,
+            llm_config_service: Optional[LLMConfigService] = None,
+            ai: Optional[Genkit] = None,
+            settings: Optional[Settings] = None,
     ) -> None:
         self._static_config: Optional[LLM_Config] = config
         self._llm_config_service: Optional[LLMConfigService] = llm_config_service
@@ -273,12 +273,12 @@ class EmbeddingService:
         return False
 
     def is_configured(
-        self,
-        *,
-        group_id: Optional[str] = None,
-        tag: str = DEFAULT_EMBEDDING_TAG,
-        test_id: Optional[str] = None,
-        llm_config: Optional[LLM_Config] = None,
+            self,
+            *,
+            group_id: Optional[str] = None,
+            tag: str = DEFAULT_EMBEDDING_TAG,
+            test_id: Optional[str] = None,
+            llm_config: Optional[LLM_Config] = None,
     ) -> bool:
         """Return True if an embedding LLM_Config is configured and usable."""
         cfg = llm_config or self._static_config
@@ -295,12 +295,12 @@ class EmbeddingService:
         return self._is_config_usable(cfg)
 
     async def is_configured_async(
-        self,
-        *,
-        group_id: Optional[str] = None,
-        tag: str = DEFAULT_EMBEDDING_TAG,
-        test_id: Optional[str] = None,
-        llm_config: Optional[LLM_Config] = None,
+            self,
+            *,
+            group_id: Optional[str] = None,
+            tag: str = DEFAULT_EMBEDDING_TAG,
+            test_id: Optional[str] = None,
+            llm_config: Optional[LLM_Config] = None,
     ) -> bool:
         """Asynchronously return True if an embedding LLM_Config is configured and usable."""
         cfg = llm_config or self._static_config
@@ -317,10 +317,10 @@ class EmbeddingService:
         return self._is_config_usable(cfg)
 
     def resolve_provider(
-        self,
-        config: Optional[LLM_Config] = None,
-        model: Optional[str] = None,
-        resolved_api_key: Optional[str] = None,
+            self,
+            config: Optional[LLM_Config] = None,
+            model: Optional[str] = None,
+            resolved_api_key: Optional[str] = None,
     ) -> str:
         """Determine the active provider ('ollama', 'googleai', or 'vertexai') from LLM_Config or model."""
         cfg = config or self._static_config
@@ -353,10 +353,10 @@ class EmbeddingService:
         return provider
 
     def resolve_embedder_name(
-        self,
-        config: Optional[LLM_Config] = None,
-        model: Optional[str] = None,
-        resolved_api_key: Optional[str] = None,
+            self,
+            config: Optional[LLM_Config] = None,
+            model: Optional[str] = None,
+            resolved_api_key: Optional[str] = None,
     ) -> str:
         """Return the fully-qualified Genkit embedder identifier (e.g. 'ollama/nomic-embed-text:latest')."""
         cfg = config or self._static_config
@@ -369,7 +369,7 @@ class EmbeddingService:
         target_model = raw_model
         for prefix in ("ollama/", "googleai/", "vertexai/"):
             if target_model.startswith(prefix):
-                target_model = target_model[len(prefix) :]
+                target_model = target_model[len(prefix):]
                 break
 
         if provider in ("ollama", "googleai", "vertexai"):
@@ -382,11 +382,11 @@ class EmbeddingService:
         )
 
     def _get_or_create_genkit(
-        self,
-        cfg: LLM_Config,
-        *,
-        provider: str,
-        api_key: str,
+            self,
+            cfg: LLM_Config,
+            *,
+            provider: str,
+            api_key: str,
     ) -> Genkit:
         """Return an injected test client or a thread-safe cached Genkit client keyed by config fingerprint."""
         if self._ai is not None:
@@ -408,11 +408,11 @@ class EmbeddingService:
             return client
 
     def _create_genkit(
-        self,
-        cfg: LLM_Config,
-        *,
-        provider: str,
-        api_key: str,
+            self,
+            cfg: LLM_Config,
+            *,
+            provider: str,
+            api_key: str,
     ) -> Genkit:
         """Instantiate Genkit with the Ollama, GoogleAI, or VertexAI plugin from LLM_Config."""
         if provider == "ollama":
@@ -444,12 +444,12 @@ class EmbeddingService:
         )
 
     async def _resolve_runtime_config(
-        self,
-        *,
-        tag: str,
-        group_id: Optional[str],
-        test_id: Optional[str],
-        llm_config: Optional[LLM_Config],
+            self,
+            *,
+            tag: str,
+            group_id: Optional[str],
+            test_id: Optional[str],
+            llm_config: Optional[LLM_Config],
     ) -> LLM_Config:
         cfg = llm_config or self._static_config
         if cfg is None:
@@ -463,16 +463,17 @@ class EmbeddingService:
         return cfg
 
     async def embed_text_async(
-        self,
-        text: str,
-        model: Optional[str] = None,
-        is_query: bool = False,
-        *,
-        group_id: Optional[str] = None,
-        tag: str = DEFAULT_EMBEDDING_TAG,
-        test_id: Optional[str] = None,
-        llm_config: Optional[LLM_Config] = None,
-        config: Optional[dict[str, Any]] = None,
+            self,
+            text: str,
+            model: Optional[str] = None,
+            is_query: bool = False,
+            *,
+            group_id: Optional[str] = None,
+            tag: str = DEFAULT_EMBEDDING_TAG,
+            test_id: Optional[str] = None,
+            title: str = "none",
+            llm_config: Optional[LLM_Config] = None,
+            config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
         """Asynchronously compute and return an L2-normalized embedding vector for a string."""
         if not isinstance(text, str) or not text.strip():
@@ -490,8 +491,10 @@ class EmbeddingService:
         embedder_name = self.resolve_embedder_name(config=cfg, model=target_model, resolved_api_key=resolved_key)
 
         mode: Literal["search", "document"] = "search" if is_query else "document"
-        prefix = self.prefix_by_model(target_model, mode)
+        prefix = self.prefix_by_model(target_model, mode).replace("${title}", title)
         content = f"{prefix}{text}" if prefix else text
+
+        logger.info(f"Embedding text: {content}")
 
         embed_config: dict[str, Any] = {}
         if cfg.extra_config:
@@ -528,6 +531,7 @@ class EmbeddingService:
         group_id: Optional[str] = None,
         tag: str = DEFAULT_EMBEDDING_TAG,
         test_id: Optional[str] = None,
+        title: str = "none",
         llm_config: Optional[LLM_Config] = None,
         config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
@@ -543,6 +547,7 @@ class EmbeddingService:
             group_id=group_id,
             tag=tag,
             test_id=test_id,
+            title=title,
             llm_config=llm_config,
             config=config,
         )
