@@ -962,7 +962,8 @@ and Redox via JWKS the `oAuth2` authentication over encrypted channels.
 
 ```mermaid
 flowchart TD
-    n2["GoSmart Mock Server<br>API: 8000<br>DICOM:11114<br>GOSMART_SCP"] -- REST 8088 --> n3["FHIR PLUGIN<br>API: 8088"]
+    n2["GoSmart Mock Server<br>API: 8000<br>DICOM:11114<br>GOSMART_MOCK"] -- 
+REST 8088 --> n3["FHIR PLUGIN<br>API: 8088"]
     n2 -- REST/FHIR 8087 --> n4["HAPI FHIR Server<br>Remote:8087"]
     n1["GoSmart Graph PACS<br>API:8086<br>DICOM: 11112<br>GOSMART_GRAPHITE"] -- 
 REST 8088 --> n3
