@@ -26,6 +26,7 @@ dependencies = [
     "pyjwt>=2.8.0",
     "pykka==4.5.0",
     "pynetdicom>=3.0.4",
+    "pyrefly>=0.60.0",
     "pytest==9.2.0",
     "python-multipart==0.0.33",
     "rich==15.0.0",
