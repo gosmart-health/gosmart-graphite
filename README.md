@@ -200,69 +200,69 @@ deadlocks.
 
 Configured via environment variables or `.env`:
 
-| Variable                                     | Default Value                        | Description                                                                                                           |
-|:---------------------------------------------|:-------------------------------------|:----------------------------------------------------------------------------------------------------------------------|
-| **Database**                                 |                                      |                                                                                                                       |
-| `GOSMART_GS_DB_CONNECTION_URI`               | `bolt://localhost:7687`              | Neo4j Connection URI                                                                                                  |
-| `GOSMART_GS_DB_USER`                         | `neo4j`                              | Neo4j Username                                                                                                        |
-| `GOSMART_GS_DB_PASSWORD`                     | `password`                           | Neo4j Password                                                                                                        |
-| `GOSMART_GS_DB_DATABASE`                     | `neo4j`                              | Neo4j Database Name                                                                                                   |
-| `GOSMART_GS_DB_MAX_CONNECTION_POOL_SIZE`     | `50`                                 | Neo4j max connection pool size                                                                                        |
-| `GOSMART_GS_DB_MAX_CONNECTION_LIFETIME`      | `3600`                               | Neo4j max connection lifetime (seconds)                                                                               |
-| **FHIR**                                     |                                      |                                                                                                                       |
-| `GOSMART_GS_FHIR_BASE_URL`                   | ``                                   | FHIR URL root. Empty disables FHIR                                                                                    |
-| `GOSMART_GS_FHIR_POLL_SEC`                   | `120`                                | FHIR polling interval to check for DiagnosticReport                                                                   |
-| `GOSMART_GS_FHIR_ACCESSION_SYSTEM`           | `""`                                 | System for the Accession Number                                                                                       |
-| `GOSMART_GS_FHIR_PATIENT_ID_SYSTEM`          | `"urn:oid:2.16.840.1.113883.4.3.25"` | System for the Patient ID/ MRN                                                                                        |
-| **LLM Configuration Security**               |                                      | *(LLM providers/models/URLs are persisted dynamically in Neo4j as `LLM_Config` nodes; see `configure llm-config`)*    |
-| `GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY`       | *(None)*                             | Optional Fernet key or passphrase for encrypting stored `LLM_Config` `api_key` values at rest in Neo4j              |
-| **Storage**                                  |                                      |                                                                                                                       |
-| `GOSMART_GS_STORAGE_ROOT_URI`                | `file:///tmp/gosmart_dicom_storage`  | Storage root URI (file://, gs://, s3://, az://, \\\\unc\\share)                                                       |
-| **Server**                                   |                                      |                                                                                                                       |
-| `GOSMART_GS_HOST`                            | `0.0.0.0`                            | FastAPI host binding                                                                                                  |
-| `GOSMART_GS_PORT`                            | `8086`                               | FastAPI HTTP port                                                                                                     |
-| `GOSMART_GS_RELOAD`                          | `true`                               | Uvicorn auto-reload                                                                                                   |
-| **Logging**                                  |                                      |                                                                                                                       |
-| `GOSMART_GS_LOG_LEVEL`                       | `INFO`                               | Server logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)                                                          |
-| `GOSMART_GS_LOG_FORMAT`                      | `json`                               | Console log format (`json` or `console`)                                                                              |
-| `GOSMART_GS_LOG_DIR`                         | `./logs`                             | Directory for rotating log files                                                                                      |
-| `GOSMART_GS_LOG_FILE`                        | `gosmart_gs.log`                     | Base name for log file                                                                                                |
-| `GOSMART_GS_LOG_ROTATION_DAYS`               | `7`                                  | Auto-rotate log files every N days                                                                                    |
-| `GOSMART_GS_LOG_BACKUP_COUNT`                | `8`                                  | Number of rotated backup files to keep                                                                                |
-| `GOSMART_GS_LOG_TO_FILE`                     | `true`                               | Enable rotating file logging                                                                                          |
-| **DICOM Network**                            |                                      |                                                                                                                       |
-| `GOSMART_GS_DICOM_AE_TITLE`                  | `GOSMART_GS`                         | Local DICOM Application Entity Title                                                                                  |
-| `GOSMART_GS_DICOM_SCP_PORT`                  | `11112`                              | DICOM C-STORE / C-ECHO SCP Port                                                                                       |
-| `GOSMART_GS_DICOM_MAX_PDU`                   | `16382`                              | Maximum PDU length in bytes                                                                                           |
-| **Authentication & Security**                |                                      |                                                                                                                       |
-| `GOSMART_GS_JWT_SECRET_KEY`                  | *(Secret)*                           | Secret key for signing and verifying JWT tokens                                                                       |
-| `GOSMART_GS_JWT_ALGORITHM`                   | `HS256`                              | JWT signing algorithm                                                                                                 |
-| `GOSMART_GS_JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `60`                                 | Access token expiration in minutes                                                                                    |
-| `GOSMART_GS_JWT_REFRESH_TOKEN_EXPIRE_DAYS`   | `30`                                 | Refresh token expiration in days                                                                                      |
-| `GOSMART_GS_API_KEY_PREFIX`                  | `gs_live_`                           | Standard prefix for generated API keys                                                                                |
-| `GOSMART_GS_GOOGLE_OAUTH_CLIENT_ID`          | *(None)*                             | Google OAuth2 / OIDC Client ID for federated login                                                                    |
-| `GOSMART_GS_GOOGLE_OAUTH_CLIENT_SECRET`      | *(None)*                             | Google OAuth2 Client Secret                                                                                           |
-| **Admin Bootstrapping**                      |                                      |                                                                                                                       |
-| `GOSMART_GS_INITIAL_ADMIN_EMAIL`             | `admin@gosmart.health`               | Bootstrap Platform Admin primary email                                                                                |
-| `GOSMART_GS_INITIAL_ADMIN_PASSWORD`          | *(None)*                             | Bootstrap Platform Admin initial password                                                                             |
-| `GOSMART_GS_INITIAL_ADMIN_USERNAME`          | `admin`                              | Bootstrap Platform Admin username                                                                                     |
-| `GOSMART_GS_INITIAL_ADMIN_DISPLAY_NAME`      | `System Administrator`               | Bootstrap Platform Admin display name                                                                                 |
-| `GOSMART_GS_FORCE_ADMIN_PASSWORD_RESET`      | `false`                              | Force reset admin password to `INITIAL_ADMIN_PASSWORD` upon startup                                                   |
-| **Audit**                                    |                                      |                                                                                                                       |
-| `GOSMART_GS_AUDIT_RETENTION_DAYS`            | `365`                                | Audit log retention period in days (default: 1 year)                                                                  |
-| `GOSMART_GS_AUDIT_LOG_TO_DB`                 | `true`                               | Enable Neo4j database persistence for audit logs                                                                      |
-| **Cloud Storage** (Optional)                 |                                      |                                                                                                                       |
-| `GOOGLE_APPLICATION_CREDENTIALS`             | *(None)*                             | GCP service account JSON key file path                                                                                |
-| `GOOGLE_CLOUD_PROJECT`                       | *(None)*                             | Google Cloud Project ID                                                                                               |
-| `GCS_ENDPOINT_URL`                           | *(None)*                             | Custom GCS endpoint URL (emulator)                                                                                    |
-| `AWS_ACCESS_KEY_ID`                          | *(None)*                             | AWS access key ID                                                                                                     |
-| `AWS_SECRET_ACCESS_KEY`                      | *(None)*                             | AWS secret access key                                                                                                 |
-| `AWS_DEFAULT_REGION`                         | *(None)*                             | AWS region                                                                                                            |
-| `AWS_ENDPOINT_URL`                           | *(None)*                             | Custom S3 endpoint URL (MinIO, etc.)                                                                                  |
-| `AZURE_STORAGE_CONNECTION_STRING`            | *(None)*                             | Azure Blob Storage connection string                                                                                  |
-| `AZURE_STORAGE_ACCOUNT_NAME`                 | *(None)*                             | Azure Storage account name                                                                                            |
-| `AZURE_STORAGE_ACCOUNT_KEY`                  | *(None)*                             | Azure Storage account key                                                                                             |
-| `AZURE_STORAGE_SAS_TOKEN`                    | *(None)*                             | Azure Storage SAS token                                                                                               |
+| Variable                                     | Default Value                        | Description                                                                                                        |
+|:---------------------------------------------|:-------------------------------------|:-------------------------------------------------------------------------------------------------------------------|
+| **Database**                                 |                                      |                                                                                                                    |
+| `GOSMART_GS_DB_CONNECTION_URI`               | `bolt://localhost:7687`              | Neo4j Connection URI                                                                                               |
+| `GOSMART_GS_DB_USER`                         | `neo4j`                              | Neo4j Username                                                                                                     |
+| `GOSMART_GS_DB_PASSWORD`                     | `password`                           | Neo4j Password                                                                                                     |
+| `GOSMART_GS_DB_DATABASE`                     | `neo4j`                              | Neo4j Database Name                                                                                                |
+| `GOSMART_GS_DB_MAX_CONNECTION_POOL_SIZE`     | `50`                                 | Neo4j max connection pool size                                                                                     |
+| `GOSMART_GS_DB_MAX_CONNECTION_LIFETIME`      | `3600`                               | Neo4j max connection lifetime (seconds)                                                                            |
+| **FHIR**                                     |                                      |                                                                                                                    |
+| `GOSMART_GS_FHIR_BASE_URL`                   | ``                                   | FHIR URL root. Empty disables FHIR                                                                                 |
+| `GOSMART_GS_FHIR_POLL_SEC`                   | `120`                                | FHIR polling interval to check for DiagnosticReport                                                                |
+| `GOSMART_GS_FHIR_ACCESSION_SYSTEM`           | `""`                                 | System for the Accession Number                                                                                    |
+| `GOSMART_GS_FHIR_PATIENT_ID_SYSTEM`          | `"urn:oid:2.16.840.1.113883.4.3.25"` | System for the Patient ID/ MRN                                                                                     |
+| **LLM Configuration Security**               |                                      | *(LLM providers/models/URLs are persisted dynamically in Neo4j as `LLM_Config` nodes; see `configure llm-config`)* |
+| `GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY`       | *(None)*                             | Optional Fernet key or passphrase for encrypting stored `LLM_Config` `api_key` values at rest in Neo4j             |
+| **Storage**                                  |                                      |                                                                                                                    |
+| `GOSMART_GS_STORAGE_ROOT_URI`                | `file:///tmp/gosmart_dicom_storage`  | Storage root URI (file://, gs://, s3://, az://, \\\\unc\\share)                                                    |
+| **Server**                                   |                                      |                                                                                                                    |
+| `GOSMART_GS_HOST`                            | `0.0.0.0`                            | FastAPI host binding                                                                                               |
+| `GOSMART_GS_PORT`                            | `8086`                               | FastAPI HTTP port                                                                                                  |
+| `GOSMART_GS_RELOAD`                          | `true`                               | Uvicorn auto-reload                                                                                                |
+| **Logging**                                  |                                      |                                                                                                                    |
+| `GOSMART_GS_LOG_LEVEL`                       | `INFO`                               | Server logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)                                                       |
+| `GOSMART_GS_LOG_FORMAT`                      | `json`                               | Console log format (`json` or `console`)                                                                           |
+| `GOSMART_GS_LOG_DIR`                         | `./logs`                             | Directory for rotating log files                                                                                   |
+| `GOSMART_GS_LOG_FILE`                        | `gosmart_gs.log`                     | Base name for log file                                                                                             |
+| `GOSMART_GS_LOG_ROTATION_DAYS`               | `7`                                  | Auto-rotate log files every N days                                                                                 |
+| `GOSMART_GS_LOG_BACKUP_COUNT`                | `8`                                  | Number of rotated backup files to keep                                                                             |
+| `GOSMART_GS_LOG_TO_FILE`                     | `true`                               | Enable rotating file logging                                                                                       |
+| **DICOM Network**                            |                                      |                                                                                                                    |
+| `GOSMART_GS_DICOM_AE_TITLE`                  | `GOSMART_GS`                         | Local DICOM Application Entity Title                                                                               |
+| `GOSMART_GS_DICOM_SCP_PORT`                  | `11112`                              | DICOM C-STORE / C-ECHO SCP Port                                                                                    |
+| `GOSMART_GS_DICOM_MAX_PDU`                   | `16382`                              | Maximum PDU length in bytes                                                                                        |
+| **Authentication & Security**                |                                      |                                                                                                                    |
+| `GOSMART_GS_JWT_SECRET_KEY`                  | *(Secret)*                           | Secret key for signing and verifying JWT tokens                                                                    |
+| `GOSMART_GS_JWT_ALGORITHM`                   | `HS256`                              | JWT signing algorithm                                                                                              |
+| `GOSMART_GS_JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | `60`                                 | Access token expiration in minutes                                                                                 |
+| `GOSMART_GS_JWT_REFRESH_TOKEN_EXPIRE_DAYS`   | `30`                                 | Refresh token expiration in days                                                                                   |
+| `GOSMART_GS_API_KEY_PREFIX`                  | `gs_live_`                           | Standard prefix for generated API keys                                                                             |
+| `GOSMART_GS_GOOGLE_OAUTH_CLIENT_ID`          | *(None)*                             | Google OAuth2 / OIDC Client ID for federated login                                                                 |
+| `GOSMART_GS_GOOGLE_OAUTH_CLIENT_SECRET`      | *(None)*                             | Google OAuth2 Client Secret                                                                                        |
+| **Admin Bootstrapping**                      |                                      |                                                                                                                    |
+| `GOSMART_GS_INITIAL_ADMIN_EMAIL`             | `admin@gosmart.health`               | Bootstrap Platform Admin primary email                                                                             |
+| `GOSMART_GS_INITIAL_ADMIN_PASSWORD`          | *(None)*                             | Bootstrap Platform Admin initial password                                                                          |
+| `GOSMART_GS_INITIAL_ADMIN_USERNAME`          | `admin`                              | Bootstrap Platform Admin username                                                                                  |
+| `GOSMART_GS_INITIAL_ADMIN_DISPLAY_NAME`      | `System Administrator`               | Bootstrap Platform Admin display name                                                                              |
+| `GOSMART_GS_FORCE_ADMIN_PASSWORD_RESET`      | `false`                              | Force reset admin password to `INITIAL_ADMIN_PASSWORD` upon startup                                                |
+| **Audit**                                    |                                      |                                                                                                                    |
+| `GOSMART_GS_AUDIT_RETENTION_DAYS`            | `365`                                | Audit log retention period in days (default: 1 year)                                                               |
+| `GOSMART_GS_AUDIT_LOG_TO_DB`                 | `true`                               | Enable Neo4j database persistence for audit logs                                                                   |
+| **Cloud Storage** (Optional)                 |                                      |                                                                                                                    |
+| `GOOGLE_APPLICATION_CREDENTIALS`             | *(None)*                             | GCP service account JSON key file path                                                                             |
+| `GOOGLE_CLOUD_PROJECT`                       | *(None)*                             | Google Cloud Project ID                                                                                            |
+| `GCS_ENDPOINT_URL`                           | *(None)*                             | Custom GCS endpoint URL (emulator)                                                                                 |
+| `AWS_ACCESS_KEY_ID`                          | *(None)*                             | AWS access key ID                                                                                                  |
+| `AWS_SECRET_ACCESS_KEY`                      | *(None)*                             | AWS secret access key                                                                                              |
+| `AWS_DEFAULT_REGION`                         | *(None)*                             | AWS region                                                                                                         |
+| `AWS_ENDPOINT_URL`                           | *(None)*                             | Custom S3 endpoint URL (MinIO, etc.)                                                                               |
+| `AZURE_STORAGE_CONNECTION_STRING`            | *(None)*                             | Azure Blob Storage connection string                                                                               |
+| `AZURE_STORAGE_ACCOUNT_NAME`                 | *(None)*                             | Azure Storage account name                                                                                         |
+| `AZURE_STORAGE_ACCOUNT_KEY`                  | *(None)*                             | Azure Storage account key                                                                                          |
+| `AZURE_STORAGE_SAS_TOKEN`                    | *(None)*                             | Azure Storage SAS token                                                                                            |
 
 ---
 
@@ -287,7 +287,9 @@ the
 REST Client on VS Code.
 
 ```cypher
-MATCH (n) DETACH DELETE n;
+MATCH (n)
+DETACH
+DELETE n;
 ```
 
 ```bash
@@ -430,7 +432,7 @@ variable, either:
 
 > [!TIP]
 > The Graph Server container connects to Neo4j via the Docker network using the
-> service hostname `neo4j` (i.e., `bolt://neo4j:7687`). This is pre-configured 
+> service hostname `neo4j` (i.e., `bolt://neo4j:7687`). This is pre-configured
 > in `docker/docker-compose.yml`.
 
 ### 4. CLI Commands
@@ -522,13 +524,18 @@ generate the API key.
 - `GET /api/v1/configurations/llm` — List active group-scoped `LLM_Config` nodes
   (with `api_key` always masked; filterable by `tag`, `provider`, `group_id`).
 - `POST /api/v1/configurations/llm` — Register or overwrite a purpose-tagged
-  `LLM_Config` (archives prior version via `NOT_HAS_LLM_CONFIG`) and assign it to
+  `LLM_Config` (archives prior version via `NOT_HAS_LLM_CONFIG`) and assign it
+  to
   a sponsoring `Group` (defaults to `'GoSmart Health'`; admin only).
-- `GET /api/v1/configurations/llm/{id}` / `PUT /api/v1/configurations/llm/{id}` —
+- `GET /api/v1/configurations/llm/{id}` /
+  `PUT /api/v1/configurations/llm/{id}` —
   Retrieve or update an `LLM_Config` (admin required for updates).
-- `POST /api/v1/configurations/llm/{id}/assign` / `DELETE /api/v1/configurations/llm/{id}/groups/{group_id}` —
-  Assign a sponsoring `Group` or soft-dissociate (`NOT_HAS_LLM_CONFIG`) (admin only).
-- `DELETE /api/v1/configurations/llm/{id}` / `POST /api/v1/configurations/llm/{id}/restore` —
+- `POST /api/v1/configurations/llm/{id}/assign` /
+  `DELETE /api/v1/configurations/llm/{id}/groups/{group_id}` —
+  Assign a sponsoring `Group` or soft-dissociate (`NOT_HAS_LLM_CONFIG`) (admin
+  only).
+- `DELETE /api/v1/configurations/llm/{id}` /
+  `POST /api/v1/configurations/llm/{id}/restore` —
   Soft/hard delete or restore an `LLM_Config` (admin only).
 
 #### Dynamic SCP Lifecycle & Presentation Context Enforcement:
@@ -566,9 +573,11 @@ generate the API key.
 > direct Neo4j database ports are **strictly access-controlled and hardened**.
 >
 > Direct shell access to the host/container or write access to environment
-> variables enables out-of-band administrative privileges (such as password resets
+> variables enables out-of-band administrative privileges (such as password
+resets
 > via CLI or `FORCE_ADMIN_PASSWORD_RESET`). Ensure that only authorized
-> infrastructure administrators have shell, SSH, container exec, or configuration
+> infrastructure administrators have shell, SSH, container exec, or
+> configuration
 > management access to the host environment.
 
 ### 1. Automated Superuser Bootstrapping
@@ -860,7 +869,8 @@ uv run pytest tests/unit --verbose
 ```
 
 Run integration tests locally with Neo4j configured and running. These tests
-use `test_id` values to isolate their data and retain post-run data for inspection:
+use `test_id` values to isolate their data and retain post-run data for
+inspection:
 
 ```bash
 uv run pytest tests/integration --verbose
@@ -932,25 +942,36 @@ These tools include:
 - **Neo4J**: A database for testing your GoSmart implementation. We use Neo4j
   Aura Free account but
   you can also host a Neo4j community server with a Docker.
+- **LLM Server**: You can host Open-Weight LLM servers locally, especially for
+  the Embedding models are small. We use Google's GenKit and it can access
+  local Ollama or frontier model services in the cloud.
 
 For additional information about our tools, please
 visit [GoSmart Health Products Page](https://gosmart.health/products/).
+
+Here is the diagram of service components and how we configure the port numbers
+in our test setup. The LLM models we have selected works with under 6GB of
+Graphic memory.
+
+GoSmart FHIR plug-in service (provided to out Professional clients) can connect
+directly to commercial EHR like EPIC
+and Redox via JWKS the `oAuth2` authentication over encrypted channels.
 
 **NOTE** If you cannot view the `mermaid` drawings on VS Code, try
 `Markdown Preview Enhanced` plug-in.
 
 ```mermaid
-flowchart LR
+flowchart TD
     n2["GoSmart Mock Server<br>API: 8000<br>DICOM:11114<br>GOSMART_SCP"] -- REST 8088 --> n3["FHIR PLUGIN<br>API: 8088"]
-    n2 -- " REST/FHIR 8087 " --> n4["HAPI FHIR Server<br>Remote:8087"]
+    n2 -- REST/FHIR 8087 --> n4["HAPI FHIR Server<br>Remote:8087"]
     n1["GoSmart Graph PACS<br>API:8086<br>DICOM: 11112<br>GOSMART_GS"] -- REST 8088 --> n3
     n2 -- " DCM C-STORE 11112 " --> n1
     n3 --> n4
-    n2 <--> n5["PACS Viewer"]
-    n2 --> n6["Neo4J<br>7687"]
+    n2 <-- " 11114&lt;-/-&gt;11113 " --> n5["PACS Viewer"]
+    n2 -- 7687 --> n6["Neo4J<br>7687"]
+    n1 -- 11434 --> n7["LLM (Ollama)<br>Embedding<br>nomic-embed-text:latest"] & n8["LLM (Ollama)<br>Gnerator<br>Gemma:e2b"]
     n2@{ shape: rounded}
     n1@{ shape: rounded}
-    linkStyle default stroke: #00C853
 ```
 
 ### FHIR Process Sequence Diagram
