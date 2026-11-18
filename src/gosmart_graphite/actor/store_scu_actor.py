@@ -142,7 +142,7 @@ class DicomStoreWorkerActor(pykka.ThreadingActor):
         destination_aet = message.get("destination_aet")
         host = message.get("host")
         port = message.get("port")
-        calling_aet = message.get("calling_aet") or getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS")
+        calling_aet = message.get("calling_aet") or getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GRAPHITE")
         raw_instances = message.get("instances") or []
         test_id = message.get("test_id")
         acted_by = message.get("acted_by") or f"actor:worker_{self.worker_id}"

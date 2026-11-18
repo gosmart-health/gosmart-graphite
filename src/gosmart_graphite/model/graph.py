@@ -376,11 +376,11 @@ class TransferStatusNode(AuditableNode):
 
     __label__: ClassVar[str] = "TransferStatus"
 
-    sender: str = Field(..., description="Sender AE Title (e.g. GOSMART_GS or remote SCU)")
+    sender: str = Field(..., description="Sender AE Title (e.g. GOSMART_GRAPHITE or remote SCU)")
     recipient: str = Field(
         ...,
         validation_alias=AliasChoices("recipient", "recepient"),
-        description="Recipient AE Title (e.g. MDICOM or GOSMART_GS)",
+        description="Recipient AE Title (e.g. MDICOM or GOSMART_GRAPHITE)",
     )
     objectRef: str = Field(..., description="The URI of the raw DICOM object")
     transferTimeMs: int = Field(default=0, description="Transfer duration in milliseconds")

@@ -226,12 +226,12 @@ Configured via environment variables or `.env`:
 | `GOSMART_GS_LOG_LEVEL`                       | `INFO`                               | Server logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)                                                       |
 | `GOSMART_GS_LOG_FORMAT`                      | `json`                               | Console log format (`json` or `console`)                                                                           |
 | `GOSMART_GS_LOG_DIR`                         | `./logs`                             | Directory for rotating log files                                                                                   |
-| `GOSMART_GS_LOG_FILE`                        | `gosmart_gs.log`                     | Base name for log file                                                                                             |
+| `GOSMART_GS_LOG_FILE`                        | `GOSMART_GRAPHITE.log`                     | Base name for log file                                                                                             |
 | `GOSMART_GS_LOG_ROTATION_DAYS`               | `7`                                  | Auto-rotate log files every N days                                                                                 |
 | `GOSMART_GS_LOG_BACKUP_COUNT`                | `8`                                  | Number of rotated backup files to keep                                                                             |
 | `GOSMART_GS_LOG_TO_FILE`                     | `true`                               | Enable rotating file logging                                                                                       |
 | **DICOM Network**                            |                                      |                                                                                                                    |
-| `GOSMART_GS_DICOM_AE_TITLE`                  | `GOSMART_GS`                         | Local DICOM Application Entity Title                                                                               |
+| `GOSMART_GS_DICOM_AE_TITLE`                  | `GOSMART_GRAPHITE`                         | Local DICOM Application Entity Title                                                                               |
 | `GOSMART_GS_DICOM_SCP_PORT`                  | `11112`                              | DICOM C-STORE / C-ECHO SCP Port                                                                                    |
 | `GOSMART_GS_DICOM_MAX_PDU`                   | `16382`                              | Maximum PDU length in bytes                                                                                        |
 | **Authentication & Security**                |                                      |                                                                                                                    |
@@ -343,7 +343,7 @@ This starts:
 - **MCP StreamableHTTP**: [http://localhost:8086/mcp](http://localhost:8086/mcp)
 - **MCP SSE**: [http://localhost:8086/sse](http://localhost:8086/sse)
 - **Neo4j Browser**: [http://localhost:7474](http://localhost:7474)
-- **DICOM SCP**: `GOSMART_GS@localhost:11112`
+- **DICOM SCP**: `GOSMART_GRAPHITE@localhost:11112`
 
 **Named Volumes (persistent data):**
 
@@ -964,7 +964,8 @@ and Redox via JWKS the `oAuth2` authentication over encrypted channels.
 flowchart TD
     n2["GoSmart Mock Server<br>API: 8000<br>DICOM:11114<br>GOSMART_SCP"] -- REST 8088 --> n3["FHIR PLUGIN<br>API: 8088"]
     n2 -- REST/FHIR 8087 --> n4["HAPI FHIR Server<br>Remote:8087"]
-    n1["GoSmart Graph PACS<br>API:8086<br>DICOM: 11112<br>GOSMART_GS"] -- REST 8088 --> n3
+    n1["GoSmart Graph PACS<br>API:8086<br>DICOM: 11112<br>GOSMART_GRAPHITE"] -- 
+REST 8088 --> n3
     n2 -- " DCM C-STORE 11112 " --> n1
     n3 --> n4
     n2 <-- " 11114&lt;-/-&gt;11113 " --> n5["PACS Viewer"]

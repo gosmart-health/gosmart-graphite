@@ -45,7 +45,7 @@ def start(
             f"[bold green]Starting Gosmart.Health GRAPHITE[/bold green]\n"
             f"• HTTP & OpenAPI: [cyan]http://{bind_host}:{bind_port}/docs[/cyan]\n"
             f"• MCP SSE Endpoint: [cyan]http://{bind_host}:{bind_port}/mcp/sse[/cyan]\n"
-            f"• DICOM C-STORE SCP: [cyan]{getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GS')}@"
+            f"• DICOM C-STORE SCP: [cyan]{getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GRAPHITE')}@"
             f"{getattr(settings, 'DICOM_SCP_HOST', '0.0.0.0')}:{getattr(settings, 'DICOM_SCP_PORT', 11112)}[/cyan]\n"
             f"• Storage Root: [yellow]{settings.STORAGE_ROOT_URI}[/yellow]\n"
             f"• Neo4j Connection: [magenta]{settings.DB_CONNECTION_URI}[/magenta]\n"
@@ -111,7 +111,7 @@ def health():
     )
     table.add_row(
         "DICOM C-STORE SCP",
-        f"[green]CONFIGURED ({getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GS')})[/green]",
+        f"[green]CONFIGURED ({getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GRAPHITE')})[/green]",
         f"Port: {getattr(settings, 'DICOM_SCP_PORT', 11112)} (Host: {getattr(settings, 'DICOM_SCP_HOST', '0.0.0.0')})",
     )
     table.add_row(

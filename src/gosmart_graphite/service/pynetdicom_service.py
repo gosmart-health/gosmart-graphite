@@ -622,7 +622,7 @@ class PyNetDicomService:
         """Backward-compatible helper to start an ad-hoc or default SCP server."""
         bind_host = host or getattr(self.settings, "DICOM_SCP_HOST", "0.0.0.0")
         bind_port = port or getattr(self.settings, "DICOM_SCP_PORT", 11112)
-        bind_aet = ae_title or getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS")
+        bind_aet = ae_title or getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GRAPHITE")
 
         cfg = {
             "id": f"server_{bind_host}_{bind_port}",
@@ -750,7 +750,7 @@ class PyNetDicomService:
         acceptor = getattr(assoc, "acceptor", None)
         server_ip = getattr(acceptor, "address", getattr(self.settings, "DICOM_SCP_HOST", "0.0.0.0"))
         server_port = getattr(acceptor, "port", getattr(self.settings, "DICOM_SCP_PORT", 11112))
-        called_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS"))
+        called_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GRAPHITE"))
 
         # 3. FIRST ORDER OF ACTION: Blackbox Recording
         try:
@@ -928,7 +928,7 @@ class PyNetDicomService:
         or a list of accessible Group IDs (empty list if unmapped/unauthorized).
         """
         norm_aet = (calling_aet or "").strip()
-        if norm_aet in ("*", "GOSMART_GS", "ADMIN", "SUPERUSER", "ANONYMOUS") or norm_aet.startswith("TEST_"):
+        if norm_aet in ("*", "GOSMART_GRAPHITE", "ADMIN", "SUPERUSER", "ANONYMOUS") or norm_aet.startswith("TEST_"):
             return None
         try:
             effective_groups = group_service.get_effective_accessible_groups_for_ae_sync(norm_aet)

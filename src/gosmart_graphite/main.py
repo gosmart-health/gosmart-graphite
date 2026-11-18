@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if not active_configs:
                 scp_host = getattr(settings, "DICOM_SCP_HOST", "0.0.0.0")
                 scp_port = getattr(settings, "DICOM_SCP_PORT", 11112)
-                scp_aet = getattr(settings, "DICOM_AE_TITLE", "GOSMART_GS")
+                scp_aet = getattr(settings, "DICOM_AE_TITLE", "GOSMART_GRAPHITE")
                 active_configs = [
                     {
                         "id": f"default_scp_{scp_port}",

@@ -196,7 +196,7 @@ class Settings(BaseSettings):
     )
 
     # DICOM Network (pynetdicom) Settings
-    DICOM_AE_TITLE: str = Field(default="GOSMART_GS", description="Application Entity Title")
+    DICOM_AE_TITLE: str = Field(default="GOSMART_GRAPHITE", description="Application Entity Title")
     DICOM_SCP_PORT: int = Field(default=11112, description="DICOM C-STORE/C-ECHO SCP Port")
     DICOM_MAX_PDU: int = Field(default=16382, description="Maximum PDU length in bytes")
 
