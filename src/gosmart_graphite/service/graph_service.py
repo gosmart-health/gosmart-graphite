@@ -250,147 +250,50 @@ class GraphService:
         self.client = client or neo4j_client
         self._constraints_initialized: bool = False
 
-    async def save_hierarchy(self, hierarchy: DicomHierarchy) -> Dict[str, Any]:
-        """Save a DICOM hierarchy asynchronously into Neo4j."""
-        if not self._constraints_initialized:
-            await self.init_schema_constraints()
+    @staticmethod
+    def _prepare_audit_log_params(node: AuditNode) -> Dict[str, Any]:
+        """Format AuditNode attributes for Cypher persistence."""
+        params = {
+            "id": node.id,
+            "action": node.action,
+            "statusCode": node.statusCode,
+            "statusMessage": node.statusMessage,
+            "severity": node.severity,
+            "actorId": node.actorId,
+            "actor": node.actor,
+            "targetId": node.targetId,
+            "target": node.target,
+            "result": node.result,
+            "details": node.details,
+            "event_id": node.event_id,
+            "test_id": node.test_id,
+            "Action": node.Action,
+            "ActedBy": node.ActedBy,
+            "ExpiresAt": node.ExpiresAt.isoformat() if node.ExpiresAt else None,
+        }
+        return params
 
-        params = _prepare_hierarchy_params(hierarchy)
-        records = await self.client.execute_query(INGEST_CYPHER, params)
-        if records:
-            return records[0]
-        return {}
-
-    def save_hierarchy_sync(self, hierarchy: DicomHierarchy) -> Dict[str, Any]:
-        """Save a DICOM hierarchy synchronously into Neo4j (used by Pykka actors)."""
-        params = _prepare_hierarchy_params(hierarchy)
-        driver = self.client.get_sync_driver()
-        with driver.session(database=self.client.settings.DB_DATABASE) as session:
-            result = session.run(INGEST_CYPHER, params)
-            record = result.single()
-            return record.data() if record else {}
-
-    async def soft_delete_relationship(
-        self,
-        start_node_id: str,
-        end_node_id: str,
-        rel_type: str,
-        acted_by: str = "system",
-    ) -> Optional[Dict[str, Any]]:
-        """Atomically swap positive relationship to NOT_<rel_type> under a write transaction, cloning properties."""
-        pos_type = to_positive_relation_type(rel_type)
-        neg_type = to_negated_relation_type(rel_type)
-        new_rel_id = generate_deterministic_id(
-            {"start_node_id": start_node_id, "type": neg_type, "end_node_id": end_node_id}
-        )
-
-        query = f"""
-        MATCH (a {{id: $start_node_id}})-[r:{pos_type}]->(b {{id: $end_node_id}})
-        WITH a, b, r, properties(r) AS old_props
-        CREATE (a)-[r_not:{neg_type}]->(b)
-        SET r_not = old_props,
-            r_not.id = $new_rel_id,
-            r_not.Action = "DELETE",
-            r_not.ActedAt = datetime({{timezone: 'UTC'}}),
-            r_not.ActedBy = $acted_by
-        DELETE r
-        RETURN properties(r_not) AS r_not
-        """
-
-        async def _swap_tx(tx: Any) -> Optional[Dict[str, Any]]:
-            res = await tx.run(
-                query,
-                start_node_id=start_node_id,
-                end_node_id=end_node_id,
-                new_rel_id=new_rel_id,
-                acted_by=acted_by,
-            )
-            record = await res.single()
-            if not record:
-                return None
-            data = record.data()
-            return data.get("r_not", data)
-
-        return await self.client.execute_write_tx(_swap_tx)
-
-    async def restore_relationship(
-        self,
-        start_node_id: str,
-        end_node_id: str,
-        rel_type: str,
-        acted_by: str = "system",
-    ) -> Optional[Dict[str, Any]]:
-        """Atomically swap negated NOT_<rel_type> relationship back to positive under a write transaction."""
-        pos_type = to_positive_relation_type(rel_type)
-        neg_type = to_negated_relation_type(rel_type)
-        new_rel_id = generate_deterministic_id(
-            {"start_node_id": start_node_id, "type": pos_type, "end_node_id": end_node_id}
-        )
-
-        query = f"""
-        MATCH (a {{id: $start_node_id}})-[r:{neg_type}]->(b {{id: $end_node_id}})
-        WITH a, b, r, properties(r) AS old_props
-        CREATE (a)-[r_pos:{pos_type}]->(b)
-        SET r_pos = old_props,
-            r_pos.id = $new_rel_id,
-            r_pos.Action = "RESTORE",
-            r_pos.ActedAt = datetime({{timezone: 'UTC'}}),
-            r_pos.ActedBy = $acted_by
-        DELETE r
-        RETURN properties(r_pos) AS r_pos
-        """
-
-        async def _restore_tx(tx: Any) -> Optional[Dict[str, Any]]:
-            res = await tx.run(
-                query,
-                start_node_id=start_node_id,
-                end_node_id=end_node_id,
-                new_rel_id=new_rel_id,
-                acted_by=acted_by,
-            )
-            record = await res.single()
-            if not record:
-                return None
-            data = record.data()
-            return data.get("r_pos", data)
-
-        return await self.client.execute_write_tx(_restore_tx)
-
-    async def soft_delete_node(
-        self,
-        node_id: str,
-        acted_by: str = "system",
-    ) -> Optional[Dict[str, Any]]:
-        """Soft-delete a node by updating Action='DELETE', ActedAt, and ActedBy."""
-        query = """
-        MATCH (n {id: $node_id})
-        SET n.Action = "DELETE",
-            n.ActedAt = datetime({timezone: 'UTC'}),
-            n.ActedBy = $acted_by
-        RETURN properties(n) AS n
-        """
-        records = await self.client.execute_query(query, {"node_id": node_id, "acted_by": acted_by})
-        if records:
-            return records[0].get("n", records[0])
-        return None
-
-    async def restore_node(
-        self,
-        node_id: str,
-        acted_by: str = "system",
-    ) -> Optional[Dict[str, Any]]:
-        """Restore a soft-deleted node by updating Action='RESTORE', ActedAt, and ActedBy."""
-        query = """
-        MATCH (n {id: $node_id})
-        SET n.Action = "RESTORE",
-            n.ActedAt = datetime({timezone: 'UTC'}),
-            n.ActedBy = $acted_by
-        RETURN properties(n) AS n
-        """
-        records = await self.client.execute_query(query, {"node_id": node_id, "acted_by": acted_by})
-        if records:
-            return records[0].get("n", records[0])
-        return None
+    @staticmethod
+    def _prepare_transfer_status_params(node: TransferStatusNode) -> Dict[str, Any]:
+        """Format TransferStatusNode attributes for Cypher persistence."""
+        params = {
+            "id": node.id,
+            "sender": node.sender,
+            "recipient": node.recipient,
+            "objectRef": node.objectRef,
+            "transferTimeMs": node.transferTimeMs,
+            "transferBytes": node.transferBytes,
+            "statusCode": node.statusCode,
+            "statusMessage": node.statusMessage,
+            "sop_instance_uid": node.sop_instance_uid,
+            "direction": node.direction,
+            "service_type": node.service_type,
+            "test_id": node.test_id,
+            "Action": node.Action,
+            "ActedBy": node.ActedBy,
+            "ExpiresAt": node.ExpiresAt.isoformat() if node.ExpiresAt else None,
+        }
+        return params
 
     async def cleanup_test_data(self, test_id: str) -> int:
         """Detach and delete all nodes and associated relationships tagged with test_id."""
@@ -423,41 +326,177 @@ class GraphService:
             logger.warning("cleanup_test_data_sync_failed", error=str(e))
             return 0
 
-    async def list_patients(
+    async def execute_custom_query(
         self,
-        limit: int = 50,
-        include_tests: bool = False,
-        test_id: Optional[str] = None,
+        query: str,
+        parameters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """List patients with study counts, omitting deleted and expired nodes, and filtering test data."""
+        """Execute an arbitrary read or write Cypher query."""
+        return await self.client.execute_query(query, parameters or {})
+
+    def find_destination_ae_sync(self, ae_title: str) -> Optional[Dict[str, Any]]:
+        """Look up destination AE connection parameters from active DICOMConfiguration nodes."""
+        query = """
+        MATCH (c:DICOMConfiguration)
+        WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
+          AND c.ae_title = $ae_title
+        RETURN c.host AS host, c.port AS port, c.ae_title AS ae_title
+        LIMIT 1
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, ae_title=ae_title.strip())
+                record = result.single()
+                if record:
+                    return record.data()
+        except Exception as e:
+            logger.warning("find_destination_ae_failed", ae_title=ae_title, error=str(e))
+        return None
+
+    def find_instances_for_retrieve_sync(
+        self,
+        patient_id: Optional[str] = None,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        sop_uid: Optional[str] = None,
+        include_tests: bool = True,
+        test_id: Optional[str] = None,
+        accessible_group_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Synchronously retrieve instance records and storage URIs for C-MOVE and C-GET."""
+        query = """
+        MATCH (p:Patient)-[:HAS_STUDY]->(s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($patient_id IS NULL OR $patient_id = '' OR p.patient_id = $patient_id)
+          AND ($study_uid IS NULL OR $study_uid = '' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR $sop_uid = '' OR i.sop_instance_uid = $sop_uid)
+          AND (
+            $include_tests = true
+            OR i.test_id IS NULL
+            OR i.test_id = ''
+            OR ($test_id IS NOT NULL AND i.test_id = $test_id)
+          )
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(g_p:Group)
+          WHERE (g_p.Action IS NULL OR g_p.Action <> 'DELETE')
+        WITH p, s, se, i, g_s, g_p
+        WHERE (
+            $accessible_group_ids IS NULL
+            OR g_s.id IN $accessible_group_ids
+            OR g_p.id IN $accessible_group_ids
+          )
+        RETURN i.sop_instance_uid AS sop_instance_uid,
+               i.sop_class_uid AS sop_class_uid,
+               i.transfer_syntax_uid AS transfer_syntax_uid,
+               i.storage_uri AS storage_uri
+        ORDER BY i.instance_number ASC, i.sop_instance_uid ASC
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(
+                    query,
+                    patient_id=patient_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                    sop_uid=sop_uid,
+                    include_tests=include_tests,
+                    test_id=test_id,
+                    accessible_group_ids=accessible_group_ids,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_find_instances_failed", error=str(e), exc_info=True)
+            return []
+
+    def find_patient_records_sync(
+        self,
+        patient_id: Optional[str] = None,
+        patient_name: Optional[str] = None,
+        include_tests: bool = True,
+        test_id: Optional[str] = None,
+        accessible_group_ids: Optional[List[str]] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronous search for Patient Root C-FIND queries."""
         query = """
         MATCH (p:Patient)
-        WHERE ($include_tests = true OR p.test_id IS NULL OR p.test_id = '')
-          AND ($test_id IS NULL OR p.test_id = $test_id)
-          AND (p.Action IS NULL OR p.Action <> 'DELETE')
+        WHERE (p.Action IS NULL OR p.Action <> 'DELETE')
           AND (p.ExpiresAt IS NULL OR p.ExpiresAt > datetime({timezone: 'UTC'}))
-        OPTIONAL MATCH (p)-[:HAS_STUDY]->(s:Study)
-        WHERE (s.Action IS NULL OR s.Action <> 'DELETE')
-          AND (s.ExpiresAt IS NULL OR s.ExpiresAt > datetime({timezone: 'UTC'}))
-        RETURN p.id AS id,
-               p.patient_id AS patient_id,
+          AND (
+            $patient_id IS NULL OR $patient_id = '' OR $patient_id = '*'
+            OR p.patient_id = $patient_id OR toLower(p.patient_id) CONTAINS toLower(replace($patient_id, '*', ''))
+          )
+          AND (
+            $patient_name IS NULL OR $patient_name = '' OR $patient_name = '*'
+            OR p.patient_name = $patient_name
+            OR toLower(p.patient_name) CONTAINS toLower(replace($patient_name, '*', ''))
+          )
+          AND (
+            $include_tests = true
+            OR p.test_id IS NULL
+            OR p.test_id = ''
+            OR ($test_id IS NOT NULL AND p.test_id = $test_id)
+          )
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(g_p:Group)
+          WHERE (g_p.Action IS NULL OR g_p.Action <> 'DELETE')
+        WITH p, g_p
+        WHERE ($accessible_group_ids IS NULL OR g_p.id IN $accessible_group_ids)
+        RETURN p.patient_id AS patient_id,
                p.patient_name AS patient_name,
                p.patient_birth_date AS patient_birth_date,
-               p.patient_sex AS patient_sex,
-               p.test_id AS test_id,
-               p.Action AS Action,
-               p.ActedAt AS ActedAt,
-               p.ActedBy AS ActedBy,
-               p.CreatedAt AS CreatedAt,
-               p.ExpiresAt AS ExpiresAt,
-               count(s) AS study_count
-        ORDER BY p.patient_id
+               p.patient_sex AS patient_sex
+        ORDER BY p.patient_id ASC
         LIMIT $limit
         """
-        return await self.client.execute_query(
-            query,
-            {"limit": limit, "include_tests": include_tests, "test_id": test_id},
-        )
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(
+                    query,
+                    patient_id=patient_id,
+                    patient_name=patient_name,
+                    include_tests=include_tests,
+                    test_id=test_id,
+                    accessible_group_ids=accessible_group_ids,
+                    limit=limit,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_find_patients_failed", error=str(e), exc_info=True)
+            return []
+
+    def get_instance_storage_uri_sync(
+        self,
+        sop_uid: str,
+        accessible_group_ids: Optional[List[str]] = None,
+    ) -> Optional[str]:
+        """Resolve storage URI for an instance synchronously from Neo4j."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance {sop_instance_uid: $sop_uid})
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        WITH s, se, i, g_s
+        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
+        RETURN i.storage_uri AS storage_uri
+        LIMIT 1
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, sop_uid=sop_uid, accessible_group_ids=accessible_group_ids)
+                record = result.single()
+                if record:
+                    return record.get("storage_uri")
+        except Exception as e:
+            logger.warning("graph_instance_storage_uri_failed", sop_uid=sop_uid, error=str(e))
+        return None
 
     async def get_patient_graph(
         self,
@@ -493,13 +532,63 @@ class GraphService:
             return records[0]
         return {}
 
-    async def execute_custom_query(
+    def get_series_storage_uris_sync(
         self,
-        query: str,
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Execute an arbitrary read or write Cypher query."""
-        return await self.client.execute_query(query, parameters or {})
+        study_uid: str,
+        series_uid: str,
+        accessible_group_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, str]]:
+        """Resolve all storage URIs for a series synchronously from Neo4j."""
+        query = """
+        MATCH (s:Study {study_instance_uid: $study_uid})
+              -[:HAS_SERIES]->(se:Series {series_instance_uid: $series_uid})
+              -[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        WITH s, se, i, g_s
+        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
+        RETURN i.sop_instance_uid AS sop_instance_uid, i.storage_uri AS storage_uri
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(
+                    query,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                    accessible_group_ids=accessible_group_ids,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_series_storage_uris_failed", study_uid=study_uid, series_uid=series_uid, error=str(e))
+        return []
+
+    def get_study_storage_uris_sync(
+        self,
+        study_uid: str,
+        accessible_group_ids: Optional[List[str]] = None,
+    ) -> List[Dict[str, str]]:
+        """Resolve all storage URIs for a study synchronously from Neo4j."""
+        query = """
+        MATCH (s:Study {study_instance_uid: $study_uid})-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        WITH s, se, i, g_s
+        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
+        RETURN i.sop_instance_uid AS sop_instance_uid, i.storage_uri AS storage_uri
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, study_uid=study_uid, accessible_group_ids=accessible_group_ids)
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("graph_study_storage_uris_failed", study_uid=study_uid, error=str(e))
+        return []
 
     async def init_schema_constraints(self, force: bool = False) -> None:
         """Create standard DICOM graph schema constraints & indexes in Neo4j."""
@@ -565,6 +654,598 @@ class GraphService:
 
         self._constraints_initialized = True
         logger.info("schema_constraints_verified", total_statements=len(constraints))
+
+    async def list_patients(
+        self,
+        limit: int = 50,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List patients with study counts, omitting deleted and expired nodes, and filtering test data."""
+        query = """
+        MATCH (p:Patient)
+        WHERE ($include_tests = true OR p.test_id IS NULL OR p.test_id = '')
+          AND ($test_id IS NULL OR p.test_id = $test_id)
+          AND (p.Action IS NULL OR p.Action <> 'DELETE')
+          AND (p.ExpiresAt IS NULL OR p.ExpiresAt > datetime({timezone: 'UTC'}))
+        OPTIONAL MATCH (p)-[:HAS_STUDY]->(s:Study)
+        WHERE (s.Action IS NULL OR s.Action <> 'DELETE')
+          AND (s.ExpiresAt IS NULL OR s.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN p.id AS id,
+               p.patient_id AS patient_id,
+               p.patient_name AS patient_name,
+               p.patient_birth_date AS patient_birth_date,
+               p.patient_sex AS patient_sex,
+               p.test_id AS test_id,
+               p.Action AS Action,
+               p.ActedAt AS ActedAt,
+               p.ActedBy AS ActedBy,
+               p.CreatedAt AS CreatedAt,
+               p.ExpiresAt AS ExpiresAt,
+               count(s) AS study_count
+        ORDER BY p.patient_id
+        LIMIT $limit
+        """
+        return await self.client.execute_query(
+            query,
+            {"limit": limit, "include_tests": include_tests, "test_id": test_id},
+        )
+
+    async def restore_node(
+        self,
+        node_id: str,
+        acted_by: str = "system",
+    ) -> Optional[Dict[str, Any]]:
+        """Restore a soft-deleted node by updating Action='RESTORE', ActedAt, and ActedBy."""
+        query = """
+        MATCH (n {id: $node_id})
+        SET n.Action = "RESTORE",
+            n.ActedAt = datetime({timezone: 'UTC'}),
+            n.ActedBy = $acted_by
+        RETURN properties(n) AS n
+        """
+        records = await self.client.execute_query(query, {"node_id": node_id, "acted_by": acted_by})
+        if records:
+            return records[0].get("n", records[0])
+        return None
+
+    async def restore_relationship(
+        self,
+        start_node_id: str,
+        end_node_id: str,
+        rel_type: str,
+        acted_by: str = "system",
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically swap negated NOT_<rel_type> relationship back to positive under a write transaction."""
+        pos_type = to_positive_relation_type(rel_type)
+        neg_type = to_negated_relation_type(rel_type)
+        new_rel_id = generate_deterministic_id(
+            {"start_node_id": start_node_id, "type": pos_type, "end_node_id": end_node_id}
+        )
+
+        query = f"""
+        MATCH (a {{id: $start_node_id}})-[r:{neg_type}]->(b {{id: $end_node_id}})
+        WITH a, b, r, properties(r) AS old_props
+        CREATE (a)-[r_pos:{pos_type}]->(b)
+        SET r_pos = old_props,
+            r_pos.id = $new_rel_id,
+            r_pos.Action = "RESTORE",
+            r_pos.ActedAt = datetime({{timezone: 'UTC'}}),
+            r_pos.ActedBy = $acted_by
+        DELETE r
+        RETURN properties(r_pos) AS r_pos
+        """
+
+        async def _restore_tx(tx: Any) -> Optional[Dict[str, Any]]:
+            res = await tx.run(
+                query,
+                start_node_id=start_node_id,
+                end_node_id=end_node_id,
+                new_rel_id=new_rel_id,
+                acted_by=acted_by,
+            )
+            record = await res.single()
+            if not record:
+                return None
+            data = record.data()
+            return data.get("r_pos", data)
+
+        return await self.client.execute_write_tx(_restore_tx)
+
+    async def save_audit_log(self, node: AuditNode) -> Dict[str, Any]:
+        """Asynchronously persist a standalone auditable AuditNode in Neo4j."""
+        query = """
+        CREATE (a:AuditLog {
+            id: $id,
+            action: $action,
+            statusCode: $statusCode,
+            statusMessage: $statusMessage,
+            severity: $severity,
+            actorId: $actorId,
+            actor: $actor,
+            targetId: $targetId,
+            target: $target,
+            result: $result,
+            details: $details,
+            event_id: $event_id,
+            test_id: $test_id,
+            Action: $Action,
+            ActedAt: datetime({timezone: 'UTC'}),
+            ActedBy: $ActedBy,
+            CreatedAt: datetime({timezone: 'UTC'}),
+            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
+                            THEN datetime($ExpiresAt)
+                            ELSE datetime({timezone: 'UTC'}) + duration({days: 365}) END
+        })
+        RETURN a.id AS id
+        """
+        params = self._prepare_audit_log_params(node)
+        try:
+            records = await self.client.execute_query(query, params)
+            if records:
+                return {"id": records[0].get("id", node.id), "success": True}
+            return {"id": node.id, "success": True}
+        except Exception as e:
+            logger.warning("save_audit_log_failed", error=str(e), exc_info=True)
+            return {"id": node.id, "success": False, "error": str(e)}
+
+    def save_audit_log_sync(self, node: AuditNode) -> Dict[str, Any]:
+        """Synchronously persist a standalone auditable AuditNode in Neo4j."""
+        query = """
+        CREATE (a:AuditLog {
+            id: $id,
+            action: $action,
+            statusCode: $statusCode,
+            statusMessage: $statusMessage,
+            severity: $severity,
+            actorId: $actorId,
+            actor: $actor,
+            targetId: $targetId,
+            target: $target,
+            result: $result,
+            details: $details,
+            event_id: $event_id,
+            test_id: $test_id,
+            Action: $Action,
+            ActedAt: datetime({timezone: 'UTC'}),
+            ActedBy: $ActedBy,
+            CreatedAt: datetime({timezone: 'UTC'}),
+            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
+                            THEN datetime($ExpiresAt)
+                            ELSE datetime({timezone: 'UTC'}) + duration({days: 365}) END
+        })
+        RETURN a.id AS id
+        """
+        params = self._prepare_audit_log_params(node)
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, **params)
+                record = result.single()
+                return {"id": record["id"] if record else node.id, "success": True}
+        except Exception as e:
+            logger.warning("save_audit_log_sync_failed", error=str(e), exc_info=True)
+            return {"id": node.id, "success": False, "error": str(e)}
+
+    async def save_hierarchy(self, hierarchy: DicomHierarchy) -> Dict[str, Any]:
+        """Save a DICOM hierarchy asynchronously into Neo4j."""
+        if not self._constraints_initialized:
+            await self.init_schema_constraints()
+
+        params = _prepare_hierarchy_params(hierarchy)
+        records = await self.client.execute_query(INGEST_CYPHER, params)
+        if records:
+            return records[0]
+        return {}
+
+    def save_hierarchy_sync(self, hierarchy: DicomHierarchy) -> Dict[str, Any]:
+        """Save a DICOM hierarchy synchronously into Neo4j (used by Pykka actors)."""
+        params = _prepare_hierarchy_params(hierarchy)
+        driver = self.client.get_sync_driver()
+        with driver.session(database=self.client.settings.DB_DATABASE) as session:
+            result = session.run(INGEST_CYPHER, params)
+            record = result.single()
+            return record.data() if record else {}
+
+    async def save_transfer_status(self, node: TransferStatusNode) -> Dict[str, Any]:
+        """Asynchronously persist a standalone auditable TransferStatusNode in Neo4j."""
+        query = """
+        CREATE (t:TransferStatus {
+            id: $id,
+            sender: $sender,
+            recipient: $recipient,
+            objectRef: $objectRef,
+            transferTimeMs: $transferTimeMs,
+            transferBytes: $transferBytes,
+            statusCode: $statusCode,
+            statusMessage: $statusMessage,
+            sop_instance_uid: $sop_instance_uid,
+            direction: $direction,
+            service_type: $service_type,
+            test_id: $test_id,
+            Action: $Action,
+            ActedAt: datetime({timezone: 'UTC'}),
+            ActedBy: $ActedBy,
+            CreatedAt: datetime({timezone: 'UTC'}),
+            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
+                            THEN datetime($ExpiresAt)
+                            ELSE datetime({timezone: 'UTC'}) + duration({days: 30}) END
+        })
+        RETURN t.id AS id
+        """
+        params = self._prepare_transfer_status_params(node)
+        try:
+            records = await self.client.execute_query(query, params)
+            if records:
+                return {"id": records[0].get("id", node.id), "success": True}
+            return {"id": node.id, "success": True}
+        except Exception as e:
+            logger.warning("save_transfer_status_failed", error=str(e), exc_info=True)
+            return {"id": node.id, "success": False, "error": str(e)}
+
+    def save_transfer_status_sync(self, node: TransferStatusNode) -> Dict[str, Any]:
+        """Synchronously persist a standalone auditable TransferStatusNode in Neo4j."""
+        query = """
+        CREATE (t:TransferStatus {
+            id: $id,
+            sender: $sender,
+            recipient: $recipient,
+            objectRef: $objectRef,
+            transferTimeMs: $transferTimeMs,
+            transferBytes: $transferBytes,
+            statusCode: $statusCode,
+            statusMessage: $statusMessage,
+            sop_instance_uid: $sop_instance_uid,
+            direction: $direction,
+            service_type: $service_type,
+            test_id: $test_id,
+            Action: $Action,
+            ActedAt: datetime({timezone: 'UTC'}),
+            ActedBy: $ActedBy,
+            CreatedAt: datetime({timezone: 'UTC'}),
+            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
+                            THEN datetime($ExpiresAt)
+                            ELSE datetime({timezone: 'UTC'}) + duration({days: 30}) END
+        })
+        RETURN t.id AS id
+        """
+        params = self._prepare_transfer_status_params(node)
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(query, **params)
+                record = result.single()
+                return {"id": record["id"] if record else node.id, "success": True}
+        except Exception as e:
+            logger.warning("save_transfer_status_sync_failed", error=str(e), exc_info=True)
+            return {"id": node.id, "success": False, "error": str(e)}
+
+    async def search_audit_logs(
+        self,
+        action: Optional[str] = None,
+        actor_id: Optional[str] = None,
+        target_id: Optional[str] = None,
+        severity: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Asynchronously search and retrieve AuditLog records from Neo4j."""
+        query = """
+        MATCH (a:AuditLog)
+        WHERE ($action IS NULL OR $action = '' OR a.action = $action)
+          AND ($actor_id IS NULL OR $actor_id = '' OR a.actorId = $actor_id)
+          AND ($target_id IS NULL OR $target_id = '' OR a.targetId = $target_id)
+          AND ($severity IS NULL OR $severity = '' OR a.severity = $severity)
+          AND (
+            CASE
+              WHEN $test_id IS NOT NULL AND $test_id <> '' THEN a.test_id = $test_id
+              WHEN $include_tests = true THEN true
+              ELSE (a.test_id IS NULL OR a.test_id = '')
+            END
+          )
+        RETURN a.id AS id,
+               a.action AS action,
+               a.statusCode AS statusCode,
+               a.statusMessage AS statusMessage,
+               a.severity AS severity,
+               a.actorId AS actorId,
+               a.actor AS actor,
+               a.targetId AS targetId,
+               a.target AS target,
+               a.result AS result,
+               a.details AS details,
+               a.test_id AS test_id,
+               toString(a.CreatedAt) AS created_at,
+               toString(a.ExpiresAt) AS expires_at
+        ORDER BY a.CreatedAt DESC
+        LIMIT $limit
+        """
+        return await self.client.execute_query(
+            query,
+            {
+                "action": action,
+                "actor_id": actor_id,
+                "target_id": target_id,
+                "severity": severity,
+                "include_tests": include_tests,
+                "test_id": test_id,
+                "limit": limit,
+            },
+        )
+
+    def search_audit_logs_sync(
+        self,
+        action: Optional[str] = None,
+        actor_id: Optional[str] = None,
+        target_id: Optional[str] = None,
+        severity: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronously search and retrieve AuditLog records from Neo4j."""
+        query = """
+        MATCH (a:AuditLog)
+        WHERE ($action IS NULL OR $action = '' OR a.action = $action)
+          AND ($actor_id IS NULL OR $actor_id = '' OR a.actorId = $actor_id)
+          AND ($target_id IS NULL OR $target_id = '' OR a.targetId = $target_id)
+          AND ($severity IS NULL OR $severity = '' OR a.severity = $severity)
+          AND (
+            CASE
+              WHEN $test_id IS NOT NULL AND $test_id <> '' THEN a.test_id = $test_id
+              WHEN $include_tests = true THEN true
+              ELSE (a.test_id IS NULL OR a.test_id = '')
+            END
+          )
+        RETURN a.id AS id,
+               a.action AS action,
+               a.statusCode AS statusCode,
+               a.statusMessage AS statusMessage,
+               a.severity AS severity,
+               a.actorId AS actorId,
+               a.actor AS actor,
+               a.targetId AS targetId,
+               a.target AS target,
+               a.result AS result,
+               a.details AS details,
+               a.test_id AS test_id,
+               toString(a.CreatedAt) AS created_at,
+               toString(a.ExpiresAt) AS expires_at
+        ORDER BY a.CreatedAt DESC
+        LIMIT $limit
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session() as session:
+                result = session.run(
+                    query,
+                    action=action,
+                    actor_id=actor_id,
+                    target_id=target_id,
+                    severity=severity,
+                    include_tests=include_tests,
+                    test_id=test_id,
+                    limit=limit,
+                )
+                return [record.data() for record in result]
+        except Exception as e:
+            logger.warning("search_audit_logs_sync_failed", error=str(e), exc_info=True)
+            return []
+
+    async def search_instances_qido(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        sop_uid: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        accessible_group_ids: Optional[List[str]] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """QIDO-RS: Search for instances."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR $sop_uid = '' OR $sop_uid = '*' OR i.sop_instance_uid = $sop_uid)
+          AND (
+            ($test_id IS NOT NULL AND $test_id <> '' AND i.test_id = $test_id)
+            OR (
+              ($test_id IS NULL OR $test_id = '')
+              AND ($include_tests = true OR i.test_id IS NULL OR i.test_id = '')
+            )
+          )
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        WITH s, se, i, g_s
+        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               i.sop_instance_uid AS sop_instance_uid,
+               i.sop_class_uid AS sop_class_uid,
+               i.instance_number AS instance_number,
+               i.storage_uri AS storage_uri
+        ORDER BY i.instance_number ASC
+        LIMIT $limit
+        """
+        return await self.client.execute_query(
+            query,
+            {
+                "study_uid": study_uid,
+                "series_uid": series_uid,
+                "sop_uid": sop_uid,
+                "accessible_group_ids": accessible_group_ids,
+                "include_tests": include_tests,
+                "test_id": test_id,
+                "limit": limit,
+            },
+        )
+
+    def search_instances_qido_sync(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        sop_uid: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        accessible_group_ids: Optional[List[str]] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronous QIDO-RS search for instances."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
+        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($sop_uid IS NULL OR $sop_uid = '' OR $sop_uid = '*' OR i.sop_instance_uid = $sop_uid)
+          AND (
+            ($test_id IS NOT NULL AND $test_id <> '' AND i.test_id = $test_id)
+            OR (
+              ($test_id IS NULL OR $test_id = '')
+              AND ($include_tests = true OR i.test_id IS NULL OR i.test_id = '')
+            )
+          )
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        WITH s, se, i, g_s
+        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               i.sop_instance_uid AS sop_instance_uid,
+               i.sop_class_uid AS sop_class_uid,
+               i.instance_number AS instance_number,
+               i.storage_uri AS storage_uri
+        ORDER BY i.instance_number ASC
+        LIMIT $limit
+        """
+        driver = self.client.get_sync_driver()
+        with driver.session() as session:
+            result = session.run(
+                query,
+                study_uid=study_uid,
+                series_uid=series_uid,
+                sop_uid=sop_uid,
+                accessible_group_ids=accessible_group_ids,
+                include_tests=include_tests,
+                test_id=test_id,
+                limit=limit,
+            )
+            return [record.data() for record in result]
+
+    async def search_series_qido(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        modality: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        accessible_group_ids: Optional[List[str]] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """QIDO-RS: Search for series with real instance counts via traversal."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
+        WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
+          AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($modality IS NULL OR $modality = '' OR $modality = '*' OR se.modality = $modality)
+          AND (
+            ($test_id IS NOT NULL AND $test_id <> '' AND se.test_id = $test_id)
+            OR (
+              ($test_id IS NULL OR $test_id = '')
+              AND ($include_tests = true OR se.test_id IS NULL OR se.test_id = '')
+            )
+          )
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        WITH s, se, g_s
+        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
+        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
+          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               se.series_number AS series_number,
+               se.modality AS modality,
+               se.series_description AS series_description,
+               se.body_part_examined AS body_part_examined,
+               count(distinct i) AS num_instances
+        ORDER BY se.series_number ASC
+        LIMIT $limit
+        """
+        return await self.client.execute_query(
+            query,
+            {
+                "study_uid": study_uid,
+                "series_uid": series_uid,
+                "modality": modality,
+                "accessible_group_ids": accessible_group_ids,
+                "include_tests": include_tests,
+                "test_id": test_id,
+                "limit": limit,
+            },
+        )
+
+    def search_series_qido_sync(
+        self,
+        study_uid: Optional[str] = None,
+        series_uid: Optional[str] = None,
+        modality: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
+        accessible_group_ids: Optional[List[str]] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Synchronous QIDO-RS search for series."""
+        query = """
+        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
+        WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
+          AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
+          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
+          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
+          AND ($modality IS NULL OR $modality = '' OR $modality = '*' OR se.modality = $modality)
+          AND (
+            ($test_id IS NOT NULL AND $test_id <> '' AND se.test_id = $test_id)
+            OR (
+              ($test_id IS NULL OR $test_id = '')
+              AND ($include_tests = true OR se.test_id IS NULL OR se.test_id = '')
+            )
+          )
+        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
+          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
+        WITH s, se, g_s
+        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
+        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
+          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
+            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
+        RETURN s.study_instance_uid AS study_instance_uid,
+               se.series_instance_uid AS series_instance_uid,
+               se.series_number AS series_number,
+               se.modality AS modality,
+               se.series_description AS series_description,
+               se.body_part_examined AS body_part_examined,
+               count(distinct i) AS num_instances
+        ORDER BY se.series_number ASC
+        LIMIT $limit
+        """
+        driver = self.client.get_sync_driver()
+        with driver.session() as session:
+            result = session.run(
+                query,
+                study_uid=study_uid,
+                series_uid=series_uid,
+                modality=modality,
+                accessible_group_ids=accessible_group_ids,
+                include_tests=include_tests,
+                test_id=test_id,
+                limit=limit,
+            )
+            return [record.data() for record in result]
 
     async def search_studies_qido(
         self,
@@ -717,747 +1398,66 @@ class GraphService:
             )
             return [record.data() for record in result]
 
-    async def search_series_qido(
+    async def soft_delete_node(
         self,
-        study_uid: Optional[str] = None,
-        series_uid: Optional[str] = None,
-        modality: Optional[str] = None,
-        include_tests: bool = False,
-        test_id: Optional[str] = None,
-        accessible_group_ids: Optional[List[str]] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """QIDO-RS: Search for series with real instance counts via traversal."""
+        node_id: str,
+        acted_by: str = "system",
+    ) -> Optional[Dict[str, Any]]:
+        """Soft-delete a node by updating Action='DELETE', ActedAt, and ActedBy."""
         query = """
-        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
-        WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
-          AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
-          AND ($modality IS NULL OR $modality = '' OR $modality = '*' OR se.modality = $modality)
-          AND (
-            ($test_id IS NOT NULL AND $test_id <> '' AND se.test_id = $test_id)
-            OR (
-              ($test_id IS NULL OR $test_id = '')
-              AND ($include_tests = true OR se.test_id IS NULL OR se.test_id = '')
-            )
-          )
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        WITH s, se, g_s
-        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
-        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
-          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-        RETURN s.study_instance_uid AS study_instance_uid,
-               se.series_instance_uid AS series_instance_uid,
-               se.series_number AS series_number,
-               se.modality AS modality,
-               se.series_description AS series_description,
-               se.body_part_examined AS body_part_examined,
-               count(distinct i) AS num_instances
-        ORDER BY se.series_number ASC
-        LIMIT $limit
+        MATCH (n {id: $node_id})
+        SET n.Action = "DELETE",
+            n.ActedAt = datetime({timezone: 'UTC'}),
+            n.ActedBy = $acted_by
+        RETURN properties(n) AS n
         """
-        return await self.client.execute_query(
-            query,
-            {
-                "study_uid": study_uid,
-                "series_uid": series_uid,
-                "modality": modality,
-                "accessible_group_ids": accessible_group_ids,
-                "include_tests": include_tests,
-                "test_id": test_id,
-                "limit": limit,
-            },
-        )
-
-    def search_series_qido_sync(
-        self,
-        study_uid: Optional[str] = None,
-        series_uid: Optional[str] = None,
-        modality: Optional[str] = None,
-        include_tests: bool = False,
-        test_id: Optional[str] = None,
-        accessible_group_ids: Optional[List[str]] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """Synchronous QIDO-RS search for series."""
-        query = """
-        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)
-        WHERE (se.Action IS NULL OR se.Action <> 'DELETE')
-          AND (se.ExpiresAt IS NULL OR se.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
-          AND ($modality IS NULL OR $modality = '' OR $modality = '*' OR se.modality = $modality)
-          AND (
-            ($test_id IS NOT NULL AND $test_id <> '' AND se.test_id = $test_id)
-            OR (
-              ($test_id IS NULL OR $test_id = '')
-              AND ($include_tests = true OR se.test_id IS NULL OR se.test_id = '')
-            )
-          )
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        WITH s, se, g_s
-        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
-        OPTIONAL MATCH (se)-[:HAS_INSTANCE]->(i:Instance)
-          WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-            AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-        RETURN s.study_instance_uid AS study_instance_uid,
-               se.series_instance_uid AS series_instance_uid,
-               se.series_number AS series_number,
-               se.modality AS modality,
-               se.series_description AS series_description,
-               se.body_part_examined AS body_part_examined,
-               count(distinct i) AS num_instances
-        ORDER BY se.series_number ASC
-        LIMIT $limit
-        """
-        driver = self.client.get_sync_driver()
-        with driver.session() as session:
-            result = session.run(
-                query,
-                study_uid=study_uid,
-                series_uid=series_uid,
-                modality=modality,
-                accessible_group_ids=accessible_group_ids,
-                include_tests=include_tests,
-                test_id=test_id,
-                limit=limit,
-            )
-            return [record.data() for record in result]
-
-    async def search_instances_qido(
-        self,
-        study_uid: Optional[str] = None,
-        series_uid: Optional[str] = None,
-        sop_uid: Optional[str] = None,
-        include_tests: bool = False,
-        test_id: Optional[str] = None,
-        accessible_group_ids: Optional[List[str]] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """QIDO-RS: Search for instances."""
-        query = """
-        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
-        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
-          AND ($sop_uid IS NULL OR $sop_uid = '' OR $sop_uid = '*' OR i.sop_instance_uid = $sop_uid)
-          AND (
-            ($test_id IS NOT NULL AND $test_id <> '' AND i.test_id = $test_id)
-            OR (
-              ($test_id IS NULL OR $test_id = '')
-              AND ($include_tests = true OR i.test_id IS NULL OR i.test_id = '')
-            )
-          )
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        WITH s, se, i, g_s
-        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
-        RETURN s.study_instance_uid AS study_instance_uid,
-               se.series_instance_uid AS series_instance_uid,
-               i.sop_instance_uid AS sop_instance_uid,
-               i.sop_class_uid AS sop_class_uid,
-               i.instance_number AS instance_number,
-               i.storage_uri AS storage_uri
-        ORDER BY i.instance_number ASC
-        LIMIT $limit
-        """
-        return await self.client.execute_query(
-            query,
-            {
-                "study_uid": study_uid,
-                "series_uid": series_uid,
-                "sop_uid": sop_uid,
-                "accessible_group_ids": accessible_group_ids,
-                "include_tests": include_tests,
-                "test_id": test_id,
-                "limit": limit,
-            },
-        )
-
-    def search_instances_qido_sync(
-        self,
-        study_uid: Optional[str] = None,
-        series_uid: Optional[str] = None,
-        sop_uid: Optional[str] = None,
-        include_tests: bool = False,
-        test_id: Optional[str] = None,
-        accessible_group_ids: Optional[List[str]] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """Synchronous QIDO-RS search for instances."""
-        query = """
-        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
-        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($study_uid IS NULL OR $study_uid = '' OR $study_uid = '*' OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR $series_uid = '' OR $series_uid = '*' OR se.series_instance_uid = $series_uid)
-          AND ($sop_uid IS NULL OR $sop_uid = '' OR $sop_uid = '*' OR i.sop_instance_uid = $sop_uid)
-          AND (
-            ($test_id IS NOT NULL AND $test_id <> '' AND i.test_id = $test_id)
-            OR (
-              ($test_id IS NULL OR $test_id = '')
-              AND ($include_tests = true OR i.test_id IS NULL OR i.test_id = '')
-            )
-          )
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        WITH s, se, i, g_s
-        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
-        RETURN s.study_instance_uid AS study_instance_uid,
-               se.series_instance_uid AS series_instance_uid,
-               i.sop_instance_uid AS sop_instance_uid,
-               i.sop_class_uid AS sop_class_uid,
-               i.instance_number AS instance_number,
-               i.storage_uri AS storage_uri
-        ORDER BY i.instance_number ASC
-        LIMIT $limit
-        """
-        driver = self.client.get_sync_driver()
-        with driver.session() as session:
-            result = session.run(
-                query,
-                study_uid=study_uid,
-                series_uid=series_uid,
-                sop_uid=sop_uid,
-                accessible_group_ids=accessible_group_ids,
-                include_tests=include_tests,
-                test_id=test_id,
-                limit=limit,
-            )
-            return [record.data() for record in result]
-
-    def get_instance_storage_uri_sync(
-        self,
-        sop_uid: str,
-        accessible_group_ids: Optional[List[str]] = None,
-    ) -> Optional[str]:
-        """Resolve storage URI for an instance synchronously from Neo4j."""
-        query = """
-        MATCH (s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance {sop_instance_uid: $sop_uid})
-        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        WITH s, se, i, g_s
-        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
-        RETURN i.storage_uri AS storage_uri
-        LIMIT 1
-        """
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(query, sop_uid=sop_uid, accessible_group_ids=accessible_group_ids)
-                record = result.single()
-                if record:
-                    return record.get("storage_uri")
-        except Exception as e:
-            logger.warning("graph_instance_storage_uri_failed", sop_uid=sop_uid, error=str(e))
+        records = await self.client.execute_query(query, {"node_id": node_id, "acted_by": acted_by})
+        if records:
+            return records[0].get("n", records[0])
         return None
 
-    def get_series_storage_uris_sync(
+    async def soft_delete_relationship(
         self,
-        study_uid: str,
-        series_uid: str,
-        accessible_group_ids: Optional[List[str]] = None,
-    ) -> List[Dict[str, str]]:
-        """Resolve all storage URIs for a series synchronously from Neo4j."""
-        query = """
-        MATCH (s:Study {study_instance_uid: $study_uid})
-              -[:HAS_SERIES]->(se:Series {series_instance_uid: $series_uid})
-              -[:HAS_INSTANCE]->(i:Instance)
-        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        WITH s, se, i, g_s
-        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
-        RETURN i.sop_instance_uid AS sop_instance_uid, i.storage_uri AS storage_uri
-        """
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(
-                    query,
-                    study_uid=study_uid,
-                    series_uid=series_uid,
-                    accessible_group_ids=accessible_group_ids,
-                )
-                return [record.data() for record in result]
-        except Exception as e:
-            logger.warning("graph_series_storage_uris_failed", study_uid=study_uid, series_uid=series_uid, error=str(e))
-        return []
-
-    def get_study_storage_uris_sync(
-        self,
-        study_uid: str,
-        accessible_group_ids: Optional[List[str]] = None,
-    ) -> List[Dict[str, str]]:
-        """Resolve all storage URIs for a study synchronously from Neo4j."""
-        query = """
-        MATCH (s:Study {study_instance_uid: $study_uid})-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
-        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        WITH s, se, i, g_s
-        WHERE ($accessible_group_ids IS NULL OR g_s.id IN $accessible_group_ids)
-        RETURN i.sop_instance_uid AS sop_instance_uid, i.storage_uri AS storage_uri
-        """
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(query, study_uid=study_uid, accessible_group_ids=accessible_group_ids)
-                return [record.data() for record in result]
-        except Exception as e:
-            logger.warning("graph_study_storage_uris_failed", study_uid=study_uid, error=str(e))
-        return []
-
-    def find_patient_records_sync(
-        self,
-        patient_id: Optional[str] = None,
-        patient_name: Optional[str] = None,
-        include_tests: bool = True,
-        test_id: Optional[str] = None,
-        accessible_group_ids: Optional[List[str]] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """Synchronous search for Patient Root C-FIND queries."""
-        query = """
-        MATCH (p:Patient)
-        WHERE (p.Action IS NULL OR p.Action <> 'DELETE')
-          AND (p.ExpiresAt IS NULL OR p.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND (
-            $patient_id IS NULL OR $patient_id = '' OR $patient_id = '*'
-            OR p.patient_id = $patient_id OR toLower(p.patient_id) CONTAINS toLower(replace($patient_id, '*', ''))
-          )
-          AND (
-            $patient_name IS NULL OR $patient_name = '' OR $patient_name = '*'
-            OR p.patient_name = $patient_name
-            OR toLower(p.patient_name) CONTAINS toLower(replace($patient_name, '*', ''))
-          )
-          AND (
-            $include_tests = true
-            OR p.test_id IS NULL
-            OR p.test_id = ''
-            OR ($test_id IS NOT NULL AND p.test_id = $test_id)
-          )
-        OPTIONAL MATCH (p)-[:BELONGS_TO]->(g_p:Group)
-          WHERE (g_p.Action IS NULL OR g_p.Action <> 'DELETE')
-        WITH p, g_p
-        WHERE ($accessible_group_ids IS NULL OR g_p.id IN $accessible_group_ids)
-        RETURN p.patient_id AS patient_id,
-               p.patient_name AS patient_name,
-               p.patient_birth_date AS patient_birth_date,
-               p.patient_sex AS patient_sex
-        ORDER BY p.patient_id ASC
-        LIMIT $limit
-        """
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(
-                    query,
-                    patient_id=patient_id,
-                    patient_name=patient_name,
-                    include_tests=include_tests,
-                    test_id=test_id,
-                    accessible_group_ids=accessible_group_ids,
-                    limit=limit,
-                )
-                return [record.data() for record in result]
-        except Exception as e:
-            logger.warning("graph_find_patients_failed", error=str(e), exc_info=True)
-            return []
-
-    def find_instances_for_retrieve_sync(
-        self,
-        patient_id: Optional[str] = None,
-        study_uid: Optional[str] = None,
-        series_uid: Optional[str] = None,
-        sop_uid: Optional[str] = None,
-        include_tests: bool = True,
-        test_id: Optional[str] = None,
-        accessible_group_ids: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
-        """Synchronously retrieve instance records and storage URIs for C-MOVE and C-GET."""
-        query = """
-        MATCH (p:Patient)-[:HAS_STUDY]->(s:Study)-[:HAS_SERIES]->(se:Series)-[:HAS_INSTANCE]->(i:Instance)
-        WHERE (i.Action IS NULL OR i.Action <> 'DELETE')
-          AND (i.ExpiresAt IS NULL OR i.ExpiresAt > datetime({timezone: 'UTC'}))
-          AND ($patient_id IS NULL OR $patient_id = '' OR p.patient_id = $patient_id)
-          AND ($study_uid IS NULL OR $study_uid = '' OR s.study_instance_uid = $study_uid)
-          AND ($series_uid IS NULL OR $series_uid = '' OR se.series_instance_uid = $series_uid)
-          AND ($sop_uid IS NULL OR $sop_uid = '' OR i.sop_instance_uid = $sop_uid)
-          AND (
-            $include_tests = true
-            OR i.test_id IS NULL
-            OR i.test_id = ''
-            OR ($test_id IS NOT NULL AND i.test_id = $test_id)
-          )
-        OPTIONAL MATCH (s)-[:PERFORMED_AT]->(g_s:Group)
-          WHERE (g_s.Action IS NULL OR g_s.Action <> 'DELETE')
-        OPTIONAL MATCH (p)-[:BELONGS_TO]->(g_p:Group)
-          WHERE (g_p.Action IS NULL OR g_p.Action <> 'DELETE')
-        WITH p, s, se, i, g_s, g_p
-        WHERE (
-            $accessible_group_ids IS NULL
-            OR g_s.id IN $accessible_group_ids
-            OR g_p.id IN $accessible_group_ids
-          )
-        RETURN i.sop_instance_uid AS sop_instance_uid,
-               i.sop_class_uid AS sop_class_uid,
-               i.transfer_syntax_uid AS transfer_syntax_uid,
-               i.storage_uri AS storage_uri
-        ORDER BY i.instance_number ASC, i.sop_instance_uid ASC
-        """
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(
-                    query,
-                    patient_id=patient_id,
-                    study_uid=study_uid,
-                    series_uid=series_uid,
-                    sop_uid=sop_uid,
-                    include_tests=include_tests,
-                    test_id=test_id,
-                    accessible_group_ids=accessible_group_ids,
-                )
-                return [record.data() for record in result]
-        except Exception as e:
-            logger.warning("graph_find_instances_failed", error=str(e), exc_info=True)
-            return []
-
-    def find_destination_ae_sync(self, ae_title: str) -> Optional[Dict[str, Any]]:
-        """Look up destination AE connection parameters from active DICOMConfiguration nodes."""
-        query = """
-        MATCH (c:DICOMConfiguration)
-        WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
-          AND c.ae_title = $ae_title
-        RETURN c.host AS host, c.port AS port, c.ae_title AS ae_title
-        LIMIT 1
-        """
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(query, ae_title=ae_title.strip())
-                record = result.single()
-                if record:
-                    return record.data()
-        except Exception as e:
-            logger.warning("find_destination_ae_failed", ae_title=ae_title, error=str(e))
-        return None
-
-    @staticmethod
-    def _prepare_transfer_status_params(node: TransferStatusNode) -> Dict[str, Any]:
-        """Format TransferStatusNode attributes for Cypher persistence."""
-        params = {
-            "id": node.id,
-            "sender": node.sender,
-            "recipient": node.recipient,
-            "objectRef": node.objectRef,
-            "transferTimeMs": node.transferTimeMs,
-            "transferBytes": node.transferBytes,
-            "statusCode": node.statusCode,
-            "statusMessage": node.statusMessage,
-            "sop_instance_uid": node.sop_instance_uid,
-            "direction": node.direction,
-            "service_type": node.service_type,
-            "test_id": node.test_id,
-            "Action": node.Action,
-            "ActedBy": node.ActedBy,
-            "ExpiresAt": node.ExpiresAt.isoformat() if node.ExpiresAt else None,
-        }
-        return params
-
-    async def save_transfer_status(self, node: TransferStatusNode) -> Dict[str, Any]:
-        """Asynchronously persist a standalone auditable TransferStatusNode in Neo4j."""
-        query = """
-        CREATE (t:TransferStatus {
-            id: $id,
-            sender: $sender,
-            recipient: $recipient,
-            objectRef: $objectRef,
-            transferTimeMs: $transferTimeMs,
-            transferBytes: $transferBytes,
-            statusCode: $statusCode,
-            statusMessage: $statusMessage,
-            sop_instance_uid: $sop_instance_uid,
-            direction: $direction,
-            service_type: $service_type,
-            test_id: $test_id,
-            Action: $Action,
-            ActedAt: datetime({timezone: 'UTC'}),
-            ActedBy: $ActedBy,
-            CreatedAt: datetime({timezone: 'UTC'}),
-            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
-                            THEN datetime($ExpiresAt)
-                            ELSE datetime({timezone: 'UTC'}) + duration({days: 30}) END
-        })
-        RETURN t.id AS id
-        """
-        params = self._prepare_transfer_status_params(node)
-        try:
-            records = await self.client.execute_query(query, params)
-            if records:
-                return {"id": records[0].get("id", node.id), "success": True}
-            return {"id": node.id, "success": True}
-        except Exception as e:
-            logger.warning("save_transfer_status_failed", error=str(e), exc_info=True)
-            return {"id": node.id, "success": False, "error": str(e)}
-
-    def save_transfer_status_sync(self, node: TransferStatusNode) -> Dict[str, Any]:
-        """Synchronously persist a standalone auditable TransferStatusNode in Neo4j."""
-        query = """
-        CREATE (t:TransferStatus {
-            id: $id,
-            sender: $sender,
-            recipient: $recipient,
-            objectRef: $objectRef,
-            transferTimeMs: $transferTimeMs,
-            transferBytes: $transferBytes,
-            statusCode: $statusCode,
-            statusMessage: $statusMessage,
-            sop_instance_uid: $sop_instance_uid,
-            direction: $direction,
-            service_type: $service_type,
-            test_id: $test_id,
-            Action: $Action,
-            ActedAt: datetime({timezone: 'UTC'}),
-            ActedBy: $ActedBy,
-            CreatedAt: datetime({timezone: 'UTC'}),
-            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
-                            THEN datetime($ExpiresAt)
-                            ELSE datetime({timezone: 'UTC'}) + duration({days: 30}) END
-        })
-        RETURN t.id AS id
-        """
-        params = self._prepare_transfer_status_params(node)
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(query, **params)
-                record = result.single()
-                return {"id": record["id"] if record else node.id, "success": True}
-        except Exception as e:
-            logger.warning("save_transfer_status_sync_failed", error=str(e), exc_info=True)
-            return {"id": node.id, "success": False, "error": str(e)}
-
-    @staticmethod
-    def _prepare_audit_log_params(node: AuditNode) -> Dict[str, Any]:
-        """Format AuditNode attributes for Cypher persistence."""
-        params = {
-            "id": node.id,
-            "action": node.action,
-            "statusCode": node.statusCode,
-            "statusMessage": node.statusMessage,
-            "severity": node.severity,
-            "actorId": node.actorId,
-            "actor": node.actor,
-            "targetId": node.targetId,
-            "target": node.target,
-            "result": node.result,
-            "details": node.details,
-            "event_id": node.event_id,
-            "test_id": node.test_id,
-            "Action": node.Action,
-            "ActedBy": node.ActedBy,
-            "ExpiresAt": node.ExpiresAt.isoformat() if node.ExpiresAt else None,
-        }
-        return params
-
-    async def save_audit_log(self, node: AuditNode) -> Dict[str, Any]:
-        """Asynchronously persist a standalone auditable AuditNode in Neo4j."""
-        query = """
-        CREATE (a:AuditLog {
-            id: $id,
-            action: $action,
-            statusCode: $statusCode,
-            statusMessage: $statusMessage,
-            severity: $severity,
-            actorId: $actorId,
-            actor: $actor,
-            targetId: $targetId,
-            target: $target,
-            result: $result,
-            details: $details,
-            event_id: $event_id,
-            test_id: $test_id,
-            Action: $Action,
-            ActedAt: datetime({timezone: 'UTC'}),
-            ActedBy: $ActedBy,
-            CreatedAt: datetime({timezone: 'UTC'}),
-            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
-                            THEN datetime($ExpiresAt)
-                            ELSE datetime({timezone: 'UTC'}) + duration({days: 365}) END
-        })
-        RETURN a.id AS id
-        """
-        params = self._prepare_audit_log_params(node)
-        try:
-            records = await self.client.execute_query(query, params)
-            if records:
-                return {"id": records[0].get("id", node.id), "success": True}
-            return {"id": node.id, "success": True}
-        except Exception as e:
-            logger.warning("save_audit_log_failed", error=str(e), exc_info=True)
-            return {"id": node.id, "success": False, "error": str(e)}
-
-    def save_audit_log_sync(self, node: AuditNode) -> Dict[str, Any]:
-        """Synchronously persist a standalone auditable AuditNode in Neo4j."""
-        query = """
-        CREATE (a:AuditLog {
-            id: $id,
-            action: $action,
-            statusCode: $statusCode,
-            statusMessage: $statusMessage,
-            severity: $severity,
-            actorId: $actorId,
-            actor: $actor,
-            targetId: $targetId,
-            target: $target,
-            result: $result,
-            details: $details,
-            event_id: $event_id,
-            test_id: $test_id,
-            Action: $Action,
-            ActedAt: datetime({timezone: 'UTC'}),
-            ActedBy: $ActedBy,
-            CreatedAt: datetime({timezone: 'UTC'}),
-            ExpiresAt: CASE WHEN $ExpiresAt IS NOT NULL
-                            THEN datetime($ExpiresAt)
-                            ELSE datetime({timezone: 'UTC'}) + duration({days: 365}) END
-        })
-        RETURN a.id AS id
-        """
-        params = self._prepare_audit_log_params(node)
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(query, **params)
-                record = result.single()
-                return {"id": record["id"] if record else node.id, "success": True}
-        except Exception as e:
-            logger.warning("save_audit_log_sync_failed", error=str(e), exc_info=True)
-            return {"id": node.id, "success": False, "error": str(e)}
-
-    async def search_audit_logs(
-        self,
-        action: Optional[str] = None,
-        actor_id: Optional[str] = None,
-        target_id: Optional[str] = None,
-        severity: Optional[str] = None,
-        include_tests: bool = False,
-        test_id: Optional[str] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """Asynchronously search and retrieve AuditLog records from Neo4j."""
-        query = """
-        MATCH (a:AuditLog)
-        WHERE ($action IS NULL OR $action = '' OR a.action = $action)
-          AND ($actor_id IS NULL OR $actor_id = '' OR a.actorId = $actor_id)
-          AND ($target_id IS NULL OR $target_id = '' OR a.targetId = $target_id)
-          AND ($severity IS NULL OR $severity = '' OR a.severity = $severity)
-          AND (
-            CASE
-              WHEN $test_id IS NOT NULL AND $test_id <> '' THEN a.test_id = $test_id
-              WHEN $include_tests = true THEN true
-              ELSE (a.test_id IS NULL OR a.test_id = '')
-            END
-          )
-        RETURN a.id AS id,
-               a.action AS action,
-               a.statusCode AS statusCode,
-               a.statusMessage AS statusMessage,
-               a.severity AS severity,
-               a.actorId AS actorId,
-               a.actor AS actor,
-               a.targetId AS targetId,
-               a.target AS target,
-               a.result AS result,
-               a.details AS details,
-               a.test_id AS test_id,
-               toString(a.CreatedAt) AS created_at,
-               toString(a.ExpiresAt) AS expires_at
-        ORDER BY a.CreatedAt DESC
-        LIMIT $limit
-        """
-        return await self.client.execute_query(
-            query,
-            {
-                "action": action,
-                "actor_id": actor_id,
-                "target_id": target_id,
-                "severity": severity,
-                "include_tests": include_tests,
-                "test_id": test_id,
-                "limit": limit,
-            },
+        start_node_id: str,
+        end_node_id: str,
+        rel_type: str,
+        acted_by: str = "system",
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically swap positive relationship to NOT_<rel_type> under a write transaction, cloning properties."""
+        pos_type = to_positive_relation_type(rel_type)
+        neg_type = to_negated_relation_type(rel_type)
+        new_rel_id = generate_deterministic_id(
+            {"start_node_id": start_node_id, "type": neg_type, "end_node_id": end_node_id}
         )
 
-    def search_audit_logs_sync(
-        self,
-        action: Optional[str] = None,
-        actor_id: Optional[str] = None,
-        target_id: Optional[str] = None,
-        severity: Optional[str] = None,
-        include_tests: bool = False,
-        test_id: Optional[str] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """Synchronously search and retrieve AuditLog records from Neo4j."""
-        query = """
-        MATCH (a:AuditLog)
-        WHERE ($action IS NULL OR $action = '' OR a.action = $action)
-          AND ($actor_id IS NULL OR $actor_id = '' OR a.actorId = $actor_id)
-          AND ($target_id IS NULL OR $target_id = '' OR a.targetId = $target_id)
-          AND ($severity IS NULL OR $severity = '' OR a.severity = $severity)
-          AND (
-            CASE
-              WHEN $test_id IS NOT NULL AND $test_id <> '' THEN a.test_id = $test_id
-              WHEN $include_tests = true THEN true
-              ELSE (a.test_id IS NULL OR a.test_id = '')
-            END
-          )
-        RETURN a.id AS id,
-               a.action AS action,
-               a.statusCode AS statusCode,
-               a.statusMessage AS statusMessage,
-               a.severity AS severity,
-               a.actorId AS actorId,
-               a.actor AS actor,
-               a.targetId AS targetId,
-               a.target AS target,
-               a.result AS result,
-               a.details AS details,
-               a.test_id AS test_id,
-               toString(a.CreatedAt) AS created_at,
-               toString(a.ExpiresAt) AS expires_at
-        ORDER BY a.CreatedAt DESC
-        LIMIT $limit
+        query = f"""
+        MATCH (a {{id: $start_node_id}})-[r:{pos_type}]->(b {{id: $end_node_id}})
+        WITH a, b, r, properties(r) AS old_props
+        CREATE (a)-[r_not:{neg_type}]->(b)
+        SET r_not = old_props,
+            r_not.id = $new_rel_id,
+            r_not.Action = "DELETE",
+            r_not.ActedAt = datetime({{timezone: 'UTC'}}),
+            r_not.ActedBy = $acted_by
+        DELETE r
+        RETURN properties(r_not) AS r_not
         """
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session() as session:
-                result = session.run(
-                    query,
-                    action=action,
-                    actor_id=actor_id,
-                    target_id=target_id,
-                    severity=severity,
-                    include_tests=include_tests,
-                    test_id=test_id,
-                    limit=limit,
-                )
-                return [record.data() for record in result]
-        except Exception as e:
-            logger.warning("search_audit_logs_sync_failed", error=str(e), exc_info=True)
-            return []
+
+        async def _swap_tx(tx: Any) -> Optional[Dict[str, Any]]:
+            res = await tx.run(
+                query,
+                start_node_id=start_node_id,
+                end_node_id=end_node_id,
+                new_rel_id=new_rel_id,
+                acted_by=acted_by,
+            )
+            record = await res.single()
+            if not record:
+                return None
+            data = record.data()
+            return data.get("r_not", data)
+
+        return await self.client.execute_write_tx(_swap_tx)
 
 
 graph_service = GraphService()

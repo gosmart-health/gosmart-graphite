@@ -93,8 +93,8 @@ def _dict_to_group_node(data: Optional[Dict[str, Any]]) -> Optional[GroupNode]:
 
 
 def _build_default_lost_and_found_group(
-    test_id: Optional[str] = None,
-    acted_by: str = "system",
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
 ) -> GroupNode:
     """Construct the deterministic LostAndFound GroupNode."""
     return GroupNode(
@@ -202,8 +202,8 @@ RETURN properties(g) AS group
 
 
 def _build_lost_and_found_params(
-    test_id: Optional[str] = None,
-    acted_by: str = "system",
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
 ) -> Tuple[GroupNode, Dict[str, Any]]:
     """Build parameters for persisting the System -> HAS_LOST_AND_FOUND -> LostAndFound Group in Neo4j."""
     sys_node = SystemNode(test_id=test_id, ActedBy=acted_by)
@@ -241,304 +241,66 @@ class GroupService:
         self.client = client or neo4j_client
         self._lost_and_found_group: GroupNode = _build_default_lost_and_found_group()
 
-    @property
-    def lost_and_found_group(self) -> GroupNode:
-        """Return the cached LostAndFound operational recovery GroupNode."""
-        return self._lost_and_found_group
+    @staticmethod
+    def _build_resolve_group_query(identifier: Optional[str]) -> Tuple[LiteralString, Optional[str]]:
+        clean_ident = identifier.strip() if isinstance(identifier, str) and identifier.strip() else None
+        if clean_ident is None:
+            query: LiteralString = """
+            MATCH (g:Group)
+            WHERE g.name = $default_name
+              AND (g.Action IS NULL OR g.Action <> 'DELETE')
+              AND coalesce(g.is_active, true) = true
+              AND (
+                (($test_id IS NULL OR $test_id = '') AND (g.test_id IS NULL OR trim(toString(g.test_id)) = ''))
+                OR ($test_id IS NOT NULL AND $test_id <> '' AND g.test_id = $test_id)
+              )
+            RETURN properties(g) AS group
+            """
+            return query, None
 
-    def group_or_lost_and_found(
-        self,
-        group: Optional[Union[Group, Dict[str, Any]]] = None,
-    ) -> Group:
-        """Return the provided Group if present, or fall back to the LostAndFound operational recovery Group."""
-        if isinstance(group, GroupNode):
-            return group
-        if isinstance(group, dict):
-            converted = _dict_to_group_node(group)
-            if converted is not None:
-                return converted
-        return self._lost_and_found_group
-
-    async def ensure_lost_and_found_group(
-        self,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
-    ) -> GroupNode:
-        """Ensure the 'LostAndFound' operational recovery Group and its System association exist in Neo4j."""
-        default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
-        try:
-            records = await self.client.execute_query(_ENSURE_LOST_AND_FOUND_CYPHER, params)
-            if records:
-                persisted = _dict_to_group_node(records[0].get("group", records[0]))
-                if persisted is not None:
-                    if not test_id:
-                        self._lost_and_found_group = persisted
-                    return persisted
-        except Exception as e:
-            logger.warning("ensure_lost_and_found_group_error", error=str(e))
-        if not test_id:
-            self._lost_and_found_group = default_node
-        return default_node
-
-    def ensure_lost_and_found_group_sync(
-        self,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
-    ) -> GroupNode:
-        """Synchronously ensure the 'LostAndFound' Group and its System association exist in Neo4j."""
-        default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session(database=self.client.settings.DB_DATABASE) as session:
-                res = session.run(_ENSURE_LOST_AND_FOUND_CYPHER, **params)
-                rec = res.single()
-                if rec:
-                    raw_data = rec.data() if hasattr(rec, "data") else dict(rec)
-                    persisted = _dict_to_group_node(raw_data.get("group", raw_data))
-                    if persisted is not None:
-                        if not test_id:
-                            self._lost_and_found_group = persisted
-                        return persisted
-        except Exception as e:
-            logger.warning("ensure_lost_and_found_group_sync_error", error=str(e))
-        if not test_id:
-            self._lost_and_found_group = default_node
-        return default_node
-
-    async def my_group(
-        self,
-        node_id: str,
-        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
-    ) -> Optional[GroupNode]:
-        """Traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
-        depth = _validate_max_depth(max_depth)
-        clean_id = node_id.strip() if isinstance(node_id, str) else ""
-        if not clean_id:
-            return None
-
-        query = _build_my_group_query(max_depth=depth)
-        records = await self.client.execute_query(query, {"node_id": clean_id})
-        if not records:
-            return None
-        return _dict_to_group_node(records[0].get("group", records[0]))
-
-    def my_group_sync(
-        self,
-        node_id: str,
-        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
-    ) -> Optional[GroupNode]:
-        """Synchronously traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
-        depth = _validate_max_depth(max_depth)
-        clean_id = node_id.strip() if isinstance(node_id, str) else ""
-        if not clean_id:
-            return None
-
-        query = _build_my_group_query(max_depth=depth)
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session(database=self.client.settings.DB_DATABASE) as session:
-                res = session.run(query, node_id=clean_id)
-                rec = res.single()
-                if not rec:
-                    return None
-                raw_data = rec.data() if hasattr(rec, "data") else dict(rec)
-                return _dict_to_group_node(raw_data.get("group", raw_data))
-        except Exception as e:
-            logger.warning("my_group_sync_failed", node_id=clean_id, error=str(e))
-            return None
-
-    async def create_group(
-        self,
-        name: str,
-        code: str,
-        group_type: str = "FACILITY",
-        is_active: bool = True,
-        description: Optional[str] = None,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
-    ) -> Dict[str, Any]:
-        """Create or update an organizational group/facility node."""
-        node = GroupNode(
-            name=name,
-            code=code,
-            group_type=group_type,
-            is_active=is_active,
-            description=description,
-            test_id=test_id,
-            ActedBy=acted_by,
-        )
-
-        query = """
-        MERGE (g:Group {code: $code})
-        ON CREATE SET g.id = $id,
-                      g.name = $name,
-                      g.group_type = $group_type,
-                      g.is_active = $is_active,
-                      g.description = $description,
-                      g.test_id = $test_id,
-                      g.Action = 'CREATE',
-                      g.ActedAt = datetime({timezone: 'UTC'}),
-                      g.ActedBy = $acted_by,
-                      g.CreatedAt = datetime({timezone: 'UTC'})
-        ON MATCH SET  g.name = $name,
-                      g.group_type = $group_type,
-                      g.is_active = $is_active,
-                      g.description = $description,
-                      g.test_id = coalesce($test_id, g.test_id),
-                      g.Action = 'UPDATE',
-                      g.ActedAt = datetime({timezone: 'UTC'}),
-                      g.ActedBy = $acted_by,
-                      g.UpdatedAt = datetime({timezone: 'UTC'})
-        RETURN properties(g) AS group
-        """
-        params = {
-            "id": node.id,
-            "name": node.name,
-            "code": node.code,
-            "group_type": node.group_type,
-            "is_active": node.is_active,
-            "description": node.description,
-            "test_id": node.test_id,
-            "acted_by": acted_by,
-        }
-        records = await self.client.execute_query(query, params)
-        if records:
-            return _clean_neo4j_value(records[0].get("group", records[0]))
-        return {}
-
-    async def get_group_by_id(self, group_id: str) -> Optional[Dict[str, Any]]:
-        """Fetch group node by deterministic ID."""
-        query = """
-        MATCH (g:Group {id: $group_id})
-        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
-        RETURN properties(g) AS group
-        LIMIT 1
-        """
-        records = await self.client.execute_query(query, {"group_id": group_id})
-        if records:
-            return _clean_neo4j_value(records[0].get("group", records[0]))
-        return None
-
-    async def get_group_by_code(self, code: str) -> Optional[Dict[str, Any]]:
-        """Fetch group node by code slug."""
-        normalized_code = code.strip().upper()
-        query = """
-        MATCH (g:Group {code: $code})
-        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
-        RETURN properties(g) AS group
-        LIMIT 1
-        """
-        records = await self.client.execute_query(query, {"code": normalized_code})
-        if records:
-            return _clean_neo4j_value(records[0].get("group", records[0]))
-        return None
-
-    async def list_groups(
-        self,
-        include_inactive: bool = False,
-        include_tests: bool = True,
-        test_id: Optional[str] = None,
-        limit: int = 100,
-    ) -> List[Dict[str, Any]]:
-        """List groups with optional status and test_id filtering."""
-        query = """
+        query_by_ident: LiteralString = """
         MATCH (g:Group)
-        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
-          AND ($include_inactive = true OR g.is_active = true)
-          AND ($include_tests = true OR g.test_id IS NULL OR g.test_id = '')
-          AND ($test_id IS NULL OR g.test_id = $test_id)
+        WHERE (g.id = $identifier OR g.name = $identifier OR toUpper(g.code) = toUpper($identifier))
+          AND (g.Action IS NULL OR g.Action <> 'DELETE')
+          AND coalesce(g.is_active, true) = true
+          AND (
+            (($test_id IS NULL OR $test_id = '') AND (g.test_id IS NULL OR trim(toString(g.test_id)) = ''))
+            OR ($test_id IS NOT NULL AND $test_id <> '' AND g.test_id = $test_id)
+          )
         RETURN properties(g) AS group
-        ORDER BY g.name ASC
-        LIMIT $limit
         """
-        records = await self.client.execute_query(
-            query,
-            {
-                "include_inactive": include_inactive,
-                "include_tests": include_tests,
-                "test_id": test_id,
-                "limit": limit,
-            },
-        )
-        return [_clean_neo4j_value(r.get("group", r)) for r in records]
+        return query_by_ident, clean_ident
 
-    async def nest_group(
-        self,
-        child_group_id: str,
-        parent_group_id: str,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
+    @staticmethod
+    def _validate_resolved_group_records(
+            records: List[Dict[str, Any]],
+            clean_ident: Optional[str],
     ) -> Dict[str, Any]:
-        """Establish hierarchical relationship: (Child Group)-[:SUB_GROUP_OF]->(Parent Group)."""
-        rel = SubGroupOfRelation(
-            start_node_id=child_group_id,
-            end_node_id=parent_group_id,
-            test_id=test_id,
-            ActedBy=acted_by,
-        )
-
-        query = """
-        MATCH (child:Group {id: $child_id})
-        MATCH (parent:Group {id: $parent_id})
-        MERGE (child)-[r:SUB_GROUP_OF {id: $rel_id}]->(parent)
-        ON CREATE SET r.test_id = $test_id,
-                      r.Action = 'CREATE',
-                      r.ActedAt = datetime({timezone: 'UTC'}),
-                      r.ActedBy = $acted_by,
-                      r.CreatedAt = datetime({timezone: 'UTC'})
-        ON MATCH SET  r.test_id = coalesce($test_id, r.test_id),
-                      r.Action = 'UPDATE',
-                      r.ActedAt = datetime({timezone: 'UTC'}),
-                      r.ActedBy = $acted_by,
-                      r.UpdatedAt = datetime({timezone: 'UTC'})
-        RETURN properties(r) AS rel, child.id AS child_id, parent.id AS parent_id
-        """
-        params = {
-            "child_id": child_group_id,
-            "parent_id": parent_group_id,
-            "rel_id": rel.id,
-            "test_id": test_id,
-            "acted_by": acted_by,
-        }
-        records = await self.client.execute_query(query, params)
-        if records:
-            return _clean_neo4j_value(records[0])
-        return {}
-
-    async def get_group_hierarchy_closure(
-        self,
-        group_id: str,
-    ) -> List[Dict[str, Any]]:
-        """Resolve downward hierarchy closure for a specific group (itself + child subgroups)."""
-        query = """
-        MATCH (root_grp:Group {id: $group_id})
-        WHERE (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
-          AND root_grp.is_active = true
-        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
-        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND sub_grp.is_active = true
-        WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
-        UNWIND accessible_groups AS g
-        RETURN DISTINCT g.id AS id,
-                        g.name AS name,
-                        g.code AS code,
-                        g.group_type AS group_type,
-                        g.is_active AS is_active
-        ORDER BY g.name ASC
-        """
-        records = await self.client.execute_query(query, {"group_id": group_id})
-        return [_clean_neo4j_value(r) for r in records]
+        target_label = clean_ident or DEFAULT_GROUP_NAME
+        if not records:
+            if clean_ident is None:
+                raise RuntimeError(
+                    f"Default group '{DEFAULT_GROUP_NAME}' not found in Neo4j. "
+                    "Ensure system bootstrap has run or specify --assign <name or id>."
+                )
+            raise RuntimeError(f"Target group '{target_label}' not found in Neo4j.")
+        if len(records) > 1:
+            raise RuntimeError(
+                f"Ambiguous group match for '{target_label}': found {len(records)} active Group nodes. "
+                "Please specify a unique Group ID."
+            )
+        return _clean_neo4j_value(records[0].get("group", records[0]))
 
     async def add_user_to_group(
-        self,
-        user_id: str,
-        group_id: str,
-        roles: Optional[List[str]] = None,
-        permissions: Optional[List[str]] = None,
-        status: str = "ACTIVE",
-        is_primary: bool = False,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
+            self,
+            user_id: str,
+            group_id: str,
+            roles: Optional[List[str]] = None,
+            permissions: Optional[List[str]] = None,
+            status: str = "ACTIVE",
+            is_primary: bool = False,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Affiliate a User with a Group via MEMBER_OF relationship."""
         roles_list = roles or ["Viewer"]
@@ -594,245 +356,12 @@ class GroupService:
             return _clean_neo4j_value(records[0])
         return {}
 
-    async def update_user_group_status(
-        self,
-        user_id: str,
-        group_id: str,
-        status: str,
-        acted_by: str = "system",
-    ) -> Optional[Dict[str, Any]]:
-        """Update affiliation status (e.g. 'ACTIVE', 'INACTIVE', 'SUSPENDED') on MEMBER_OF relationship."""
-        query = """
-        MATCH (u:User {id: $user_id})-[r:MEMBER_OF]->(g:Group {id: $group_id})
-        SET r.status = $status,
-            r.Action = 'UPDATE',
-            r.ActedAt = datetime({timezone: 'UTC'}),
-            r.ActedBy = $acted_by,
-            r.UpdatedAt = datetime({timezone: 'UTC'})
-        RETURN properties(r) AS member_of
-        """
-        records = await self.client.execute_query(
-            query,
-            {"user_id": user_id, "group_id": group_id, "status": status, "acted_by": acted_by},
-        )
-        if records:
-            return _clean_neo4j_value(records[0].get("member_of", records[0]))
-        return None
-
-    async def get_user_affiliations(
-        self,
-        user_id: str,
-        include_inactive: bool = False,
-    ) -> List[Dict[str, Any]]:
-        """Get all groups and roles associated with a user."""
-        query = """
-        MATCH (u:User {id: $user_id})-[r:MEMBER_OF]->(g:Group)
-        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
-          AND ($include_inactive = true OR (r.status = 'ACTIVE' AND g.is_active = true))
-        RETURN g.id AS group_id,
-               g.name AS group_name,
-               g.code AS group_code,
-               g.group_type AS group_type,
-               r.roles AS roles,
-               r.permissions AS permissions,
-               r.status AS status,
-               r.is_primary AS is_primary
-        ORDER BY r.is_primary DESC, g.name ASC
-        """
-        records = await self.client.execute_query(query, {"user_id": user_id, "include_inactive": include_inactive})
-        return [_clean_neo4j_value(r) for r in records]
-
-    async def get_effective_accessible_groups(
-        self,
-        user_id: str,
-    ) -> List[Dict[str, Any]]:
-        """Resolve effective group scope for a user by evaluating downward hierarchy from active memberships."""
-        query = """
-        MATCH (u:User {id: $user_id})-[r:MEMBER_OF {status: 'ACTIVE'}]->(root_grp:Group)
-        WHERE (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
-          AND root_grp.is_active = true
-        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
-        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND sub_grp.is_active = true
-        WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
-        UNWIND accessible_groups AS g
-        RETURN DISTINCT g.id AS id,
-                        g.name AS name,
-                        g.code AS code,
-                        g.group_type AS group_type,
-                        g.is_active AS is_active
-        ORDER BY g.name ASC
-        """
-        records = await self.client.execute_query(query, {"user_id": user_id})
-        return [_clean_neo4j_value(r) for r in records]
-
-    async def get_or_create_catch_all_group(
-        self,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
-    ) -> Dict[str, Any]:
-        """Ensure the resilient 'GoSmart Health' catch-all root organization exists."""
-        return await self.create_group(
-            name="GoSmart Health",
-            code="GOSMART_HEALTH",
-            group_type="HEALTH_SYSTEM",
-            description="Catch-all root organization for unassociated and lost-and-found studies",
-            test_id=test_id,
-            acted_by=acted_by,
-        )
-
-    def get_or_create_catch_all_group_sync(
-        self,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
-    ) -> Dict[str, Any]:
-        """Synchronously ensure the resilient 'GoSmart Health' catch-all root organization exists."""
-        node = GroupNode(
-            name="GoSmart Health",
-            code="GOSMART_HEALTH",
-            group_type="HEALTH_SYSTEM",
-            description="Catch-all root organization for unassociated and lost-and-found studies",
-            test_id=test_id,
-            ActedBy=acted_by,
-        )
-        query = """
-        MERGE (g:Group {code: $code})
-        ON CREATE SET g.id = $id,
-                      g.name = $name,
-                      g.group_type = $group_type,
-                      g.is_active = true,
-                      g.description = $description,
-                      g.test_id = $test_id,
-                      g.Action = 'CREATE',
-                      g.ActedAt = datetime({timezone: 'UTC'}),
-                      g.ActedBy = $acted_by,
-                      g.CreatedAt = datetime({timezone: 'UTC'})
-        ON MATCH SET  g.name = $name,
-                      g.group_type = $group_type,
-                      g.is_active = true,
-                      g.description = $description,
-                      g.test_id = coalesce($test_id, g.test_id),
-                      g.Action = 'UPDATE',
-                      g.ActedAt = datetime({timezone: 'UTC'}),
-                      g.ActedBy = $acted_by,
-                      g.UpdatedAt = datetime({timezone: 'UTC'})
-        RETURN properties(g) AS group
-        """
-        params = {
-            "id": node.id,
-            "name": node.name,
-            "code": node.code,
-            "group_type": node.group_type,
-            "description": node.description,
-            "test_id": node.test_id,
-            "acted_by": acted_by,
-        }
-        try:
-            driver = self.client.get_sync_driver()
-            with driver.session(database=self.client.settings.DB_DATABASE) as session:
-                res = session.run(query, **params)
-                rec = res.single()
-                return _clean_neo4j_value(rec["group"]) if rec else {}
-        except Exception as e:
-            logger.warning("get_or_create_catch_all_group_sync_error", error=str(e))
-            return {"id": node.id, "name": node.name, "code": node.code}
-
-    @staticmethod
-    def _build_resolve_group_query(identifier: Optional[str]) -> Tuple[LiteralString, Optional[str]]:
-        clean_ident = identifier.strip() if isinstance(identifier, str) and identifier.strip() else None
-        if clean_ident is None:
-            query: LiteralString = """
-            MATCH (g:Group)
-            WHERE g.name = $default_name
-              AND (g.Action IS NULL OR g.Action <> 'DELETE')
-              AND coalesce(g.is_active, true) = true
-              AND (
-                (($test_id IS NULL OR $test_id = '') AND (g.test_id IS NULL OR trim(toString(g.test_id)) = ''))
-                OR ($test_id IS NOT NULL AND $test_id <> '' AND g.test_id = $test_id)
-              )
-            RETURN properties(g) AS group
-            """
-            return query, None
-
-        query_by_ident: LiteralString = """
-        MATCH (g:Group)
-        WHERE (g.id = $identifier OR g.name = $identifier OR toUpper(g.code) = toUpper($identifier))
-          AND (g.Action IS NULL OR g.Action <> 'DELETE')
-          AND coalesce(g.is_active, true) = true
-          AND (
-            (($test_id IS NULL OR $test_id = '') AND (g.test_id IS NULL OR trim(toString(g.test_id)) = ''))
-            OR ($test_id IS NOT NULL AND $test_id <> '' AND g.test_id = $test_id)
-          )
-        RETURN properties(g) AS group
-        """
-        return query_by_ident, clean_ident
-
-    @staticmethod
-    def _validate_resolved_group_records(
-        records: List[Dict[str, Any]],
-        clean_ident: Optional[str],
-    ) -> Dict[str, Any]:
-        target_label = clean_ident or DEFAULT_GROUP_NAME
-        if not records:
-            if clean_ident is None:
-                raise RuntimeError(
-                    f"Default group '{DEFAULT_GROUP_NAME}' not found in Neo4j. "
-                    "Ensure system bootstrap has run or specify --assign <name or id>."
-                )
-            raise RuntimeError(f"Target group '{target_label}' not found in Neo4j.")
-        if len(records) > 1:
-            raise RuntimeError(
-                f"Ambiguous group match for '{target_label}': found {len(records)} active Group nodes. "
-                "Please specify a unique Group ID."
-            )
-        return _clean_neo4j_value(records[0].get("group", records[0]))
-
-    async def resolve_target_group(
-        self,
-        identifier: Optional[str] = None,
-        test_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Resolve a single active Group by id/name/code, or default 'GoSmart Health'.
-
-        Raises RuntimeError when 0 or > 1 matching active groups exist.
-        """
-        norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
-        query, clean_ident = self._build_resolve_group_query(identifier)
-        records = await self.client.execute_query(
-            query,
-            {
-                "identifier": clean_ident,
-                "default_name": DEFAULT_GROUP_NAME,
-                "test_id": norm_test_id,
-            },
-        )
-        return self._validate_resolved_group_records(records, clean_ident)
-
-    def resolve_target_group_sync(
-        self,
-        identifier: Optional[str] = None,
-        test_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Synchronously resolve a single active Group by id/name/code, or default 'GoSmart Health'."""
-        norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
-        query, clean_ident = self._build_resolve_group_query(identifier)
-        driver = self.client.get_sync_driver()
-        with driver.session(database=self.client.settings.DB_DATABASE) as session:
-            result = session.run(
-                query,
-                identifier=clean_ident,
-                default_name=DEFAULT_GROUP_NAME,
-                test_id=norm_test_id,
-            )
-            records = [r.data() for r in result]
-        return self._validate_resolved_group_records(records, clean_ident)
-
     async def associate_dicom_config_to_group(
-        self,
-        config_id: str,
-        group_id: str,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
+            self,
+            config_id: str,
+            group_id: str,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Associate a DICOMConfiguration to a Group via HAS_DICOM_CONFIGURATION and SERVES relationships.
 
@@ -916,11 +445,123 @@ class GroupService:
         )
         return res
 
+    async def associate_study_and_patient_to_group(
+            self,
+            patient_id: str,
+            study_uid: str,
+            group_id: str,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
+    ) -> Dict[str, Any]:
+        """Attach Patient (BELONGS_TO) and Study (PERFORMED_AT) to target Group."""
+        query = """
+        MATCH (p:Patient {patient_id: $patient_id})
+        MATCH (s:Study {study_instance_uid: $study_uid})
+        MATCH (g:Group {id: $group_id})
+        MERGE (p)-[r_p:BELONGS_TO {start_node_id: p.id, end_node_id: g.id}]->(g)
+        ON CREATE SET r_p.test_id = $test_id,
+                      r_p.Action = 'CREATE',
+                      r_p.ActedAt = datetime({timezone: 'UTC'}),
+                      r_p.ActedBy = $acted_by,
+                      r_p.CreatedAt = datetime({timezone: 'UTC'})
+        MERGE (s)-[r_s:PERFORMED_AT {start_node_id: s.id, end_node_id: g.id}]->(g)
+        ON CREATE SET r_s.test_id = $test_id,
+                      r_s.Action = 'CREATE',
+                      r_s.ActedAt = datetime({timezone: 'UTC'}),
+                      r_s.ActedBy = $acted_by,
+                      r_s.CreatedAt = datetime({timezone: 'UTC'})
+        RETURN properties(p) AS patient, properties(s) AS study, properties(g) AS group
+        """
+        records = await self.client.execute_query(
+            query,
+            {
+                "patient_id": patient_id,
+                "study_uid": study_uid,
+                "group_id": group_id,
+                "test_id": test_id,
+                "acted_by": acted_by,
+            },
+        )
+        res = _clean_neo4j_value(records[0]) if records else {}
+        record_audit(
+            action=AuditAction.STUDY_ASSOCIATED_TO_GROUP,
+            actor_id=f"user:{acted_by}",
+            actor=acted_by,
+            target_id=f"study:{study_uid}",
+            target=f"Group {group_id}",
+            status_code=200,
+            status_message=f"Study {study_uid} attached to Group {group_id}",
+            severity="INFO",
+            result="Study PERFORMED_AT association created",
+            details={"study_instance_uid": study_uid, "patient_id": patient_id, "group_id": group_id},
+            test_id=test_id,
+        )
+        return res
+
+    async def create_group(
+            self,
+            name: str,
+            code: str,
+            group_type: str = "FACILITY",
+            is_active: bool = True,
+            description: Optional[str] = None,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
+    ) -> Dict[str, Any]:
+        """Create or update an organizational group/facility node."""
+        node = GroupNode(
+            name=name,
+            code=code,
+            group_type=group_type,
+            is_active=is_active,
+            description=description,
+            test_id=test_id,
+            ActedBy=acted_by,
+        )
+
+        query = """
+        MERGE (g:Group {code: $code})
+        ON CREATE SET g.id = $id,
+                      g.name = $name,
+                      g.group_type = $group_type,
+                      g.is_active = $is_active,
+                      g.description = $description,
+                      g.test_id = $test_id,
+                      g.Action = 'CREATE',
+                      g.ActedAt = datetime({timezone: 'UTC'}),
+                      g.ActedBy = $acted_by,
+                      g.CreatedAt = datetime({timezone: 'UTC'})
+        ON MATCH SET  g.name = $name,
+                      g.group_type = $group_type,
+                      g.is_active = $is_active,
+                      g.description = $description,
+                      g.test_id = coalesce($test_id, g.test_id),
+                      g.Action = 'UPDATE',
+                      g.ActedAt = datetime({timezone: 'UTC'}),
+                      g.ActedBy = $acted_by,
+                      g.UpdatedAt = datetime({timezone: 'UTC'})
+        RETURN properties(g) AS group
+        """
+        params = {
+            "id": node.id,
+            "name": node.name,
+            "code": node.code,
+            "group_type": node.group_type,
+            "is_active": node.is_active,
+            "description": node.description,
+            "test_id": node.test_id,
+            "acted_by": acted_by,
+        }
+        records = await self.client.execute_query(query, params)
+        if records:
+            return _clean_neo4j_value(records[0].get("group", records[0]))
+        return {}
+
     async def dissociate_dicom_config_from_group(
-        self,
-        config_id: str,
-        group_id: str,
-        acted_by: str = "system",
+            self,
+            config_id: str,
+            group_id: str,
+            acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
         """Dissociate a DICOMConfiguration from a Group by swapping HAS_DICOM_CONFIGURATION and SERVES to negated forms."""
         neg_serves = to_negated_relation_type("SERVES")
@@ -992,49 +633,75 @@ class GroupService:
             )
         return result
 
-    async def get_group_for_ae_title(self, ae_title: str) -> Optional[Dict[str, Any]]:
-        """Look up the active Group associated with the given remote or local AE Title."""
-        norm_aet = ae_title.strip()
-        query = """
-        MATCH (c:DICOMConfiguration)-[r:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
-        WHERE (c.ae_title = $ae_title OR (c.is_promiscuous = true AND c.ae_title = '*'))
-          AND (c.Action IS NULL OR c.Action <> 'DELETE')
-          AND (r.Action IS NULL OR r.Action <> 'DELETE')
-          AND (g.Action IS NULL OR g.Action <> 'DELETE')
-          AND coalesce(g.is_active, true) = true
-        RETURN properties(g) AS group, c.ae_title AS matched_aet
-        ORDER BY CASE WHEN c.ae_title = $ae_title THEN 0 ELSE 1 END
-        LIMIT 1
-        """
-        records = await self.client.execute_query(query, {"ae_title": norm_aet})
-        if records:
-            return _clean_neo4j_value(records[0].get("group"))
-        return None
+    async def ensure_lost_and_found_group(
+            self,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
+    ) -> GroupNode:
+        """Ensure the 'LostAndFound' operational recovery Group and its System association exist in Neo4j."""
+        default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
+        try:
+            records = await self.client.execute_query(_ENSURE_LOST_AND_FOUND_CYPHER, params)
+            if records:
+                persisted = _dict_to_group_node(records[0].get("group", records[0]))
+                if persisted is not None:
+                    if not test_id:
+                        self._lost_and_found_group = persisted
+                    return persisted
+        except Exception as e:
+            logger.warning("ensure_lost_and_found_group_error", error=str(e))
+        if not test_id:
+            self._lost_and_found_group = default_node
+        return default_node
 
-    def get_group_for_ae_title_sync(self, ae_title: str) -> Optional[Dict[str, Any]]:
-        """Synchronously look up the active Group associated with the given AE Title."""
-        norm_aet = ae_title.strip()
-        query = """
-        MATCH (c:DICOMConfiguration)-[r:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
-        WHERE (c.ae_title = $ae_title OR (c.is_promiscuous = true AND c.ae_title = '*'))
-          AND (c.Action IS NULL OR c.Action <> 'DELETE')
-          AND (r.Action IS NULL OR r.Action <> 'DELETE')
-          AND (g.Action IS NULL OR g.Action <> 'DELETE')
-          AND coalesce(g.is_active, true) = true
-        RETURN properties(g) AS group, c.ae_title AS matched_aet
-        ORDER BY CASE WHEN c.ae_title = $ae_title THEN 0 ELSE 1 END
-        LIMIT 1
-        """
+    def ensure_lost_and_found_group_sync(
+            self,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
+    ) -> GroupNode:
+        """Synchronously ensure the 'LostAndFound' Group and its System association exist in Neo4j."""
+        default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
         try:
             driver = self.client.get_sync_driver()
             with driver.session(database=self.client.settings.DB_DATABASE) as session:
-                res = session.run(query, ae_title=norm_aet)
+                res = session.run(_ENSURE_LOST_AND_FOUND_CYPHER, **params)
                 rec = res.single()
                 if rec:
-                    return _clean_neo4j_value(rec["group"])
+                    raw_data = rec.data() if hasattr(rec, "data") else dict(rec)
+                    persisted = _dict_to_group_node(raw_data.get("group", raw_data))
+                    if persisted is not None:
+                        if not test_id:
+                            self._lost_and_found_group = persisted
+                        return persisted
         except Exception as e:
-            logger.warning("get_group_for_ae_title_sync_failed", ae_title=norm_aet, error=str(e))
-        return None
+            logger.warning("ensure_lost_and_found_group_sync_error", error=str(e))
+        if not test_id:
+            self._lost_and_found_group = default_node
+        return default_node
+
+    async def get_effective_accessible_groups(
+            self,
+            user_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Resolve effective group scope for a user by evaluating downward hierarchy from active memberships."""
+        query = """
+        MATCH (u:User {id: $user_id})-[r:MEMBER_OF {status: 'ACTIVE'}]->(root_grp:Group)
+        WHERE (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
+          AND root_grp.is_active = true
+        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
+        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
+          AND sub_grp.is_active = true
+        WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
+        UNWIND accessible_groups AS g
+        RETURN DISTINCT g.id AS id,
+                        g.name AS name,
+                        g.code AS code,
+                        g.group_type AS group_type,
+                        g.is_active AS is_active
+        ORDER BY g.name ASC
+        """
+        records = await self.client.execute_query(query, {"user_id": user_id})
+        return [_clean_neo4j_value(r) for r in records]
 
     async def get_effective_accessible_groups_for_ae(self, ae_title: str) -> List[Dict[str, Any]]:
         """Resolve effective group scope for a caller AE title (group itself + downward closure)."""
@@ -1090,65 +757,379 @@ class GroupService:
             logger.warning("get_effective_accessible_groups_for_ae_sync_failed", ae_title=norm_aet, error=str(e))
             return []
 
-    async def associate_study_and_patient_to_group(
-        self,
-        patient_id: str,
-        study_uid: str,
-        group_id: str,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
-    ) -> Dict[str, Any]:
-        """Attach Patient (BELONGS_TO) and Study (PERFORMED_AT) to target Group."""
+    async def get_group_by_code(self, code: str) -> Optional[Dict[str, Any]]:
+        """Fetch group node by code slug."""
+        normalized_code = code.strip().upper()
         query = """
-        MATCH (p:Patient {patient_id: $patient_id})
-        MATCH (s:Study {study_instance_uid: $study_uid})
+        MATCH (g:Group {code: $code})
+        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
+        RETURN properties(g) AS group
+        LIMIT 1
+        """
+        records = await self.client.execute_query(query, {"code": normalized_code})
+        if records:
+            return _clean_neo4j_value(records[0].get("group", records[0]))
+        return None
+
+    async def get_group_by_id(self, group_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch group node by deterministic ID."""
+        query = """
         MATCH (g:Group {id: $group_id})
-        MERGE (p)-[r_p:BELONGS_TO {start_node_id: p.id, end_node_id: g.id}]->(g)
-        ON CREATE SET r_p.test_id = $test_id,
-                      r_p.Action = 'CREATE',
-                      r_p.ActedAt = datetime({timezone: 'UTC'}),
-                      r_p.ActedBy = $acted_by,
-                      r_p.CreatedAt = datetime({timezone: 'UTC'})
-        MERGE (s)-[r_s:PERFORMED_AT {start_node_id: s.id, end_node_id: g.id}]->(g)
-        ON CREATE SET r_s.test_id = $test_id,
-                      r_s.Action = 'CREATE',
-                      r_s.ActedAt = datetime({timezone: 'UTC'}),
-                      r_s.ActedBy = $acted_by,
-                      r_s.CreatedAt = datetime({timezone: 'UTC'})
-        RETURN properties(p) AS patient, properties(s) AS study, properties(g) AS group
+        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
+        RETURN properties(g) AS group
+        LIMIT 1
+        """
+        records = await self.client.execute_query(query, {"group_id": group_id})
+        if records:
+            return _clean_neo4j_value(records[0].get("group", records[0]))
+        return None
+
+    async def get_group_for_ae_title(self, ae_title: str) -> Optional[Dict[str, Any]]:
+        """Look up the active Group associated with the given remote or local AE Title."""
+        norm_aet = ae_title.strip()
+        query = """
+        MATCH (c:DICOMConfiguration)-[r:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
+        WHERE (c.ae_title = $ae_title OR (c.is_promiscuous = true AND c.ae_title = '*'))
+          AND (c.Action IS NULL OR c.Action <> 'DELETE')
+          AND (r.Action IS NULL OR r.Action <> 'DELETE')
+          AND (g.Action IS NULL OR g.Action <> 'DELETE')
+          AND coalesce(g.is_active, true) = true
+        RETURN properties(g) AS group, c.ae_title AS matched_aet
+        ORDER BY CASE WHEN c.ae_title = $ae_title THEN 0 ELSE 1 END
+        LIMIT 1
+        """
+        records = await self.client.execute_query(query, {"ae_title": norm_aet})
+        if records:
+            return _clean_neo4j_value(records[0].get("group"))
+        return None
+
+    def get_group_for_ae_title_sync(self, ae_title: str) -> Optional[Dict[str, Any]]:
+        """Synchronously look up the active Group associated with the given AE Title."""
+        norm_aet = ae_title.strip()
+        query = """
+        MATCH (c:DICOMConfiguration)-[r:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
+        WHERE (c.ae_title = $ae_title OR (c.is_promiscuous = true AND c.ae_title = '*'))
+          AND (c.Action IS NULL OR c.Action <> 'DELETE')
+          AND (r.Action IS NULL OR r.Action <> 'DELETE')
+          AND (g.Action IS NULL OR g.Action <> 'DELETE')
+          AND coalesce(g.is_active, true) = true
+        RETURN properties(g) AS group, c.ae_title AS matched_aet
+        ORDER BY CASE WHEN c.ae_title = $ae_title THEN 0 ELSE 1 END
+        LIMIT 1
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session(database=self.client.settings.DB_DATABASE) as session:
+                res = session.run(query, ae_title=norm_aet)
+                rec = res.single()
+                if rec:
+                    return _clean_neo4j_value(rec["group"])
+        except Exception as e:
+            logger.warning("get_group_for_ae_title_sync_failed", ae_title=norm_aet, error=str(e))
+        return None
+
+    async def get_group_hierarchy_closure(
+            self,
+            group_id: str,
+    ) -> List[Dict[str, Any]]:
+        """Resolve downward hierarchy closure for a specific group (itself + child subgroups)."""
+        query = """
+        MATCH (root_grp:Group {id: $group_id})
+        WHERE (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
+          AND root_grp.is_active = true
+        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
+        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
+          AND sub_grp.is_active = true
+        WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
+        UNWIND accessible_groups AS g
+        RETURN DISTINCT g.id AS id,
+                        g.name AS name,
+                        g.code AS code,
+                        g.group_type AS group_type,
+                        g.is_active AS is_active
+        ORDER BY g.name ASC
+        """
+        records = await self.client.execute_query(query, {"group_id": group_id})
+        return [_clean_neo4j_value(r) for r in records]
+
+    async def get_or_create_catch_all_group(
+            self,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
+    ) -> Dict[str, Any]:
+        """Ensure the resilient 'GoSmart Health' catch-all root organization exists."""
+        return await self.create_group(
+            name="GoSmart Health",
+            code="GOSMART_HEALTH",
+            group_type="HEALTH_SYSTEM",
+            description="Catch-all root organization for unassociated and lost-and-found studies",
+            test_id=test_id,
+            acted_by=acted_by,
+        )
+
+    def get_or_create_catch_all_group_sync(
+            self,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
+    ) -> Dict[str, Any]:
+        """Synchronously ensure the resilient 'GoSmart Health' catch-all root organization exists."""
+        node = GroupNode(
+            name="GoSmart Health",
+            code="GOSMART_HEALTH",
+            group_type="HEALTH_SYSTEM",
+            description="Catch-all root organization for unassociated and lost-and-found studies",
+            test_id=test_id,
+            ActedBy=acted_by,
+        )
+        query = """
+        MERGE (g:Group {code: $code})
+        ON CREATE SET g.id = $id,
+                      g.name = $name,
+                      g.group_type = $group_type,
+                      g.is_active = true,
+                      g.description = $description,
+                      g.test_id = $test_id,
+                      g.Action = 'CREATE',
+                      g.ActedAt = datetime({timezone: 'UTC'}),
+                      g.ActedBy = $acted_by,
+                      g.CreatedAt = datetime({timezone: 'UTC'})
+        ON MATCH SET  g.name = $name,
+                      g.group_type = $group_type,
+                      g.is_active = true,
+                      g.description = $description,
+                      g.test_id = coalesce($test_id, g.test_id),
+                      g.Action = 'UPDATE',
+                      g.ActedAt = datetime({timezone: 'UTC'}),
+                      g.ActedBy = $acted_by,
+                      g.UpdatedAt = datetime({timezone: 'UTC'})
+        RETURN properties(g) AS group
+        """
+        params = {
+            "id": node.id,
+            "name": node.name,
+            "code": node.code,
+            "group_type": node.group_type,
+            "description": node.description,
+            "test_id": node.test_id,
+            "acted_by": acted_by,
+        }
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session(database=self.client.settings.DB_DATABASE) as session:
+                res = session.run(query, **params)
+                rec = res.single()
+                return _clean_neo4j_value(rec["group"]) if rec else {}
+        except Exception as e:
+            logger.warning("get_or_create_catch_all_group_sync_error", error=str(e))
+            return {"id": node.id, "name": node.name, "code": node.code}
+
+    async def get_user_affiliations(
+            self,
+            user_id: str,
+            include_inactive: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Get all groups and roles associated with a user."""
+        query = """
+        MATCH (u:User {id: $user_id})-[r:MEMBER_OF]->(g:Group)
+        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
+          AND ($include_inactive = true OR (r.status = 'ACTIVE' AND g.is_active = true))
+        RETURN g.id AS group_id,
+               g.name AS group_name,
+               g.code AS group_code,
+               g.group_type AS group_type,
+               r.roles AS roles,
+               r.permissions AS permissions,
+               r.status AS status,
+               r.is_primary AS is_primary
+        ORDER BY r.is_primary DESC, g.name ASC
+        """
+        records = await self.client.execute_query(query, {"user_id": user_id, "include_inactive": include_inactive})
+        return [_clean_neo4j_value(r) for r in records]
+
+    def group_or_lost_and_found(
+            self,
+            group: Optional[Union[Group, Dict[str, Any]]] = None,
+    ) -> Group:
+        """Return the provided Group if present, or fall back to the LostAndFound operational recovery Group."""
+        if isinstance(group, GroupNode):
+            return group
+        if isinstance(group, dict):
+            converted = _dict_to_group_node(group)
+            if converted is not None:
+                return converted
+        return self._lost_and_found_group
+
+    async def list_groups(
+            self,
+            include_inactive: bool = False,
+            include_tests: bool = True,
+            test_id: Optional[str] = None,
+            limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """List groups with optional status and test_id filtering."""
+        query = """
+        MATCH (g:Group)
+        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
+          AND ($include_inactive = true OR g.is_active = true)
+          AND ($include_tests = true OR g.test_id IS NULL OR g.test_id = '')
+          AND ($test_id IS NULL OR g.test_id = $test_id)
+        RETURN properties(g) AS group
+        ORDER BY g.name ASC
+        LIMIT $limit
         """
         records = await self.client.execute_query(
             query,
             {
-                "patient_id": patient_id,
-                "study_uid": study_uid,
-                "group_id": group_id,
+                "include_inactive": include_inactive,
+                "include_tests": include_tests,
                 "test_id": test_id,
-                "acted_by": acted_by,
+                "limit": limit,
             },
         )
-        res = _clean_neo4j_value(records[0]) if records else {}
-        record_audit(
-            action=AuditAction.STUDY_ASSOCIATED_TO_GROUP,
-            actor_id=f"user:{acted_by}",
-            actor=acted_by,
-            target_id=f"study:{study_uid}",
-            target=f"Group {group_id}",
-            status_code=200,
-            status_message=f"Study {study_uid} attached to Group {group_id}",
-            severity="INFO",
-            result="Study PERFORMED_AT association created",
-            details={"study_instance_uid": study_uid, "patient_id": patient_id, "group_id": group_id},
-            test_id=test_id,
+        return [_clean_neo4j_value(r.get("group", r)) for r in records]
+
+    @property
+    def lost_and_found_group(self) -> GroupNode:
+        """Return the cached LostAndFound operational recovery GroupNode."""
+        return self._lost_and_found_group
+
+    def _resolve_missing_group(
+            self,
+            node_id: str,
+            max_depth: int,
+            return_lost_and_found_group: bool,
+            method: str = "my_group",
+    ) -> Optional[GroupNode]:
+        """Log the fallback decision and return LostAndFound or None when no Group is found."""
+        if return_lost_and_found_group:
+            fallback = self.lost_and_found_group
+            logger.info(
+                "my_group_not_found_returning_lost_and_found",
+                method=method,
+                node_id=node_id,
+                max_depth=max_depth,
+                return_lost_and_found_group=True,
+                decision="return_lost_and_found_group",
+                lost_and_found_group_id=fallback.id,
+            )
+            return fallback
+
+        logger.info(
+            "my_group_not_found_returning_none",
+            method=method,
+            node_id=node_id,
+            max_depth=max_depth,
+            return_lost_and_found_group=False,
+            decision="return_none",
         )
-        return res
+        return None
+
+    async def my_group(
+            self,
+            node_id: str,
+            max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+            return_lost_and_found_group: bool = True,
+    ) -> Optional[GroupNode]:
+        """Traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
+        depth = _validate_max_depth(max_depth)
+        clean_id = node_id.strip() if isinstance(node_id, str) else ""
+        if not clean_id:
+            return None
+
+        query = _build_my_group_query(max_depth=depth)
+        records = await self.client.execute_query(query, {"node_id": clean_id})
+        group_node = _dict_to_group_node(records[0].get("group", records[0])) if records else None
+        if group_node is not None:
+            return group_node
+        return self._resolve_missing_group(
+            node_id=clean_id,
+            max_depth=depth,
+            return_lost_and_found_group=return_lost_and_found_group,
+            method="my_group",
+        )
+
+    def my_group_sync(
+            self,
+            node_id: str,
+            max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+            return_lost_and_found_group: bool = True,
+    ) -> Optional[GroupNode]:
+        """Synchronously traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
+        depth = _validate_max_depth(max_depth)
+        clean_id = node_id.strip() if isinstance(node_id, str) else ""
+        if not clean_id:
+            return None
+
+        query = _build_my_group_query(max_depth=depth)
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session(database=self.client.settings.DB_DATABASE) as session:
+                res = session.run(query, node_id=clean_id)
+                rec = res.single()
+                if rec:
+                    raw_data = rec.data() if hasattr(rec, "data") else dict(rec)
+                    group_node = _dict_to_group_node(raw_data.get("group", raw_data))
+                    if group_node is not None:
+                        return group_node
+        except Exception as e:
+            logger.warning("my_group_sync_failed", node_id=clean_id, error=str(e))
+
+        return self._resolve_missing_group(
+            node_id=clean_id,
+            max_depth=depth,
+            return_lost_and_found_group=return_lost_and_found_group,
+            method="my_group_sync",
+        )
+
+    async def nest_group(
+            self,
+            child_group_id: str,
+            parent_group_id: str,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
+    ) -> Dict[str, Any]:
+        """Establish hierarchical relationship: (Child Group)-[:SUB_GROUP_OF]->(Parent Group)."""
+        rel = SubGroupOfRelation(
+            start_node_id=child_group_id,
+            end_node_id=parent_group_id,
+            test_id=test_id,
+            ActedBy=acted_by,
+        )
+
+        query = """
+        MATCH (child:Group {id: $child_id})
+        MATCH (parent:Group {id: $parent_id})
+        MERGE (child)-[r:SUB_GROUP_OF {id: $rel_id}]->(parent)
+        ON CREATE SET r.test_id = $test_id,
+                      r.Action = 'CREATE',
+                      r.ActedAt = datetime({timezone: 'UTC'}),
+                      r.ActedBy = $acted_by,
+                      r.CreatedAt = datetime({timezone: 'UTC'})
+        ON MATCH SET  r.test_id = coalesce($test_id, r.test_id),
+                      r.Action = 'UPDATE',
+                      r.ActedAt = datetime({timezone: 'UTC'}),
+                      r.ActedBy = $acted_by,
+                      r.UpdatedAt = datetime({timezone: 'UTC'})
+        RETURN properties(r) AS rel, child.id AS child_id, parent.id AS parent_id
+        """
+        params = {
+            "child_id": child_group_id,
+            "parent_id": parent_group_id,
+            "rel_id": rel.id,
+            "test_id": test_id,
+            "acted_by": acted_by,
+        }
+        records = await self.client.execute_query(query, params)
+        if records:
+            return _clean_neo4j_value(records[0])
+        return {}
 
     async def reassociate_study_to_group(
-        self,
-        study_instance_uid: str,
-        target_group_id: str,
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
+            self,
+            study_instance_uid: str,
+            target_group_id: str,
+            test_id: Optional[str] = None,
+            acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Triage tool: Re-associate study from old group / catch-all to target Group."""
         neg_type = to_negated_relation_type("PERFORMED_AT")
@@ -1243,28 +1224,103 @@ class GroupService:
         )
         return res
 
+    async def resolve_target_group(
+            self,
+            identifier: Optional[str] = None,
+            test_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resolve a single active Group by id/name/code, or default 'GoSmart Health'.
+
+        Raises RuntimeError when 0 or > 1 matching active groups exist.
+        """
+        norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
+        query, clean_ident = self._build_resolve_group_query(identifier)
+        records = await self.client.execute_query(
+            query,
+            {
+                "identifier": clean_ident,
+                "default_name": DEFAULT_GROUP_NAME,
+                "test_id": norm_test_id,
+            },
+        )
+        return self._validate_resolved_group_records(records, clean_ident)
+
+    def resolve_target_group_sync(
+            self,
+            identifier: Optional[str] = None,
+            test_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Synchronously resolve a single active Group by id/name/code, or default 'GoSmart Health'."""
+        norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
+        query, clean_ident = self._build_resolve_group_query(identifier)
+        driver = self.client.get_sync_driver()
+        with driver.session(database=self.client.settings.DB_DATABASE) as session:
+            result = session.run(
+                query,
+                identifier=clean_ident,
+                default_name=DEFAULT_GROUP_NAME,
+                test_id=norm_test_id,
+            )
+            records = [r.data() for r in result]
+        return self._validate_resolved_group_records(records, clean_ident)
+
+    async def update_user_group_status(
+            self,
+            user_id: str,
+            group_id: str,
+            status: str,
+            acted_by: str = "system",
+    ) -> Optional[Dict[str, Any]]:
+        """Update affiliation status (e.g. 'ACTIVE', 'INACTIVE', 'SUSPENDED') on MEMBER_OF relationship."""
+        query = """
+        MATCH (u:User {id: $user_id})-[r:MEMBER_OF]->(g:Group {id: $group_id})
+        SET r.status = $status,
+            r.Action = 'UPDATE',
+            r.ActedAt = datetime({timezone: 'UTC'}),
+            r.ActedBy = $acted_by,
+            r.UpdatedAt = datetime({timezone: 'UTC'})
+        RETURN properties(r) AS member_of
+        """
+        records = await self.client.execute_query(
+            query,
+            {"user_id": user_id, "group_id": group_id, "status": status, "acted_by": acted_by},
+        )
+        if records:
+            return _clean_neo4j_value(records[0].get("member_of", records[0]))
+        return None
+
 
 group_service = GroupService()
 
 
 async def my_group(
-    node_id: str,
-    max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+        node_id: str,
+        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+        return_lost_and_found_group: bool = True,
 ) -> Optional[GroupNode]:
     """Traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
-    return await group_service.my_group(node_id=node_id, max_depth=max_depth)
+    return await group_service.my_group(
+        node_id=node_id,
+        max_depth=max_depth,
+        return_lost_and_found_group=return_lost_and_found_group,
+    )
 
 
 def my_group_sync(
-    node_id: str,
-    max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+        node_id: str,
+        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+        return_lost_and_found_group: bool = True,
 ) -> Optional[GroupNode]:
     """Synchronously traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
-    return group_service.my_group_sync(node_id=node_id, max_depth=max_depth)
+    return group_service.my_group_sync(
+        node_id=node_id,
+        max_depth=max_depth,
+        return_lost_and_found_group=return_lost_and_found_group,
+    )
 
 
 def group_or_lost_and_found(
-    group: Optional[Union[Group, Dict[str, Any]]] = None,
+        group: Optional[Union[Group, Dict[str, Any]]] = None,
 ) -> Group:
     """Return the provided Group if present, or fall back to the LostAndFound operational recovery Group."""
     return group_service.group_or_lost_and_found(group)

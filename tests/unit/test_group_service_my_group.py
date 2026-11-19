@@ -92,10 +92,26 @@ async def test_my_group_async_returns_group_node_and_handles_empty() -> None:
     with pytest.raises(ValueError, match="non-negative integer"):
         await svc.my_group("node_123", max_depth=-2)
 
-    # 3. Unreachable / unknown node returns None
+    # 3. Unreachable / unknown node returns LostAndFound by default and logs decision
     mock_client.execute_query = AsyncMock(return_value=[])
-    assert await svc.my_group("orphan_node_id") is None
+    with patch("gosmart_graphite.service.group_service.logger") as mock_logger:
+        orphan_result = await svc.my_group("orphan_node_id")
+    assert orphan_result == svc.lost_and_found_group
     mock_client.execute_query.assert_awaited_once()
+    mock_logger.info.assert_called_once()
+    assert mock_logger.info.call_args.args[0] == "my_group_not_found_returning_lost_and_found"
+    assert mock_logger.info.call_args.kwargs["decision"] == "return_lost_and_found_group"
+    assert mock_logger.info.call_args.kwargs["return_lost_and_found_group"] is True
+
+    # 3b. Unreachable / unknown node returns None when return_lost_and_found_group=False and logs decision
+    mock_client.execute_query = AsyncMock(return_value=[])
+    with patch("gosmart_graphite.service.group_service.logger") as mock_logger:
+        assert await svc.my_group("orphan_node_id", return_lost_and_found_group=False) is None
+    mock_client.execute_query.assert_awaited_once()
+    mock_logger.info.assert_called_once()
+    assert mock_logger.info.call_args.args[0] == "my_group_not_found_returning_none"
+    assert mock_logger.info.call_args.kwargs["decision"] == "return_none"
+    assert mock_logger.info.call_args.kwargs["return_lost_and_found_group"] is False
 
     # 4. Nearest Group found (e.g. Instance -> Series -> Study -> Group or 0-hop Group)
     expected_grp = GroupNode(
@@ -182,9 +198,35 @@ def test_my_group_sync_returns_group_node_and_handles_errors() -> None:
     assert "*0..8]-(g:Group)" in run_query
     assert mock_session.run.call_args.kwargs == {"node_id": "fhir_cfg_001"}
 
-    # 4. Driver exception logs warning and returns None gracefully
+    # 3b. Empty sync result respects return_lost_and_found_group flag and logs decision
+    mock_result.single.return_value = None
+    with patch("gosmart_graphite.service.group_service.logger") as mock_logger:
+        assert svc.my_group_sync("orphan_sync") == svc.lost_and_found_group
+    mock_logger.info.assert_called_once()
+    assert mock_logger.info.call_args.args[0] == "my_group_not_found_returning_lost_and_found"
+    assert mock_logger.info.call_args.kwargs["method"] == "my_group_sync"
+    assert mock_logger.info.call_args.kwargs["decision"] == "return_lost_and_found_group"
+
+    with patch("gosmart_graphite.service.group_service.logger") as mock_logger:
+        assert svc.my_group_sync("orphan_sync", return_lost_and_found_group=False) is None
+    mock_logger.info.assert_called_once()
+    assert mock_logger.info.call_args.args[0] == "my_group_not_found_returning_none"
+    assert mock_logger.info.call_args.kwargs["method"] == "my_group_sync"
+    assert mock_logger.info.call_args.kwargs["decision"] == "return_none"
+
+    # 4. Driver exception logs warning and applies return_lost_and_found_group decision
     mock_client.get_sync_driver.side_effect = RuntimeError("Driver closed")
-    assert svc.my_group_sync("fhir_cfg_001") is None
+    with patch("gosmart_graphite.service.group_service.logger") as mock_logger:
+        assert svc.my_group_sync("fhir_cfg_001") == svc.lost_and_found_group
+    mock_logger.warning.assert_called_once()
+    mock_logger.info.assert_called_once()
+    assert mock_logger.info.call_args.kwargs["decision"] == "return_lost_and_found_group"
+
+    with patch("gosmart_graphite.service.group_service.logger") as mock_logger:
+        assert svc.my_group_sync("fhir_cfg_001", return_lost_and_found_group=False) is None
+    mock_logger.warning.assert_called_once()
+    mock_logger.info.assert_called_once()
+    assert mock_logger.info.call_args.kwargs["decision"] == "return_none"
 
 
 @pytest.mark.anyio
@@ -194,12 +236,22 @@ async def test_top_level_my_group_and_my_group_sync_helpers() -> None:
     with patch.object(GroupService, "my_group", new=AsyncMock(return_value=expected)) as mock_async:
         res_async = await my_group("node_abc")
         assert res_async == expected
-        mock_async.assert_awaited_once_with(node_id="node_abc", max_depth=8)
+        mock_async.assert_awaited_once_with(node_id="node_abc", max_depth=8, return_lost_and_found_group=True)
+
+    with patch.object(GroupService, "my_group", new=AsyncMock(return_value=None)) as mock_async:
+        res_async_none = await my_group("node_abc", return_lost_and_found_group=False)
+        assert res_async_none is None
+        mock_async.assert_awaited_once_with(node_id="node_abc", max_depth=8, return_lost_and_found_group=False)
 
     with patch.object(GroupService, "my_group_sync", return_value=expected) as mock_sync:
         res_sync = my_group_sync("node_abc", max_depth=5)
         assert res_sync == expected
-        mock_sync.assert_called_once_with(node_id="node_abc", max_depth=5)
+        mock_sync.assert_called_once_with(node_id="node_abc", max_depth=5, return_lost_and_found_group=True)
+
+    with patch.object(GroupService, "my_group_sync", return_value=None) as mock_sync:
+        res_sync_none = my_group_sync("node_abc", max_depth=5, return_lost_and_found_group=False)
+        assert res_sync_none is None
+        mock_sync.assert_called_once_with(node_id="node_abc", max_depth=5, return_lost_and_found_group=False)
 
 
 @pytest.mark.anyio
@@ -229,7 +281,9 @@ async def test_group_or_lost_and_found_fallback_and_passthrough() -> None:
 
     # 4. Composing my_group(orphan) -> None with group_or_lost_and_found returns LostAndFound
     mock_client.execute_query = AsyncMock(return_value=[])
-    resolved = svc.group_or_lost_and_found(await svc.my_group("dangling_study_node"))
+    resolved = svc.group_or_lost_and_found(
+        await svc.my_group("dangling_study_node", return_lost_and_found_group=False)
+    )
     assert resolved.code == "LOST_AND_FOUND"
     assert resolved.name == "LostAndFound"
 
