@@ -137,9 +137,10 @@ async def ingest_dicom_file(file_path: str, use_actor: bool = True) -> Dict[str,
     """Parse and ingest a local DICOM file into the knowledge graph and storage root."""
     if use_actor:
         from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
+        from gosmart_graphite.model.actor_message import DicomIngestionMessage
 
         actor = get_dicom_actor()
-        res = actor.ask({"type": "INGEST_FILE", "file_path": file_path}, block=True)
+        res = actor.ask(DicomIngestionMessage(file_path=file_path), block=True)
         logger.info("mcp_file_ingested_via_actor", file_path=file_path, result=res)
         return res
 

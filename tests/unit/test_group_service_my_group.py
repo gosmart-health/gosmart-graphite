@@ -30,7 +30,6 @@ def test_group_alias_and_curated_upward_relation_types() -> None:
     assert HasLostAndFoundRelation.__type__ == "HAS_LOST_AND_FOUND"
 
     expected_core_rels = {
-        "SUB_GROUP_OF",
         "MEMBER_OF",
         "HAS_IDENTITY",
         "USES_AUTHENTICATOR",
@@ -50,8 +49,9 @@ def test_group_alias_and_curated_upward_relation_types() -> None:
     for fhir_rel_cls in FHIR_RELATION_CLASSES:
         assert fhir_rel_cls.__type__ in UPWARD_GROUP_RELATION_TYPES
 
-    # Ensure no duplicates and no System-root or LostAndFound relation
+    # Ensure no duplicates and no System-root or LostAndFound or deprecated SUB_GROUP_OF relation
     assert len(UPWARD_GROUP_RELATION_TYPES) == len(set(UPWARD_GROUP_RELATION_TYPES))
+    assert "SUB_GROUP_OF" not in UPWARD_GROUP_RELATION_TYPES
     assert "HAS_DICOM_CONFIGURATION" not in UPWARD_GROUP_RELATION_TYPES
     assert "HAS_LOST_AND_FOUND" not in UPWARD_GROUP_RELATION_TYPES
 
@@ -365,3 +365,63 @@ async def test_ensure_lost_and_found_group_async_and_sync_and_schema_init() -> N
     ) as mock_ensure_lnf:
         await graph_svc.init_schema_constraints()
         mock_ensure_lnf.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_catch_all_group_belongs_to_system_and_nest_group_uses_belongs_to() -> None:
+    mock_client = MagicMock()
+    mock_client.settings.DB_DATABASE = "neo4j"
+    svc = GroupService(client=mock_client)
+
+    expected_grp = GroupNode(
+        name="GoSmart Health",
+        code="GOSMART_HEALTH",
+        group_type="HEALTH_SYSTEM",
+        description="Catch-all root organization for unassociated and lost-and-found studies",
+    )
+
+    # 1. Async get_or_create_catch_all_group persists (:Group {name: 'GoSmart Health'})-[:BELONGS_TO]->(:System)
+    mock_client.execute_query = AsyncMock(return_value=[{"group": expected_grp.model_dump()}])
+    res_async = await svc.get_or_create_catch_all_group(acted_by="system:bootstrap")
+    assert res_async["name"] == "GoSmart Health"
+    assert res_async["code"] == "GOSMART_HEALTH"
+    cypher_query, cypher_params = mock_client.execute_query.call_args.args
+    assert "MERGE (s:System {id: $sys_id})" in cypher_query
+    assert "MERGE (g:Group {code: $code})" in cypher_query
+    assert "MERGE (g)-[r:BELONGS_TO {id: $rel_id}]->(s)" in cypher_query
+    assert cypher_params["name"] == "GoSmart Health"
+    assert cypher_params["code"] == "GOSMART_HEALTH"
+
+    # 2. Sync get_or_create_catch_all_group_sync uses the same Cypher
+    mock_result = MagicMock()
+    mock_result.single.return_value = {"group": expected_grp.model_dump()}
+    mock_session = MagicMock()
+    mock_session.run.return_value = mock_result
+    mock_session_cm = MagicMock()
+    mock_session_cm.__enter__.return_value = mock_session
+    mock_session_cm.__exit__.return_value = False
+    mock_driver = MagicMock()
+    mock_driver.session.return_value = mock_session_cm
+    mock_client.get_sync_driver.return_value = mock_driver
+
+    res_sync = svc.get_or_create_catch_all_group_sync(acted_by="system:sync")
+    assert res_sync["name"] == "GoSmart Health"
+    assert "MERGE (g)-[r:BELONGS_TO {id: $rel_id}]->(s)" in mock_session.run.call_args.args[0]
+
+    # 3. nest_group creates (child:Group)-[:BELONGS_TO]->(parent:Group)
+    mock_client.execute_query = AsyncMock(
+        return_value=[{"rel": {"id": "rel_1"}, "child_id": "grp_child", "parent_id": "grp_parent"}]
+    )
+    nest_res = await svc.nest_group("grp_child", "grp_parent", acted_by="cli:admin")
+    assert nest_res["child_id"] == "grp_child"
+    nest_cypher = mock_client.execute_query.call_args.args[0]
+    assert "MERGE (child)-[r:BELONGS_TO {id: $rel_id}]->(parent)" in nest_cypher
+    assert "SUB_GROUP_OF" not in nest_cypher
+
+    # 4. Catch-all Cypher ON MATCH never overwrites existing Group.test_id
+    assert "g.test_id = coalesce($test_id, g.test_id)" not in cypher_query
+
+    # 5. my_group query stops at Group and never traverses :System even with (:Group)-[:BELONGS_TO]->(:System)
+    my_group_query = _build_my_group_query()
+    assert "BELONGS_TO" in my_group_query
+    assert "NOT 'System' IN labels(n)" in my_group_query

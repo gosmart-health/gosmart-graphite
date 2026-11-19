@@ -18,6 +18,8 @@ from gosmart_graphite.model.fhir_config import FHIRConfigurationCreateRequest
 from gosmart_graphite.model.llm_config import LLMConfigCreateRequest
 from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
 from gosmart_graphite.service.fhir_config_service import fhir_config_service
+from gosmart_graphite.service.graph_service import graph_service
+from gosmart_graphite.service.group_service import DEFAULT_GROUP_NAME, group_service
 from gosmart_graphite.service.llm_config_service import llm_config_service
 from gosmart_graphite.service.system_service import system_service
 
@@ -27,6 +29,24 @@ configure_app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+async def _ensure_cli_db_ready(
+    assign_group: Optional[str],
+    acted_by: str,
+    test_id: Optional[str],
+) -> None:
+    """Ensure Neo4j schema constraints/indexes exist and bootstrap default Group on fresh databases."""
+    await graph_service.init_schema_constraints()
+    clean_assign = assign_group.strip() if isinstance(assign_group, str) and assign_group.strip() else None
+    if clean_assign is None or clean_assign == DEFAULT_GROUP_NAME:
+        try:
+            await group_service.resolve_target_group(identifier=clean_assign, test_id=test_id)
+        except RuntimeError as exc:
+            if "not found" in str(exc).lower():
+                await system_service.bootstrap_system(acted_by=acted_by, test_id=test_id)
+            else:
+                raise
 
 
 def _load_single_json_object(file: Path, entity_label: str) -> dict[str, Any]:
@@ -91,6 +111,11 @@ def configure_llm_config(
 
     async def _run() -> dict[str, Any]:
         try:
+            await _ensure_cli_db_ready(
+                assign_group=assign if assign is not None else req.assign_group,
+                acted_by=acted_by,
+                test_id=test_id if test_id is not None else req.test_id,
+            )
             return await llm_config_service.upsert_llm_config(
                 config_data=req,
                 assign_group=assign,
@@ -179,6 +204,11 @@ def configure_dicom_config(
 
     async def _run() -> dict[str, Any]:
         try:
+            await _ensure_cli_db_ready(
+                assign_group=assign if assign is not None else req.group_id,
+                acted_by=acted_by,
+                test_id=req.test_id,
+            )
             return await system_service.create_configuration(
                 config_data=req,
                 assign_group=assign,
@@ -260,6 +290,11 @@ def configure_fhir_config(
 
     async def _run() -> dict[str, Any]:
         try:
+            await _ensure_cli_db_ready(
+                assign_group=assign if assign is not None else req.group_id,
+                acted_by=acted_by,
+                test_id=test_id if test_id is not None else req.test_id,
+            )
             return await fhir_config_service.create_fhir_config(
                 config_data=req,
                 assign_group_id=assign,

@@ -434,6 +434,7 @@ def test_cli_configure_dicom_and_fhir_group_assignment(tmp_path):
         "action": "CREATE",
     }
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()),
         patch.object(
             system_service,
             "create_configuration",
@@ -478,6 +479,7 @@ def test_cli_configure_dicom_and_fhir_group_assignment(tmp_path):
         "action": "CREATE",
     }
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()),
         patch.object(
             fhir_config_service,
             "create_fhir_config",

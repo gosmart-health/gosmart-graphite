@@ -167,14 +167,8 @@ class MemberOfRelation(AuditableRelation):
     is_primary: bool = Field(default=False, description="Whether this is the user's primary/default group affiliation")
 
 
-class SubGroupOfRelation(AuditableRelation):
-    """Relationship connecting Child Group -> Parent Group (hierarchical tree)."""
-
-    __type__: ClassVar[str] = "SUB_GROUP_OF"
-
-
 class BelongsToRelation(AuditableRelation):
-    """Relationship connecting Patient -> Group."""
+    """Relationship connecting Patient -> Group, Child Group -> Parent Group, or Root Group -> System."""
 
     __type__: ClassVar[str] = "BELONGS_TO"
 

@@ -87,10 +87,15 @@ class FHIRConfigService:
     """Service managing Neo4j-persisted, group-scoped FHIR configurations."""
 
     _ANCESTOR_RESOLVE_CYPHER: LiteralString = """
-    MATCH path = (start_g:Group {id: $group_id})-[:SUB_GROUP_OF*0..]->(anc:Group)
+    MATCH path = (start_g:Group {id: $group_id})-[:BELONGS_TO*0..]->(anc:Group)
     WHERE (start_g.Action IS NULL OR start_g.Action <> 'DELETE')
       AND coalesce(start_g.is_active, true) = true
-      AND all(n IN nodes(path) WHERE (n.Action IS NULL OR n.Action <> 'DELETE') AND coalesce(n.is_active, true) = true)
+      AND all(
+        n IN nodes(path)
+        WHERE 'Group' IN labels(n)
+          AND (n.Action IS NULL OR n.Action <> 'DELETE')
+          AND coalesce(n.is_active, true) = true
+      )
       AND all(rel IN relationships(path) WHERE rel.Action IS NULL OR rel.Action <> 'DELETE')
     MATCH (anc)-[r:HAS_FHIR_CONFIG]->(f:FHIRConfiguration)
     WHERE (r.Action IS NULL OR r.Action <> 'DELETE')

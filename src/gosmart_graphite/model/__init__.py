@@ -1,3 +1,8 @@
+from gosmart_graphite.model.actor_message import (
+    DicomIngestionMessage,
+    DicomMockIngestionMessage,
+    FhirIngestionMessage,
+)
 from gosmart_graphite.model.audit import (
     AuditAction,
     AuditNode,
@@ -16,7 +21,6 @@ from gosmart_graphite.model.auth import (
     MemberOfRelation,
     PerformedAtRelation,
     ScopedToRelation,
-    SubGroupOfRelation,
     UserNode,
     UsesAuthenticatorRelation,
 )
@@ -121,6 +125,9 @@ from gosmart_graphite.model.system import (
 )
 
 __all__ = [
+    "DicomIngestionMessage",
+    "DicomMockIngestionMessage",
+    "FhirIngestionMessage",
     "PatientModel",
     "StudyModel",
     "SeriesModel",
@@ -181,7 +188,6 @@ __all__ = [
     "HasAuthenticatorRelation",
     "HasLostAndFoundRelation",
     "MemberOfRelation",
-    "SubGroupOfRelation",
     "BelongsToRelation",
     "PerformedAtRelation",
     "ScopedToRelation",

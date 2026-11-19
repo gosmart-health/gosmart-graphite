@@ -113,7 +113,7 @@ graph TD
   - Async and `_sync` Neo4j persistence for `(:LLM_Config)` nodes and `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` links.
   - `resolve_target_group()`: Matches active `Group` by `id`, `name`, or `code` (defaults to `'GoSmart Health'`; fails on 0 or `>1` matches).
   - `upsert_llm_config()`: Overwrite clones prior canonical state to `<id>__archived__<hex>` (`Action='DELETE'`) with `[:NOT_HAS_LLM_CONFIG]` links on previously linked groups while preserving active `[:HAS_LLM_CONFIG]` links across all sponsoring groups.
-  - `resolve_config_for_group()` / `resolve_config_for_group_sync()`: Upward `(:Group)-[:SUB_GROUP_OF*0..]->(:Group)` shortest-path resolution with `'GoSmart Health'` fallback; raises on same-depth ambiguity.
+  - `resolve_config_for_group()` / `resolve_config_for_group_sync()`: Upward `(:Group)-[:BELONGS_TO*0..]->(:Group)` shortest-path resolution with `'GoSmart Health'` fallback; raises on same-depth ambiguity.
 * **`embedding_service.py`**:
   - `EmbeddingService` (aliased as `VectorService`) dynamically resolves active `LLM_Config` (default `tag='embedding'`) for the active `Group` (`ContextVar` or explicit `group_id`).
   - Maintains a thread-safe Genkit client cache keyed by resolved config fingerprint (`provider`, `url`, resolved `api_key`, `location`, `project_id`).

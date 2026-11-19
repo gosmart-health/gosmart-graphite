@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
+from gosmart_graphite.model.actor_message import DicomIngestionMessage, DicomMockIngestionMessage
 from gosmart_graphite.model.dicom import DicomIngestResponse
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.graph_service import graph_service
@@ -55,12 +56,11 @@ async def upload_dicom_file(
         if async_actor:
             actor = get_dicom_actor()
             actor.tell(
-                {
-                    "type": "INGEST_FILE",
-                    "file_path": storage_uri.replace("file://", ""),
-                    "test_id": test_id,
-                    "acted_by": "api_actor",
-                }
+                DicomIngestionMessage(
+                    file_path=storage_uri.replace("file://", ""),
+                    test_id=test_id,
+                    acted_by="api_actor",
+                )
             )
             return DicomIngestResponse(
                 success=True,
@@ -97,13 +97,12 @@ async def generate_and_ingest_mock(req: MockDicomRequest) -> DicomIngestResponse
     if req.async_actor:
         actor = get_dicom_actor()
         res = actor.ask(
-            {
-                "type": "INGEST_MOCK",
-                "patient_id": req.patient_id,
-                "modality": req.modality,
-                "test_id": req.test_id,
-                "acted_by": "api_actor",
-            }
+            DicomMockIngestionMessage(
+                patient_id=req.patient_id,
+                modality=req.modality,
+                test_id=req.test_id,
+                acted_by="api_actor",
+            )
         )
         return DicomIngestResponse(
             success=res.get("success", False),

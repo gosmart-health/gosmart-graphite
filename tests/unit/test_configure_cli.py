@@ -224,6 +224,7 @@ def test_cli_configure_dicom_config_validation_and_create(tmp_path: Path) -> Non
     )
 
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()),
         patch.object(
             SystemService,
             "create_configuration",
@@ -257,6 +258,7 @@ def test_cli_configure_dicom_config_validation_and_create(tmp_path: Path) -> Non
     }
 
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()) as mock_ready,
         patch.object(
             SystemService,
             "create_configuration",
@@ -284,6 +286,7 @@ def test_cli_configure_dicom_config_validation_and_create(tmp_path: Path) -> Non
         assert "10.0.0.10" in res_ok.output
         assert "grp_123" in res_ok.output
         assert "test_cli_dicom" in res_ok.output
+        mock_ready.assert_awaited_once_with(assign_group="grp_123", acted_by="cli:tester", test_id="test_cli_dicom")
         mock_create.assert_awaited_once()
         req_arg = mock_create.call_args.kwargs["config_data"]
         assert isinstance(req_arg, DICOMConfigurationCreateRequest)
@@ -330,6 +333,7 @@ def test_cli_configure_fhir_config_validation_and_create(tmp_path: Path) -> None
     )
 
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()),
         patch.object(
             FHIRConfigService,
             "create_fhir_config",
@@ -356,6 +360,7 @@ def test_cli_configure_fhir_config_validation_and_create(tmp_path: Path) -> None
     }
 
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()) as mock_ready,
         patch.object(
             FHIRConfigService,
             "create_fhir_config",
@@ -382,10 +387,146 @@ def test_cli_configure_fhir_config_validation_and_create(tmp_path: Path) -> None
         assert "https://fhir.example.org/r4" in res_ok.output
         assert "GoSmart Health (grp_root)" in res_ok.output
         assert "test_cli_fhir" in res_ok.output
+        mock_ready.assert_awaited_once_with(assign_group="grp_root", acted_by="cli:tester", test_id="test_cli_fhir")
         mock_create.assert_awaited_once()
         assert mock_create.call_args.kwargs["assign_group_id"] == "grp_root"
         assert mock_create.call_args.kwargs["acted_by"] == "cli:tester"
         assert mock_create.call_args.kwargs["test_id"] == "test_cli_fhir"
+        mock_close.assert_awaited_once()
+
+
+@pytest.mark.anyio
+async def test_ensure_cli_db_ready_initializes_schema_and_bootstraps_fresh_db() -> None:
+    from gosmart_graphite.cli.configure import _ensure_cli_db_ready
+    from gosmart_graphite.service.graph_service import graph_service
+    from gosmart_graphite.service.group_service import group_service
+    from gosmart_graphite.service.system_service import system_service
+
+    # 1. Missing default 'GoSmart Health' triggers bootstrap_system after init_schema_constraints
+    with (
+        patch.object(graph_service, "init_schema_constraints", new=AsyncMock()) as mock_init,
+        patch.object(
+            group_service,
+            "resolve_target_group",
+            new=AsyncMock(side_effect=RuntimeError("Target group 'GoSmart Health' not found in Neo4j.")),
+        ) as mock_resolve,
+        patch.object(system_service, "bootstrap_system", new=AsyncMock(return_value={})) as mock_boot,
+    ):
+        await _ensure_cli_db_ready(assign_group="GoSmart Health", acted_by="cli:configure", test_id=None)
+        mock_init.assert_awaited_once()
+        mock_resolve.assert_awaited_once_with(identifier="GoSmart Health", test_id=None)
+        mock_boot.assert_awaited_once_with(acted_by="cli:configure", test_id=None)
+
+    # 2. Existing default group skips bootstrap_system
+    with (
+        patch.object(graph_service, "init_schema_constraints", new=AsyncMock()) as mock_init,
+        patch.object(
+            group_service,
+            "resolve_target_group",
+            new=AsyncMock(return_value={"id": "grp_default", "name": "GoSmart Health"}),
+        ),
+        patch.object(system_service, "bootstrap_system", new=AsyncMock()) as mock_boot,
+    ):
+        await _ensure_cli_db_ready(assign_group=None, acted_by="cli:configure", test_id=None)
+        mock_init.assert_awaited_once()
+        mock_boot.assert_not_awaited()
+
+    # 3. Explicit custom group only initializes schema constraints (does not bootstrap default group)
+    with (
+        patch.object(graph_service, "init_schema_constraints", new=AsyncMock()) as mock_init,
+        patch.object(group_service, "resolve_target_group", new=AsyncMock()) as mock_resolve,
+        patch.object(system_service, "bootstrap_system", new=AsyncMock()) as mock_boot,
+    ):
+        await _ensure_cli_db_ready(assign_group="grp_custom", acted_by="cli:configure", test_id=None)
+        mock_init.assert_awaited_once()
+        mock_resolve.assert_not_awaited()
+        mock_boot.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_init_schema_constraints_registers_config_relationship_indexes() -> None:
+    from gosmart_graphite.service.graph_service import GraphService
+    from gosmart_graphite.service.group_service import GroupService
+
+    mock_client = MagicMock()
+    mock_client.verify_connectivity = AsyncMock(return_value=True)
+    mock_client.execute_query = AsyncMock(return_value=[])
+    svc = GraphService(client=mock_client)
+
+    with patch.object(GroupService, "ensure_lost_and_found_group", new=AsyncMock()):
+        await svc.init_schema_constraints(force=True)
+
+    statements = [call.args[0] for call in mock_client.execute_query.call_args_list]
+    assert (
+        "CREATE CONSTRAINT llm_config_sys_id_unique IF NOT EXISTS FOR (l:LLM_Config) REQUIRE l.id IS UNIQUE"
+        in statements
+    )
+    assert "CREATE INDEX has_llm_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_LLM_CONFIG]-() ON (r.id)" in statements
+    assert (
+        "CREATE INDEX not_has_llm_config_id_idx IF NOT EXISTS FOR ()-[r:NOT_HAS_LLM_CONFIG]-() ON (r.id)" in statements
+    )
+    assert "CREATE INDEX has_fhir_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_FHIR_CONFIG]-() ON (r.id)" in statements
+    assert (
+        "CREATE INDEX has_dicom_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_DICOM_CONFIGURATION]-() ON (r.id)"
+        in statements
+    )
+    assert "CREATE INDEX serves_id_idx IF NOT EXISTS FOR ()-[r:SERVES]-() ON (r.id)" in statements
+    assert "CREATE INDEX belongs_to_id_idx IF NOT EXISTS FOR ()-[r:BELONGS_TO]-() ON (r.id)" in statements
+    assert "CREATE INDEX not_belongs_to_id_idx IF NOT EXISTS FOR ()-[r:NOT_BELONGS_TO]-() ON (r.id)" in statements
+
+
+def test_cli_configure_llm_config_ensures_db_ready_and_upsert(tmp_path: Path) -> None:
+    from gosmart_graphite.db.neo4j import neo4j_client
+    from gosmart_graphite.service.llm_config_service import llm_config_service
+
+    runner = CliRunner()
+    llm_file = tmp_path / "llm_embedding.json"
+    llm_file.write_text(
+        json.dumps(
+            {
+                "tag": "embedding-v1",
+                "provider": "ollama",
+                "model": "embeddinggemma",
+                "url": "http://localhost:11434",
+                "dimensions": 768,
+            }
+        ),
+        encoding="utf-8",
+    )
+    saved_response = {
+        "id": "llm_cfg_123",
+        "tag": "embedding-v1",
+        "provider": "ollama",
+        "model": "embeddinggemma",
+        "url": "http://localhost:11434",
+        "dimensions": 768,
+        "dimensions_truncated": None,
+        "api_key": None,
+        "api_key_source": "none",
+        "location": "us-central1",
+        "project_id": None,
+        "groups": [{"id": "grp_root", "name": "GoSmart Health", "code": "GOSMART_HEALTH"}],
+        "action": "CREATE",
+    }
+
+    with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()) as mock_ready,
+        patch.object(
+            llm_config_service,
+            "upsert_llm_config",
+            new=AsyncMock(return_value=saved_response),
+        ) as mock_upsert,
+        patch.object(neo4j_client, "close", new=AsyncMock()) as mock_close,
+    ):
+        res = runner.invoke(
+            cli_app,
+            ["configure", "llm-config", "--file", str(llm_file), "--assign", "GoSmart Health"],
+        )
+        assert res.exit_code == 0, res.output
+        assert "embedding-v1" in res.output
+        assert "GoSmart Health (grp_root)" in res.output
+        mock_ready.assert_awaited_once_with(assign_group="GoSmart Health", acted_by="cli:configure", test_id=None)
+        mock_upsert.assert_awaited_once()
         mock_close.assert_awaited_once()
 
 

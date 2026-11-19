@@ -2,8 +2,10 @@ import asyncio
 from typing import Any, Dict, Optional
 
 import pykka
+from pydantic import ValidationError
 
 from gosmart_graphite.core.logging import get_logger
+from gosmart_graphite.model.actor_message import FhirIngestionMessage
 from gosmart_graphite.service.fhir_service import EncRelevantResources, FhirService
 
 logger = get_logger("gosmart_gs.fhir_actor")
@@ -12,9 +14,9 @@ logger = get_logger("gosmart_gs.fhir_actor")
 class FhirActor(pykka.ThreadingActor):
     """Pykka Actor for handling FHIR operations asynchronously (fire-and-forget).
 
-    Receives patient_id, accession_number, study_uid, and series_uid strings, fetches the
-    associated FHIR encounter resource bundle, and registers nodes and
-    relationships into Neo4j.
+    Receives a FhirIngestionMessage (or compatible dict) with patient_id,
+    accession_number, study_uid, and series_uid, fetches the associated FHIR
+    encounter resource bundle, and registers nodes and relationships into Neo4j.
     """
 
     use_daemon_thread = True
@@ -37,8 +39,8 @@ class FhirActor(pykka.ThreadingActor):
             if self._fhir_service is not None:
                 try:
                     self._loop.run_until_complete(self._fhir_service.fetcher.close())
-                except Exception:
-                    pass
+                except Exception as why:
+                    logger.error("Failed to close FHIR fetcher", why=why)
             self._loop.close()
 
     async def register_graph(
@@ -76,26 +78,34 @@ class FhirActor(pykka.ThreadingActor):
         )
 
     def on_receive(self, message: Any) -> Any:
-        """Handle incoming message containing patient_id, accession_number, study_uid, and series_uid."""
-        if not isinstance(message, dict):
+        """Handle incoming FhirIngestionMessage (or control/dict payload)."""
+        if isinstance(message, FhirIngestionMessage):
+            fhir_msg = message
+        elif isinstance(message, dict):
+            msg_type = message.get("type")
+            if msg_type == "PING":
+                return {"status": "PONG", "processed_count": self.processed_count}
+            if msg_type == "STATUS":
+                return {
+                    "processed_count": self.processed_count,
+                    "last_status": self.last_status,
+                }
+            try:
+                fhir_msg = FhirIngestionMessage.model_validate(message)
+            except ValidationError as e:
+                logger.warning("fhir_actor_invalid_message", error=str(e))
+                return {"success": False, "error": f"Invalid FhirIngestionMessage: {e}"}
+        else:
             logger.warning("fhir_actor_unsupported_message_type", msg_type=type(message).__name__)
             return {"success": False, "error": f"Unsupported message type: {type(message).__name__}"}
 
-        msg_type = message.get("type")
-        if msg_type == "PING":
-            return {"status": "PONG", "processed_count": self.processed_count}
-        if msg_type == "STATUS":
-            return {
-                "processed_count": self.processed_count,
-                "last_status": self.last_status,
-            }
-
-        patient_id = message.get("patient_id", "")
-        accession_number = message.get("accession_number", "")
-        study_uid = message.get("study_uid", "")
-        series_uid = message.get("series_uid", "")
-        test_id = message.get("test_id")
-        acted_by = message.get("acted_by") or "fhir_actor"
+        patient_id = fhir_msg.patient_id
+        accession_number = fhir_msg.accession_number or ""
+        study_uid = fhir_msg.study_uid
+        series_uid = fhir_msg.series_uid
+        test_id = fhir_msg.test_id
+        acted_by = fhir_msg.acted_by
+        group_id = fhir_msg.group_id
 
         logger.debug(
             "fhir_actor_message_received",
@@ -103,6 +113,7 @@ class FhirActor(pykka.ThreadingActor):
             accession_number=accession_number,
             study_uid=study_uid,
             series_uid=series_uid,
+            group_id=group_id,
         )
 
         upsert_result: Optional[Dict[str, Any]] = None
@@ -136,13 +147,20 @@ class FhirActor(pykka.ThreadingActor):
                             acted_by=acted_by,
                         )
                     )
-                    logger.info(
-                        "fhir_graph_registered",
-                        study_uid=study_uid,
-                        series_uid=series_uid,
-                        nodes_count=len(upsert_result.get("node_ids", [])),
-                        relationships_count=len(upsert_result.get("relationship_ids", [])),
-                    )
+                    if upsert_result:
+                        logger.info(
+                            "fhir_graph_registered",
+                            study_uid=study_uid,
+                            series_uid=series_uid,
+                            nodes_count=len(upsert_result.get("node_ids", [])),
+                            relationships_count=len(upsert_result.get("relationship_ids", [])),
+                        )
+                    else:
+                        logger.error(
+                            "fhir_graph_registration_failed",
+                            study_uid=study_uid,
+                            series_uid=series_uid,
+                        )
                     self.last_status = "SUCCESS"
                 else:
                     logger.info(
@@ -167,8 +185,14 @@ class FhirActor(pykka.ThreadingActor):
                 if self._fhir_service is None:
                     try:
                         self._loop.run_until_complete(fhir.fetcher.close())
-                    except Exception:
-                        pass
+                    except Exception as why:
+                        logger.error(
+                            "fhir_actor_close_failed",
+                            study_uid=study_uid,
+                            series_uid=series_uid,
+                            error=str(why),
+                            exc_info=True,
+                        )
         else:
             self.last_status = "IDLE"
 
@@ -183,10 +207,11 @@ class FhirActor(pykka.ThreadingActor):
 
 
 # Global Actor Reference management
+# noinspection DuplicatedCode
 _fhir_actor_ref: Optional[pykka.ActorRef] = None
 
 
-def get_fhir_actor() -> pykka.ActorRef:
+def get_fhir_actor() -> pykka.ActorRef | None:
     """Get or start the singleton FhirActor."""
     global _fhir_actor_ref
     if _fhir_actor_ref is None or not _fhir_actor_ref.is_alive():
@@ -204,26 +229,29 @@ def stop_fhir_actor() -> None:
 
 def notify_fhir(
     patient_id: str = "",
-    accession_number: str = "",
+    accession_number: Optional[str] = "",
     study_uid: str = "",
     series_uid: str = "",
     test_id: Optional[str] = None,
     acted_by: str = "fhir_actor",
+    group_id: Optional[str] = None,
 ) -> None:
     """Convenience fire-and-forget helper to send patient_id, accession_number,
-    study_uid, and series_uid to FhirActor.
+    study_uid, series_uid, and group_id to FhirActor.
     """
     try:
         actor_ref = get_fhir_actor()
-        actor_ref.tell(
-            {
-                "patient_id": str(patient_id),
-                "accession_number": str(accession_number),
-                "study_uid": str(study_uid),
-                "series_uid": str(series_uid),
-                "test_id": test_id,
-                "acted_by": acted_by,
-            }
+        if actor_ref:
+            actor_ref.tell(
+                FhirIngestionMessage(
+                    patient_id=patient_id,
+                    accession_number=accession_number,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                    test_id=test_id,
+                    acted_by=acted_by,
+                    group_id=group_id,
+                )
         )
     except Exception as e:
         logger.error("notify_fhir_failed", error=str(e), exc_info=True)

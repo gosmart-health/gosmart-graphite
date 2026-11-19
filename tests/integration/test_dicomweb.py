@@ -84,6 +84,8 @@ def test_dicomweb_stow_rs_provenance(client):
     """Verify STOW-RS captures client IP, user ID scaffolding, and service identity."""
     from unittest.mock import MagicMock, patch
 
+    from gosmart_graphite.model.actor_message import DicomIngestionMessage
+
     ds = dicom_service.create_mock_dicom(
         patient_id="STOW-PROV-001",
         modality="MR",
@@ -107,12 +109,13 @@ def test_dicomweb_stow_rs_provenance(client):
         assert response.status_code == 200
         mock_actor.tell.assert_called_once()
         msg = mock_actor.tell.call_args[0][0]
-        assert msg["type"] == "INGEST_FILE"
-        assert msg["source"].startswith("stow:")
-        assert msg["source_identity"] == "user:dr_watson"
-        assert msg["destination"].startswith("stow:")
-        assert msg["destination_identity"] == "service:dicomweb"
-        assert msg["acted_by"] == "user:dr_watson"
+        assert isinstance(msg, DicomIngestionMessage)
+        assert msg.type == "INGEST_FILE"
+        assert msg.source.startswith("stow:")
+        assert msg.source_identity == "user:dr_watson"
+        assert msg.destination.startswith("stow:")
+        assert msg.destination_identity == "service:dicomweb"
+        assert msg.acted_by == "user:dr_watson"
 
 
 def test_dicomweb_qido_series_and_instances(client):

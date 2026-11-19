@@ -128,7 +128,7 @@ local/network **Ollama** server or **Google Vertex AI / Gemini API**.
 Runtime parameters are **not** read from static `VECTOR_*` / `VERTEX_*`
 environment variables. Instead, `EmbeddingService` dynamically resolves the
 active `(:LLM_Config {tag: "embedding"})` node in Neo4j for the active
-`(:Group)` (traversing upward via `(:Group)-[:SUB_GROUP_OF*0..]->(:Group)` with
+`(:Group)` (traversing upward via `(:Group)-[:BELONGS_TO*0..]->(:Group)` with
 `'GoSmart Health'` fallback), caches Genkit clients per configuration
 fingerprint, applies optional Matryoshka truncation
 (`dimensions_truncated <= dimensions`), and performs L2 normalization.

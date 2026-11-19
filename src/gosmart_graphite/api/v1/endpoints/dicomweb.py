@@ -14,6 +14,7 @@ from gosmart_graphite.actor.audit_actor import record_audit
 from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
 from gosmart_graphite.core.logging import get_logger
+from gosmart_graphite.model.actor_message import DicomIngestionMessage
 from gosmart_graphite.model.audit import AuditAction
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.dicomweb_service import dicomweb_service
@@ -361,16 +362,15 @@ async def stow_store_instances(
         # Ingestion pipeline: index into knowledge graph via actor
         if actor.is_alive():
             actor.tell(
-                {
-                    "type": "INGEST_FILE",
-                    "file_path": str(file_path),
-                    "source": source,
-                    "source_identity": source_identity,
-                    "destination": destination,
-                    "destination_identity": destination_identity,
-                    "acted_by": f"user:{user_id}",
-                    "group_id": group_id,
-                }
+                DicomIngestionMessage(
+                    file_path=str(file_path),
+                    source=source,
+                    source_identity=source_identity,
+                    destination=destination,
+                    destination_identity=destination_identity,
+                    acted_by=f"user:{user_id}",
+                    group_id=group_id,
+                )
             )
 
         referenced_sop_items.append(

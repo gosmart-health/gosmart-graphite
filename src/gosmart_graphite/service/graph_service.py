@@ -628,6 +628,19 @@ class GraphService:
             "CREATE CONSTRAINT audit_log_sys_id_unique IF NOT EXISTS FOR (a:AuditLog) REQUIRE a.id IS UNIQUE",
             "CREATE CONSTRAINT llm_config_sys_id_unique IF NOT EXISTS FOR (l:LLM_Config) REQUIRE l.id IS UNIQUE",
             "CREATE INDEX llm_config_tag_idx IF NOT EXISTS FOR (l:LLM_Config) ON (l.tag)",
+            "CREATE INDEX has_llm_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_LLM_CONFIG]-() ON (r.id)",
+            "CREATE INDEX not_has_llm_config_id_idx IF NOT EXISTS FOR ()-[r:NOT_HAS_LLM_CONFIG]-() ON (r.id)",
+            "CREATE INDEX has_fhir_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_FHIR_CONFIG]-() ON (r.id)",
+            "CREATE INDEX not_has_fhir_config_id_idx IF NOT EXISTS FOR ()-[r:NOT_HAS_FHIR_CONFIG]-() ON (r.id)",
+            "CREATE INDEX has_dicom_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_DICOM_CONFIGURATION]-() ON (r.id)",
+            (
+                "CREATE INDEX not_has_dicom_config_id_idx IF NOT EXISTS "
+                "FOR ()-[r:NOT_HAS_DICOM_CONFIGURATION]-() ON (r.id)"
+            ),
+            "CREATE INDEX serves_id_idx IF NOT EXISTS FOR ()-[r:SERVES]-() ON (r.id)",
+            "CREATE INDEX not_serves_id_idx IF NOT EXISTS FOR ()-[r:NOT_SERVES]-() ON (r.id)",
+            "CREATE INDEX belongs_to_id_idx IF NOT EXISTS FOR ()-[r:BELONGS_TO]-() ON (r.id)",
+            "CREATE INDEX not_belongs_to_id_idx IF NOT EXISTS FOR ()-[r:NOT_BELONGS_TO]-() ON (r.id)",
             *FHIR_ALL_SCHEMA_DDL,
         ]
         if not await self.client.verify_connectivity():

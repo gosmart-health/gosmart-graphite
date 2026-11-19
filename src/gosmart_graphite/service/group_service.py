@@ -15,7 +15,6 @@ from gosmart_graphite.model.auth import (
     PerformedAtRelation,
     ScopedToRelation,
     ServesRelation,
-    SubGroupOfRelation,
     UsesAuthenticatorRelation,
 )
 from gosmart_graphite.model.fhir.relations import FHIR_RELATION_CLASSES
@@ -35,6 +34,9 @@ logger = get_logger("gosmart_gs.group_service")
 
 DEFAULT_MY_GROUP_MAX_DEPTH: int = 8
 DEFAULT_GROUP_NAME: str = "GoSmart Health"
+DEFAULT_GROUP_CODE: str = "GOSMART_HEALTH"
+DEFAULT_GROUP_TYPE: str = "HEALTH_SYSTEM"
+DEFAULT_GROUP_DESCRIPTION: str = "Catch-all root organization for unassociated and lost-and-found studies"
 
 LOST_AND_FOUND_GROUP_NAME: str = "LostAndFound"
 LOST_AND_FOUND_GROUP_CODE: str = "LOST_AND_FOUND"
@@ -47,7 +49,6 @@ UPWARD_GROUP_RELATION_TYPES: Tuple[str, ...] = tuple(
     dict.fromkeys(
         (
             # Group hierarchy & direct tenancy / auth affiliations
-            SubGroupOfRelation.__type__,
             MemberOfRelation.__type__,
             HasIdentityRelation.__type__,
             UsesAuthenticatorRelation.__type__,
@@ -179,7 +180,6 @@ ON MATCH SET  g.name = $name,
               g.group_type = $group_type,
               g.is_active = true,
               g.description = $description,
-              g.test_id = coalesce($test_id, g.test_id),
               g.Action = 'UPDATE',
               g.ActedAt = datetime({timezone: 'UTC'}),
               g.ActedBy = $acted_by,
@@ -192,8 +192,7 @@ ON CREATE SET r.start_node_id = s.id,
               r.ActedAt = datetime({timezone: 'UTC'}),
               r.ActedBy = $acted_by,
               r.CreatedAt = datetime({timezone: 'UTC'})
-ON MATCH SET  r.test_id = coalesce($test_id, r.test_id),
-              r.Action = 'UPDATE',
+ON MATCH SET  r.Action = 'UPDATE',
               r.ActedAt = datetime({timezone: 'UTC'}),
               r.ActedBy = $acted_by,
               r.UpdatedAt = datetime({timezone: 'UTC'})
@@ -211,6 +210,96 @@ def _build_lost_and_found_params(
     rel = HasLostAndFoundRelation(
         start_node_id=sys_node.id,
         end_node_id=grp_node.id,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+    params: Dict[str, Any] = {
+        "sys_id": sys_node.id,
+        "sys_name": sys_node.name,
+        "sys_owner": sys_node.owner,
+        "sys_address": sys_node.address,
+        "sys_email": sys_node.email,
+        "sys_phone": sys_node.phone,
+        "sys_serial_number": sys_node.serial_number,
+        "id": grp_node.id,
+        "name": grp_node.name,
+        "code": grp_node.code,
+        "group_type": grp_node.group_type,
+        "description": grp_node.description,
+        "rel_id": rel.id,
+        "test_id": grp_node.test_id,
+        "acted_by": acted_by,
+    }
+    return grp_node, params
+
+
+_ENSURE_CATCH_ALL_GROUP_CYPHER: LiteralString = """
+MERGE (s:System {id: $sys_id})
+ON CREATE SET s.name = $sys_name,
+              s.owner = $sys_owner,
+              s.address = $sys_address,
+              s.email = $sys_email,
+              s.phone = $sys_phone,
+              s.serial_number = $sys_serial_number,
+              s.installed_at = datetime({timezone: 'UTC'}),
+              s.test_id = $test_id,
+              s.Action = 'CREATE',
+              s.ActedAt = datetime({timezone: 'UTC'}),
+              s.ActedBy = $acted_by,
+              s.CreatedAt = datetime({timezone: 'UTC'})
+MERGE (g:Group {code: $code})
+ON CREATE SET g.id = $id,
+              g.name = $name,
+              g.group_type = $group_type,
+              g.is_active = true,
+              g.description = $description,
+              g.test_id = $test_id,
+              g.Action = 'CREATE',
+              g.ActedAt = datetime({timezone: 'UTC'}),
+              g.ActedBy = $acted_by,
+              g.CreatedAt = datetime({timezone: 'UTC'})
+ON MATCH SET  g.name = $name,
+              g.group_type = $group_type,
+              g.is_active = true,
+              g.description = $description,
+              g.Action = 'UPDATE',
+              g.ActedAt = datetime({timezone: 'UTC'}),
+              g.ActedBy = $acted_by,
+              g.UpdatedAt = datetime({timezone: 'UTC'})
+MERGE (g)-[r:BELONGS_TO {id: $rel_id}]->(s)
+ON CREATE SET r.start_node_id = g.id,
+              r.end_node_id = s.id,
+              r.test_id = $test_id,
+              r.Action = 'CREATE',
+              r.ActedAt = datetime({timezone: 'UTC'}),
+              r.ActedBy = $acted_by,
+              r.CreatedAt = datetime({timezone: 'UTC'})
+ON MATCH SET  r.Action = 'UPDATE',
+              r.ActedAt = datetime({timezone: 'UTC'}),
+              r.ActedBy = $acted_by,
+              r.UpdatedAt = datetime({timezone: 'UTC'})
+RETURN properties(g) AS group
+"""
+
+
+def _build_catch_all_group_params(
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
+) -> Tuple[GroupNode, Dict[str, Any]]:
+    """Build parameters for persisting GoSmart Health Group -> BELONGS_TO -> System in Neo4j."""
+    sys_node = SystemNode(test_id=test_id, ActedBy=acted_by)
+    grp_node = GroupNode(
+        name=DEFAULT_GROUP_NAME,
+        code=DEFAULT_GROUP_CODE,
+        group_type=DEFAULT_GROUP_TYPE,
+        is_active=True,
+        description=DEFAULT_GROUP_DESCRIPTION,
+        test_id=test_id,
+        ActedBy=acted_by,
+    )
+    rel = BelongsToRelation(
+        start_node_id=grp_node.id,
+        end_node_id=sys_node.id,
         test_id=test_id,
         ActedBy=acted_by,
     )
@@ -688,9 +777,14 @@ class GroupService:
         MATCH (u:User {id: $user_id})-[r:MEMBER_OF {status: 'ACTIVE'}]->(root_grp:Group)
         WHERE (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
           AND root_grp.is_active = true
-        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
-        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND sub_grp.is_active = true
+        OPTIONAL MATCH sub_path = (sub_grp:Group)-[:BELONGS_TO*1..]->(root_grp)
+        WHERE all(
+            n IN nodes(sub_path)
+            WHERE 'Group' IN labels(n)
+              AND (n.Action IS NULL OR n.Action <> 'DELETE')
+              AND n.is_active = true
+          )
+          AND all(rel IN relationships(sub_path) WHERE rel.Action IS NULL OR rel.Action <> 'DELETE')
         WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
         UNWIND accessible_groups AS g
         RETURN DISTINCT g.id AS id,
@@ -712,9 +806,14 @@ class GroupService:
           AND (r.Action IS NULL OR r.Action <> 'DELETE')
           AND (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
           AND coalesce(root_grp.is_active, true) = true
-        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
-        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND coalesce(sub_grp.is_active, true) = true
+        OPTIONAL MATCH sub_path = (sub_grp:Group)-[:BELONGS_TO*1..]->(root_grp)
+        WHERE all(
+            n IN nodes(sub_path)
+            WHERE 'Group' IN labels(n)
+              AND (n.Action IS NULL OR n.Action <> 'DELETE')
+              AND coalesce(n.is_active, true) = true
+          )
+          AND all(rel IN relationships(sub_path) WHERE rel.Action IS NULL OR rel.Action <> 'DELETE')
         WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
         UNWIND accessible_groups AS g
         RETURN DISTINCT g.id AS id,
@@ -736,9 +835,14 @@ class GroupService:
           AND (r.Action IS NULL OR r.Action <> 'DELETE')
           AND (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
           AND coalesce(root_grp.is_active, true) = true
-        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
-        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND coalesce(sub_grp.is_active, true) = true
+        OPTIONAL MATCH sub_path = (sub_grp:Group)-[:BELONGS_TO*1..]->(root_grp)
+        WHERE all(
+            n IN nodes(sub_path)
+            WHERE 'Group' IN labels(n)
+              AND (n.Action IS NULL OR n.Action <> 'DELETE')
+              AND coalesce(n.is_active, true) = true
+          )
+          AND all(rel IN relationships(sub_path) WHERE rel.Action IS NULL OR rel.Action <> 'DELETE')
         WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
         UNWIND accessible_groups AS g
         RETURN DISTINCT g.id AS id,
@@ -837,9 +941,14 @@ class GroupService:
         MATCH (root_grp:Group {id: $group_id})
         WHERE (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
           AND root_grp.is_active = true
-        OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
-        WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND sub_grp.is_active = true
+        OPTIONAL MATCH sub_path = (sub_grp:Group)-[:BELONGS_TO*1..]->(root_grp)
+        WHERE all(
+            n IN nodes(sub_path)
+            WHERE 'Group' IN labels(n)
+              AND (n.Action IS NULL OR n.Action <> 'DELETE')
+              AND n.is_active = true
+          )
+          AND all(rel IN relationships(sub_path) WHERE rel.Action IS NULL OR rel.Action <> 'DELETE')
         WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
         UNWIND accessible_groups AS g
         RETURN DISTINCT g.id AS id,
@@ -857,66 +966,24 @@ class GroupService:
             test_id: Optional[str] = None,
             acted_by: str = "system",
     ) -> Dict[str, Any]:
-        """Ensure the resilient 'GoSmart Health' catch-all root organization exists."""
-        return await self.create_group(
-            name="GoSmart Health",
-            code="GOSMART_HEALTH",
-            group_type="HEALTH_SYSTEM",
-            description="Catch-all root organization for unassociated and lost-and-found studies",
-            test_id=test_id,
-            acted_by=acted_by,
-        )
+        """Ensure the resilient 'GoSmart Health' catch-all root organization exists and belongs to System."""
+        _, params = _build_catch_all_group_params(test_id=test_id, acted_by=acted_by)
+        records = await self.client.execute_query(_ENSURE_CATCH_ALL_GROUP_CYPHER, params)
+        if records:
+            return _clean_neo4j_value(records[0].get("group", records[0]))
+        return {}
 
     def get_or_create_catch_all_group_sync(
             self,
             test_id: Optional[str] = None,
             acted_by: str = "system",
     ) -> Dict[str, Any]:
-        """Synchronously ensure the resilient 'GoSmart Health' catch-all root organization exists."""
-        node = GroupNode(
-            name="GoSmart Health",
-            code="GOSMART_HEALTH",
-            group_type="HEALTH_SYSTEM",
-            description="Catch-all root organization for unassociated and lost-and-found studies",
-            test_id=test_id,
-            ActedBy=acted_by,
-        )
-        query = """
-        MERGE (g:Group {code: $code})
-        ON CREATE SET g.id = $id,
-                      g.name = $name,
-                      g.group_type = $group_type,
-                      g.is_active = true,
-                      g.description = $description,
-                      g.test_id = $test_id,
-                      g.Action = 'CREATE',
-                      g.ActedAt = datetime({timezone: 'UTC'}),
-                      g.ActedBy = $acted_by,
-                      g.CreatedAt = datetime({timezone: 'UTC'})
-        ON MATCH SET  g.name = $name,
-                      g.group_type = $group_type,
-                      g.is_active = true,
-                      g.description = $description,
-                      g.test_id = coalesce($test_id, g.test_id),
-                      g.Action = 'UPDATE',
-                      g.ActedAt = datetime({timezone: 'UTC'}),
-                      g.ActedBy = $acted_by,
-                      g.UpdatedAt = datetime({timezone: 'UTC'})
-        RETURN properties(g) AS group
-        """
-        params = {
-            "id": node.id,
-            "name": node.name,
-            "code": node.code,
-            "group_type": node.group_type,
-            "description": node.description,
-            "test_id": node.test_id,
-            "acted_by": acted_by,
-        }
+        """Synchronously ensure 'GoSmart Health' catch-all root organization exists and belongs to System."""
+        node, params = _build_catch_all_group_params(test_id=test_id, acted_by=acted_by)
         try:
             driver = self.client.get_sync_driver()
             with driver.session(database=self.client.settings.DB_DATABASE) as session:
-                res = session.run(query, **params)
+                res = session.run(_ENSURE_CATCH_ALL_GROUP_CYPHER, **params)
                 rec = res.single()
                 return _clean_neo4j_value(rec["group"]) if rec else {}
         except Exception as e:
@@ -1088,8 +1155,8 @@ class GroupService:
             test_id: Optional[str] = None,
             acted_by: str = "system",
     ) -> Dict[str, Any]:
-        """Establish hierarchical relationship: (Child Group)-[:SUB_GROUP_OF]->(Parent Group)."""
-        rel = SubGroupOfRelation(
+        """Establish hierarchical relationship: (Child Group)-[:BELONGS_TO]->(Parent Group)."""
+        rel = BelongsToRelation(
             start_node_id=child_group_id,
             end_node_id=parent_group_id,
             test_id=test_id,
@@ -1099,8 +1166,10 @@ class GroupService:
         query = """
         MATCH (child:Group {id: $child_id})
         MATCH (parent:Group {id: $parent_id})
-        MERGE (child)-[r:SUB_GROUP_OF {id: $rel_id}]->(parent)
-        ON CREATE SET r.test_id = $test_id,
+        MERGE (child)-[r:BELONGS_TO {id: $rel_id}]->(parent)
+        ON CREATE SET r.start_node_id = child.id,
+                      r.end_node_id = parent.id,
+                      r.test_id = $test_id,
                       r.Action = 'CREATE',
                       r.ActedAt = datetime({timezone: 'UTC'}),
                       r.ActedBy = $acted_by,

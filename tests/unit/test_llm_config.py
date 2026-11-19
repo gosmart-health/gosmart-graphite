@@ -535,6 +535,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
     )
 
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()),
         patch.object(
             llm_config_service,
             "upsert_llm_config",
@@ -565,6 +566,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
         "action": "CREATE",
     }
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()) as mock_ready,
         patch.object(
             llm_config_service,
             "upsert_llm_config",
@@ -580,6 +582,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
         assert "AIzaSyCliSecret9999" not in res_ok.output
         assert "AIza****9999" in res_ok.output
         assert "gemini-embedding-001" in res_ok.output
+        mock_ready.assert_awaited_once_with(assign_group="GoSmart Health", acted_by="cli:configure", test_id=None)
         mock_upsert.assert_awaited_once()
         assert mock_upsert.call_args.kwargs["assign_group"] == "GoSmart Health"
 

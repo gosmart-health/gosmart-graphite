@@ -75,7 +75,7 @@ async def test_live_neo4j_hierarchy_resolution_and_overwrite() -> None:
         )
         assert root_res["tag"] == "embedding"
 
-        # Child inherits root's config via SUB_GROUP_OF*0..
+        # Child inherits root's config via BELONGS_TO*0..
         resolved_for_child = await llm_config_service.resolve_config_for_group(
             tag="embedding",
             group_id=child_grp["id"],
