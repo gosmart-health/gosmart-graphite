@@ -11,7 +11,7 @@ from gosmart_graphite.core.auth_dependency import (
     get_current_user,
     require_roles,
 )
-from gosmart_graphite.model.llm import (
+from gosmart_graphite.model.llm_config import (
     LLMConfigAssignRequest,
     LLMConfigCreateRequest,
     LLMConfigResponse,

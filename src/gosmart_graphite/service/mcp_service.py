@@ -12,7 +12,7 @@ from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.core.security import decode_token
 from gosmart_graphite.db.neo4j import neo4j_client
-from gosmart_graphite.model.llm import LLMConfigCreateRequest
+from gosmart_graphite.model.llm_config import LLMConfigCreateRequest
 from gosmart_graphite.model.system import (
     DICOMConfigurationCreateRequest,
     DICOMConfigurationUpdateRequest,
