@@ -1,4 +1,5 @@
 import sys
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
@@ -129,6 +130,10 @@ class Settings(BaseSettings):
     STORAGE_ROOT_URI: str = Field(
         default="file:///tmp/gosmart_dicom_storage",
         description="Storage root URI (e.g. file:///path, gs://..., s3://..., az://..., \\\\unc\\share)",
+    )
+    DICOM_STAGING_DIR: str = Field(
+        default_factory=lambda: str(Path(tempfile.gettempdir()) / "gosmart_graphite" / "staging"),
+        description="Local temporary staging directory for incoming DICOM C-STORE capture before actor ingestion",
     )
 
     # Cloud Storage Credentials & Endpoints (Supports both standard SDK env vars and GOSMART_GS_ prefix)

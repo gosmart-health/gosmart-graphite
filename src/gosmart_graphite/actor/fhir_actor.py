@@ -6,7 +6,7 @@ from pydantic import ValidationError
 
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.model.actor_message import FhirIngestionMessage
-from gosmart_graphite.service.fhir_service import EncRelevantResources, FhirService
+from gosmart_graphite.service.fhir_service import EncRelevantResources, FHIRBatchFetcher, FhirService
 
 logger = get_logger("gosmart_gs.fhir_actor")
 
@@ -15,8 +15,11 @@ class FhirActor(pykka.ThreadingActor):
     """Pykka Actor for handling FHIR operations asynchronously (fire-and-forget).
 
     Receives a FhirIngestionMessage (or compatible dict) with patient_id,
-    accession_number, study_uid, and series_uid, fetches the associated FHIR
-    encounter resource bundle, and registers nodes and relationships into Neo4j.
+    accession_number, study_uid, series_uid, and group_id, resolves the
+    group-scoped FHIRConfiguration (falling back to global settings), fetches
+    the associated FHIR encounter resource bundle, and registers nodes and
+    cross-domain DICOM relationships (including :Patient -[:SAME_AS]-> :FHIR_Patient)
+    into Neo4j.
     """
 
     use_daemon_thread = True
@@ -42,6 +45,41 @@ class FhirActor(pykka.ThreadingActor):
                 except Exception as why:
                     logger.error("Failed to close FHIR fetcher", why=why)
             self._loop.close()
+
+    def _resolve_fhir_service(
+        self,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
+    ) -> FhirService:
+        """Resolve a FhirService using group-scoped FHIRConfiguration, falling back to global FHIR_BASE_URL."""
+        if self._fhir_service is not None:
+            return self._fhir_service
+
+        base_url: Optional[str] = None
+        try:
+            from gosmart_graphite.service.fhir_config_service import fhir_config_service
+
+            cfg = fhir_config_service.resolve_config_for_group_sync(
+                group_id=group_id,
+                test_id=test_id,
+            )
+            if cfg and cfg.url and cfg.url.strip():
+                base_url = cfg.url.strip()
+                logger.debug(
+                    "fhir_actor_resolved_group_config",
+                    group_id=group_id,
+                    fhir_url=base_url,
+                )
+        except Exception as cfg_err:
+            logger.warning(
+                "fhir_actor_group_config_resolve_failed",
+                group_id=group_id,
+                error=str(cfg_err),
+            )
+
+        if base_url:
+            return FhirService(fetcher=FHIRBatchFetcher(base_url=base_url))
+        return FhirService()
 
     async def register_graph(
         self,
@@ -118,7 +156,7 @@ class FhirActor(pykka.ThreadingActor):
 
         upsert_result: Optional[Dict[str, Any]] = None
         if study_uid and self._loop:
-            fhir = self._fhir_service or FhirService()
+            fhir = self._resolve_fhir_service(group_id=group_id, test_id=test_id)
             try:
                 resources = self._loop.run_until_complete(fhir.fetch_relevant_resources_of_study(study_uid))
                 if self._has_resources(resources):
@@ -252,6 +290,6 @@ def notify_fhir(
                     acted_by=acted_by,
                     group_id=group_id,
                 )
-        )
+            )
     except Exception as e:
         logger.error("notify_fhir_failed", error=str(e), exc_info=True)

@@ -1,5 +1,5 @@
 {
-  "url": "http://localhost:8080/fhir",
+  "url": "http://manabusb3.local.:8080/fhir",
   "accession_system": "",
   "patient_id_system": "urn:oid:2.16.840.1.113883.4.3.25",
   "poll_sec": 120

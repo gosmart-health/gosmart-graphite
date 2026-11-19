@@ -3,6 +3,7 @@ import ssl
 import threading
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydicom.dataset import Dataset
@@ -30,12 +31,11 @@ from pynetdicom.sop_class import (
 )
 
 from gosmart_graphite.actor.audit_actor import record_audit
-from gosmart_graphite.actor.fhir_actor import notify_fhir
 from gosmart_graphite.core.config import Settings, get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.actor_message import DicomIngestionMessage
 from gosmart_graphite.model.audit import AuditAction
-from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.group_service import group_service
 from gosmart_graphite.service.media_service import media_service
@@ -720,8 +720,9 @@ class PyNetDicomService:
     def handle_c_store(self, event: Any) -> int:
         """Handle incoming C-STORE request.
 
-        Performs immediate raw Part-10 file persistence (blackbox recording)
-        before hierarchy parsing and Neo4j graph registration.
+        Captures the incoming DICOM object to a local temporary staging file and
+        hands it off asynchronously to DicomIngestionActor for group resolution,
+        destination storage persistence, graph registration, and FHIR association.
         """
         request = event.request
         dataset = event.dataset
@@ -734,39 +735,43 @@ class PyNetDicomService:
                 dataset.is_little_endian = file_meta.TransferSyntaxUID.is_little_endian
                 dataset.is_implicit_VR = file_meta.TransferSyntaxUID.is_implicit_VR
 
-        # 2. Determine SOP Instance UID and storage URI
+        # 2. Determine SOP Instance UID and extract association provenance
         sop_uid = str(
             getattr(request, "AffectedSOPInstanceUID", None)
             or getattr(dataset, "SOPInstanceUID", None)
             or f"quarantine_{uuid.uuid4()}"
         )
-        storage_root = self.settings.STORAGE_ROOT_URI.rstrip("/")
-        storage_uri = f"{storage_root}/{sop_uid}.dcm"
 
         assoc = getattr(event, "assoc", None)
 
         requestor = getattr(assoc, "requestor", None)
         client_ip = getattr(requestor, "address", "unknown")
-        calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
-
-        # TODO: Given the `calling_aet` find them in the DICOMConfiguration then trace to the Group
-        # TODO: Keep the Group context and pass that onto storage actor.
-        # TODO: Pull the storage URI from the configuration
+        raw_calling_aet = getattr(requestor, "ae_title", "UNKNOWN")
+        calling_aet = (
+            raw_calling_aet.decode("ascii", errors="replace").strip()
+            if isinstance(raw_calling_aet, (bytes, bytearray))
+            else str(raw_calling_aet or "UNKNOWN").strip()
+        ) or "UNKNOWN"
 
         acceptor = getattr(assoc, "acceptor", None)
         server_ip = getattr(acceptor, "address", getattr(self.settings, "DICOM_SCP_HOST", "0.0.0.0"))
         server_port = getattr(acceptor, "port", getattr(self.settings, "DICOM_SCP_PORT", 11112))
-        called_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GRAPHITE"))
+        raw_called_aet = getattr(acceptor, "ae_title", getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GRAPHITE"))
+        called_aet = (
+            raw_called_aet.decode("ascii", errors="replace").strip()
+            if isinstance(raw_called_aet, (bytes, bytearray))
+            else str(raw_called_aet or "GOSMART_GRAPHITE").strip()
+        ) or "GOSMART_GRAPHITE"
 
-        # 3. FIRST ORDER OF ACTION: Blackbox Recording
+        # 3. FIRST ORDER OF ACTION: Local temporary staging capture
+        staging_dir = Path(self.settings.DICOM_STAGING_DIR)
+        staging_path = (staging_dir / f"{sop_uid}_{uuid.uuid4().hex[:8]}.dcm").resolve()
         try:
-            # TODO: This is a temporary local file storage, later we will either
-            # TODO: Copy the media to the final destination (cloud or file share, etc.) Need a new storage actor.
-            # TODO: Once stored, remove the temporary file.
-            media_service.write_dicom_sync(storage_uri, dataset)
-            logger.info("c_store_blackbox_saved", storage_uri=storage_uri, sop_instance_uid=sop_uid)
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            dataset.save_as(str(staging_path), enforce_file_format=True)
+            logger.info("c_store_staging_saved", source_path=str(staging_path), sop_instance_uid=sop_uid)
         except Exception as e:
-            logger.error("c_store_blackbox_save_failed", storage_uri=storage_uri, error=str(e), exc_info=True)
+            logger.error("c_store_staging_save_failed", source_path=str(staging_path), error=str(e), exc_info=True)
             record_audit(
                 action=AuditAction.DICOM_C_STORE_FAILED,
                 actor_id=f"ae:{calling_aet}",
@@ -774,70 +779,37 @@ class PyNetDicomService:
                 target_id=f"instance:{sop_uid}",
                 target=f"SOP Instance {sop_uid}",
                 status_code=500,
-                status_message="Out of Resources: Failed to persist Part-10 file",
+                status_message="Out of Resources: Failed to capture Part-10 file to local staging",
                 severity="ERROR",
-                result="C-STORE Blackbox persistence failed",
-                details={"storage_uri": storage_uri, "error": str(e)},
+                result="C-STORE local staging capture failed",
+                details={"source_path": str(staging_path), "error": str(e), "error_type": type(e).__name__},
             )
             return 0xA700  # Out of Resources
 
-        # 4. Parse clinical hierarchy & attach stream provenance
+        # 4. Hand off to DicomIngestionActor (fire-and-forget); return immediately on success
         try:
-            hierarchy = dicom_service.parse_dataset(dataset, storage_uri=storage_uri)
-            hierarchy.instance.source = f"dimse:{client_ip}"
-            hierarchy.instance.source_identity = f"ae:{calling_aet}"
-            hierarchy.instance.destination = f"dimse:{server_ip}:{server_port}"
-            hierarchy.instance.destination_identity = f"ae:{called_aet}"
-            hierarchy.acted_by = f"ae:{calling_aet}"
+            from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 
-            # Resolve Group association for caller AE Title or fallback to catch-all group
-            try:
-                grp = group_service.get_group_for_ae_title_sync(calling_aet)
-                if grp and grp.get("id"):
-                    hierarchy.group_id = grp["id"]
-                else:
-                    catch_all = group_service.get_or_create_catch_all_group_sync()
-                    if catch_all and catch_all.get("id"):
-                        hierarchy.group_id = catch_all["id"]
-            except Exception as grp_err:
-                logger.warning("c_store_group_resolution_warning", calling_aet=calling_aet, error=str(grp_err))
-        except Exception as e:
-            logger.error(
-                "c_store_parse_failed",
-                storage_uri=storage_uri,
-                sop_instance_uid=sop_uid,
-                error=str(e),
-                exc_info=True,
-            )
-            record_audit(
-                action=AuditAction.DICOM_C_STORE_FAILED,
-                actor_id=f"ae:{calling_aet}",
-                actor=calling_aet,
-                target_id=f"instance:{sop_uid}",
-                target=f"SOP Instance {sop_uid}",
-                status_code=400,
-                status_message=f"Processing Failure: {str(e)}",
-                severity="ERROR",
-                result="Dataset parsing failed",
-                details={"storage_uri": storage_uri, "error": str(e)},
-            )
-            return 0xC000  # Cannot Understand / Processing Failure
-
-        # 5. Register into Neo4j Graph
-        try:
-            graph_service.save_hierarchy_sync(hierarchy)
-            logger.info(
-                "c_store_graph_indexed",
-                sop_instance_uid=sop_uid,
-                patient_id=hierarchy.patient.patient_id,
-                study_uid=hierarchy.study.study_instance_uid,
-                group_id=hierarchy.group_id,
+            actor = get_dicom_actor()
+            if actor is None or not actor.is_alive():
+                raise RuntimeError("DicomIngestionActor is unavailable or not running")
+            actor.tell(
+                DicomIngestionMessage(
+                    file_path=str(staging_path),
+                    acted_by=calling_aet,
+                    source=f"dimse:{client_ip}",
+                    source_identity=f"ae:{calling_aet}",
+                    destination=f"dimse:{server_ip}:{server_port}",
+                    destination_identity=f"ae:{called_aet}",
+                    cleanup_source=True,
+                )
             )
         except Exception as e:
             logger.error(
-                "c_store_graph_indexing_failed",
-                storage_uri=storage_uri,
+                "c_store_actor_dispatch_failed",
+                source_path=str(staging_path),
                 sop_instance_uid=sop_uid,
+                calling_aet=calling_aet,
                 error=str(e),
                 exc_info=True,
             )
@@ -848,14 +820,20 @@ class PyNetDicomService:
                 target_id=f"instance:{sop_uid}",
                 target=f"SOP Instance {sop_uid}",
                 status_code=500,
-                status_message=f"Storage Error: {str(e)}",
+                status_message=f"Actor handoff failed; staged file preserved for manual recovery: {e}",
                 severity="ERROR",
-                result="Graph registration failed",
-                details={"storage_uri": storage_uri, "error": str(e)},
+                result="Failed to dispatch staged DICOM file to DicomIngestionActor",
+                details={
+                    "source_path": str(staging_path),
+                    "sop_instance_uid": sop_uid,
+                    "server_aet": called_aet,
+                    "failure_reason": str(e),
+                    "error_type": type(e).__name__,
+                },
             )
-            return 0xA700  # Out of Resources / Storage Error
+            return 0xA700  # Out of Resources
 
-        # Record successful ingestion audit
+        # Record successful C-STORE receipt & actor dispatch audit
         record_audit(
             action=AuditAction.DICOM_C_STORE_INGESTED,
             actor_id=f"ae:{calling_aet}",
@@ -863,43 +841,15 @@ class PyNetDicomService:
             target_id=f"instance:{sop_uid}",
             target=f"SOP Instance {sop_uid}",
             status_code=200,
-            status_message="DICOM C-STORE ingested and indexed successfully",
+            status_message="DICOM C-STORE staged locally and dispatched to ingestion actor",
             severity="INFO",
-            result="SOP Instance saved and registered in property graph",
+            result="SOP Instance staged and queued for DicomIngestionActor",
             details={
-                "patient_id": hierarchy.patient.patient_id,
-                "study_instance_uid": hierarchy.study.study_instance_uid,
-                "series_instance_uid": hierarchy.series.series_instance_uid,
-                "storage_uri": storage_uri,
+                "source_path": str(staging_path),
+                "sop_instance_uid": sop_uid,
                 "server_aet": called_aet,
-                "group_id": hierarchy.group_id,
             },
-            test_id=getattr(hierarchy, "test_id", None),
         )
-
-        # Capture unique Study + Series UID combinations in this association then
-        # if it is new then we will try to fetch related FHIR resources
-        # for this Imaging Study and update cross-domain Series/Instance edges
-
-        if assoc is not None:
-            seen = getattr(assoc, "_seen_study_uids", None)
-
-            if seen is None:
-                seen = set()
-                setattr(assoc, "_seen_study_uids", seen)
-
-            study_uid = hierarchy.study.study_instance_uid
-            series_uid = hierarchy.series.series_instance_uid
-            study_series_key = f"{study_uid}:{series_uid}" if study_uid and series_uid else study_uid
-            if study_uid and study_series_key not in seen:
-                seen.add(study_series_key)
-                notify_fhir(
-                    patient_id=hierarchy.patient.patient_id,
-                    accession_number=hierarchy.study.accession_number,
-                    study_uid=study_uid,
-                    series_uid=series_uid,
-                    ## TODO: Need the Group context and pass that onto the FHIR actor
-                )
 
         return 0x0000  # SUCCESS
 

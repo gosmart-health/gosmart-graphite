@@ -1,11 +1,13 @@
 import socket
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pydicom
 import pytest
 from pydicom.uid import generate_uid
 from pynetdicom import AE
 
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.db.neo4j import neo4j_client
 from gosmart_graphite.service.graph_service import graph_service
@@ -122,6 +124,11 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
     assert status is not None
     assert status.Status == 0x0000, f"Expected C-STORE SUCCESS (0x0000), got {status.Status}"
 
+    # Wait for asynchronous DicomIngestionActor to finish draining queued ingestion
+    actor = get_dicom_actor()
+    assert actor is not None
+    assert actor.ask({"type": "PING"}, timeout=10.0)["status"] == "PONG"
+
     # Verify FIRST ORDER OF ACTION: Blackbox persistence to storage
     assert media_service.exists_sync(expected_storage_uri), f"Blackbox file not saved at {expected_storage_uri}"
 
@@ -151,7 +158,7 @@ def test_dicom_c_store_blackbox_persistence(dicom_server):
 
 
 def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server):
-    """Verify raw DICOM file is preserved on storage even if downstream graph indexing fails."""
+    """Verify staged DICOM file is preserved and 0xA700 is returned if actor handoff fails."""
     service, port = dicom_server
     settings = get_settings()
 
@@ -169,19 +176,26 @@ def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server)
     assoc = client_ae.associate("127.0.0.1", port, ae_title=GOSMART_GRAPHITE)
     assert assoc.is_established
 
-    # Simulate downstream Neo4j failure
-    with patch(
-        "gosmart_graphite.service.graph_service.graph_service.save_hierarchy_sync",
-        side_effect=RuntimeError("Simulated DB failure"),
+    failing_actor = MagicMock()
+    failing_actor.is_alive.return_value = True
+    failing_actor.tell.side_effect = RuntimeError("Simulated actor dispatch failure")
+
+    # Simulate actor handoff failure after local staging save
+    with (
+        patch("gosmart_graphite.actor.dicom_ingestion_actor.get_dicom_actor", return_value=failing_actor),
+        patch("gosmart_graphite.service.pynetdicom_service.record_audit") as mock_audit,
     ):
         status = assoc.send_c_store(ds)
     assoc.release()
 
-    # The SCP should report 0xA700 or error status because indexing failed
+    # The SCP should report 0xA700 because actor handoff failed
     assert status is not None
     assert status.Status == 0xA700, f"Expected 0xA700 Out of Resources, got {hex(status.Status)}"
 
-    # Crucial assertion: Blackbox recording MUST STILL EXIST on storage for diagnosis!
-    assert media_service.exists_sync(expected_storage_uri), (
-        "Blackbox recording must be preserved even when downstream indexing fails"
+    # Crucial assertion: Staged source file MUST STILL EXIST on disk and be recorded in audit for support recovery!
+    mock_audit.assert_called_once()
+    details = mock_audit.call_args.kwargs["details"]
+    assert "source_path" in details
+    assert Path(details["source_path"]).exists(), (
+        "Staged DICOM recording must be preserved when actor handoff fails"
     )

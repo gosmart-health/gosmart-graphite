@@ -46,6 +46,14 @@ class DicomIngestionMessage(BaseModel):
         default=None,
         description="Optional associated Group deterministic ID for ReBAC tenancy",
     )
+    storage_root_uri: Optional[str] = Field(
+        default=None,
+        description="Optional explicit destination storage root URI (overrides AE config and global settings)",
+    )
+    cleanup_source: bool = Field(
+        default=False,
+        description="If True, remove the local staging file_path after successful destination storage and graph save",
+    )
 
     @field_validator("file_path", mode="before")
     @classmethod
@@ -173,7 +181,6 @@ class FhirIngestionMessage(BaseModel):
         default=None,
         description="Optional associated Group deterministic ID for ReBAC tenancy",
     )
-
 
     @field_validator("patient_id", "accession_number", "study_uid", "series_uid", mode="before")
     @classmethod

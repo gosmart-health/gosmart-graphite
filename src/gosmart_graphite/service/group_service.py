@@ -932,6 +932,41 @@ class GroupService:
             logger.warning("get_group_for_ae_title_sync_failed", ae_title=norm_aet, error=str(e))
         return None
 
+    def get_storage_root_for_ae_title_sync(self, ae_title: str) -> Optional[str]:
+        """Synchronously look up storage_root_uri from active DICOMConfiguration for an AE Title.
+
+        Prefers an exact ae_title match. Falls back to a promiscuous '*' configuration only when
+        its storage_root_uri is explicitly configured (i.e. does not contain '*').
+        """
+        norm_aet = (ae_title or "").strip()
+        if not norm_aet:
+            return None
+        query = """
+        MATCH (c:DICOMConfiguration)
+        WHERE (c.ae_title = $ae_title OR (c.is_promiscuous = true AND c.ae_title = '*'))
+          AND (c.Action IS NULL OR c.Action <> 'DELETE')
+          AND c.storage_root_uri IS NOT NULL
+          AND trim(c.storage_root_uri) <> ''
+        RETURN c.storage_root_uri AS storage_root_uri, c.ae_title AS matched_aet
+        ORDER BY CASE WHEN c.ae_title = $ae_title THEN 0 ELSE 1 END
+        LIMIT 2
+        """
+        try:
+            driver = self.client.get_sync_driver()
+            with driver.session(database=self.client.settings.DB_DATABASE) as session:
+                records = [r.data() for r in session.run(query, ae_title=norm_aet)]
+                for rec in records:
+                    uri = str(rec.get("storage_root_uri") or "").strip()
+                    matched_aet = str(rec.get("matched_aet") or "").strip()
+                    if not uri:
+                        continue
+                    if matched_aet == "*" and "*" in uri:
+                        continue
+                    return uri
+        except Exception as e:
+            logger.warning("get_storage_root_for_ae_title_sync_failed", ae_title=norm_aet, error=str(e))
+        return None
+
     async def get_group_hierarchy_closure(
             self,
             group_id: str,

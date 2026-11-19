@@ -16,6 +16,7 @@ from pynetdicom.sop_class import (
     StudyRootQueryRetrieveInformationModelMove,
 )
 
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.db.neo4j import neo4j_client
 from gosmart_graphite.model.graph import DICOMConfigurationNode
@@ -139,6 +140,9 @@ def test_transfer_syntax_c_store_to_c_get_preservation(ts_preservation_env):
     assoc.release()
     assert status is not None and status.Status == 0x0000
 
+    actor = get_dicom_actor()
+    assert actor is not None and actor.ask({"type": "PING"}, timeout=10.0)["status"] == "PONG"
+
     # 2. Verify stored Part-10 file preserves original TransferSyntaxUID
     assert media_service.exists_sync(storage_uri)
     stored_ds = media_service.read_dicom_sync(storage_uri)
@@ -216,6 +220,9 @@ def test_transfer_syntax_c_store_to_c_move_preservation(ts_preservation_env):
     status = assoc.send_c_store(raw_ds)
     assoc.release()
     assert status is not None and status.Status == 0x0000
+
+    actor = get_dicom_actor()
+    assert actor is not None and actor.ask({"type": "PING"}, timeout=10.0)["status"] == "PONG"
 
     _tag_hierarchy_test_id(sop_uid, test_id)
 
@@ -300,6 +307,9 @@ def test_compressed_syntax_transcoding_protection(ts_preservation_env):
     status = assoc.send_c_store(raw_ds)
     assoc.release()
     assert status is not None and status.Status == 0x0000
+
+    actor = get_dicom_actor()
+    assert actor is not None and actor.ask({"type": "PING"}, timeout=10.0)["status"] == "PONG"
 
     _tag_hierarchy_test_id(sop_uid, test_id)
 
@@ -390,6 +400,9 @@ def test_uncompressed_transfer_syntax_preservation(ts_preservation_env):
     status = assoc.send_c_store(mock_ds)
     assoc.release()
     assert status is not None and status.Status == 0x0000
+
+    actor = get_dicom_actor()
+    assert actor is not None and actor.ask({"type": "PING"}, timeout=10.0)["status"] == "PONG"
 
     _tag_hierarchy_test_id(sop_uid, test_id)
 
