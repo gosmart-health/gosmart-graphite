@@ -21,7 +21,7 @@ from gosmart_graphite.model.graph import (
     to_negated_relation_type,
     to_positive_relation_type,
 )
-from gosmart_graphite.model.llm import (
+from gosmart_graphite.model.llm_config import (
     HasLlmConfigRelation,
     LLM_Config,
     LLMConfigCreateRequest,

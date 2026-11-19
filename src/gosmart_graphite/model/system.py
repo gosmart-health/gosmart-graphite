@@ -4,6 +4,15 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
+class DICOMConfigurationGroupSummary(BaseModel):
+    """Lightweight Group summary attached to a DICOMConfigurationResponse."""
+
+    id: str
+    name: str
+    code: str
+    group_type: Optional[str] = None
+
+
 class DICOMConfigurationResponse(BaseModel):
     """API response model for a DICOM Configuration."""
 
@@ -18,6 +27,7 @@ class DICOMConfigurationResponse(BaseModel):
     tls_cert_path: Optional[str] = Field(default=None, description="Path to TLS certificate file")
     tls_key_path: Optional[str] = Field(default=None, description="Path to TLS private key file")
     tls_ca_path: Optional[str] = Field(default=None, description="Path to TLS CA bundle")
+    tls_ciphers: Optional[List[str]] = Field(default=None, description="Allowed TLS ciphers")
     dicom_services: List[str] = Field(default_factory=lambda: ["*"], description="Supported DICOM services/SOP Classes")
     transfer_syntaxes: List[str] = Field(
         default_factory=lambda: ["*"], description="Proposed/acceptable transfer syntaxes"
@@ -27,8 +37,14 @@ class DICOMConfigurationResponse(BaseModel):
     dicomweb_qido_enabled: bool = Field(default=True, description="Enable QIDO-RS")
     dicomweb_wado_enabled: bool = Field(default=True, description="Enable WADO-RS")
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
+    storage_root_uri: Optional[str] = Field(
+        default=None,
+        description="Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})",
+    )
     description: Optional[str] = Field(default=None, description="Human readable description")
     group_id: Optional[str] = Field(default=None, description="Associated Group ID served by this configuration")
+    group_ids: List[str] = Field(default_factory=list, description="Associated Group IDs")
+    groups: List[DICOMConfigurationGroupSummary] = Field(default_factory=list, description="Associated Group summaries")
     test_id: Optional[str] = Field(default=None, description="Test identifier if ephemeral")
     action: Optional[str] = Field(default="CREATE", description="Auditable action state")
     created_at: Optional[datetime] = Field(default=None, description="Created timestamp (UTC)")
@@ -62,8 +78,15 @@ class DICOMConfigurationCreateRequest(BaseModel):
     dicomweb_qido_enabled: bool = Field(default=True, description="Enable QIDO-RS")
     dicomweb_wado_enabled: bool = Field(default=True, description="Enable WADO-RS")
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
+    storage_root_uri: Optional[str] = Field(
+        default=None,
+        description="Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})",
+    )
     description: Optional[str] = Field(default=None, description="Human readable description")
-    group_id: Optional[str] = Field(default=None, description="Target Group ID that this DICOMConfiguration serves")
+    group_id: Optional[str] = Field(
+        default=None,
+        description="Target Group ID, name, or code that this DICOMConfiguration serves (defaults to 'GoSmart Health')",
+    )
     test_id: Optional[str] = Field(default=None, description="Test identifier if ephemeral")
 
     @field_validator("test_id", mode="before")
@@ -98,8 +121,15 @@ class DICOMConfigurationUpdateRequest(BaseModel):
     dicomweb_qido_enabled: Optional[bool] = Field(default=None, description="Enable QIDO-RS")
     dicomweb_wado_enabled: Optional[bool] = Field(default=None, description="Enable WADO-RS")
     dicomweb_stow_enabled: Optional[bool] = Field(default=None, description="Enable STOW-RS")
+    storage_root_uri: Optional[str] = Field(
+        default=None,
+        description="Bucket or filesystem storage root URI for media files",
+    )
     description: Optional[str] = Field(default=None, description="Human readable description")
-    group_id: Optional[str] = Field(default=None, description="Target Group ID that this DICOMConfiguration serves")
+    group_id: Optional[str] = Field(
+        default=None,
+        description="Target Group ID, name, or code that this DICOMConfiguration serves",
+    )
 
 
 class SystemResponse(BaseModel):

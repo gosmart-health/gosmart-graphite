@@ -41,7 +41,10 @@ def normalize_test_id(test_id: Optional[str]) -> Optional[str]:
     return None
 
 
-def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
+def _dict_to_dicom_config(
+    data: Dict[str, Any],
+    groups: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """Map raw Neo4j node properties to a standardized DICOMConfigurationResponse dictionary."""
     clean = clean_neo4j_value(data)
     roles = clean.get("roles", [])
@@ -54,14 +57,39 @@ def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(transfer_syntaxes, str):
         transfer_syntaxes = [transfer_syntaxes]
 
+    group_summaries: List[Dict[str, Any]] = []
+    group_ids: List[str] = []
+    for grp in groups or []:
+        if not grp:
+            continue
+        clean_grp = clean_neo4j_value(grp)
+        gid = clean_grp.get("id")
+        if gid and gid not in group_ids:
+            group_ids.append(gid)
+            group_summaries.append(
+                {
+                    "id": gid,
+                    "name": clean_grp.get("name", ""),
+                    "code": clean_grp.get("code", ""),
+                    "group_type": clean_grp.get("group_type"),
+                }
+            )
+
+    primary_group_id = clean.get("group_id") or (group_ids[0] if group_ids else None)
+    if primary_group_id and primary_group_id not in group_ids:
+        group_ids.append(primary_group_id)
+
+    ae_title = clean.get("ae_title", "*")
+    storage_root_uri = clean.get("storage_root_uri") or f"/tmp/gosmart_graphite/{ae_title}"
+
     return {
         "id": clean.get("id", ""),
-        "ae_title": clean.get("ae_title", "*"),
+        "ae_title": ae_title,
         "roles": roles,
         "host": clean.get("host", "0.0.0.0"),
         "port": clean.get("port", 11112),
         "is_local": clean.get("is_local", False),
-        "is_promiscuous": clean.get("is_promiscuous", clean.get("ae_title") == "*"),
+        "is_promiscuous": clean.get("is_promiscuous", ae_title == "*"),
         "tls_enabled": clean.get("tls_enabled", False),
         "tls_cert_path": clean.get("tls_cert_path"),
         "tls_key_path": clean.get("tls_key_path"),
@@ -74,8 +102,11 @@ def _dict_to_dicom_config(data: Dict[str, Any]) -> Dict[str, Any]:
         "dicomweb_qido_enabled": clean.get("dicomweb_qido_enabled", True),
         "dicomweb_wado_enabled": clean.get("dicomweb_wado_enabled", True),
         "dicomweb_stow_enabled": clean.get("dicomweb_stow_enabled", True),
+        "storage_root_uri": storage_root_uri,
         "description": clean.get("description"),
-        "group_id": clean.get("group_id"),
+        "group_id": primary_group_id,
+        "group_ids": group_ids,
+        "groups": group_summaries,
         "test_id": clean.get("test_id"),
         "action": clean.get("Action", "CREATE"),
         "created_at": clean.get("CreatedAt"),
@@ -195,7 +226,7 @@ class SystemService:
             promiscuous_config = _dict_to_dicom_config(promiscuous_records[0].get("c", {}))
             logger.info("promiscuous_dicom_config_exists", config_id=promiscuous_config.get("id"))
         else:
-            # Create default promiscuous DICOM entry
+            # Create default promiscuous DICOM entry attached to System
             cfg_node = DICOMConfigurationNode(
                 ae_title="*",
                 roles=["SCP"],
@@ -243,6 +274,7 @@ class SystemService:
                           c.dicomweb_qido_enabled = $cfg.dicomweb_qido_enabled,
                           c.dicomweb_wado_enabled = $cfg.dicomweb_wado_enabled,
                           c.dicomweb_stow_enabled = $cfg.dicomweb_stow_enabled,
+                          c.storage_root_uri = $cfg.storage_root_uri,
                           c.description = $cfg.description,
                           c.test_id = $cfg.test_id,
                           c.Action = 'CREATE',
@@ -271,16 +303,6 @@ class SystemService:
             if created_records:
                 promiscuous_config = _dict_to_dicom_config(created_records[0].get("c", {}))
                 logger.info("promiscuous_dicom_config_created", config_id=promiscuous_config.get("id"))
-
-        # 4. Associate promiscuous configuration with Catch-All Group
-        if promiscuous_config and catch_all_grp:
-            await group_service.associate_dicom_config_to_group(
-                config_id=promiscuous_config["id"],
-                group_id=catch_all_grp["id"],
-                test_id=test_id,
-                acted_by=acted_by,
-            )
-            promiscuous_config["group_id"] = catch_all_grp["id"]
 
         # Fetch all configurations for system response
         configs = await self.list_configurations(system_id=sys_node.id, include_tests=bool(test_id), test_id=test_id)
@@ -384,23 +406,32 @@ class SystemService:
         include_tests: bool = False,
         test_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """List active DICOM configurations linked to System or matching filters."""
+        """List active DICOM configurations attached to Groups or System matching filters."""
         test_id = normalize_test_id(test_id)
+        clean_group_id = group_id.strip() if isinstance(group_id, str) and group_id.strip() else None
         query = """
-        MATCH (s:System)-[:HAS_DICOM_CONFIGURATION]->(c:DICOMConfiguration)
+        MATCH (c:DICOMConfiguration)
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
-          AND ($system_id IS NULL OR s.id = $system_id)
-          AND ($include_tests = true OR c.test_id IS NULL OR c.test_id = '')
+          AND ($include_tests = true OR c.test_id IS NULL OR trim(toString(c.test_id)) = '')
           AND ($test_id IS NULL OR $test_id = '' OR c.test_id = $test_id)
           AND ($role IS NULL OR $role IN c.roles)
           AND ($is_promiscuous IS NULL OR c.is_promiscuous = $is_promiscuous)
           AND ($is_local IS NULL OR c.is_local = $is_local)
-        OPTIONAL MATCH (c)-[r_serves:SERVES]->(g:Group)
-        WHERE (r_serves.Action IS NULL OR r_serves.Action <> 'DELETE')
+        OPTIONAL MATCH (s:System)-[r_sys:HAS_DICOM_CONFIGURATION]->(c)
+        WHERE (r_sys.Action IS NULL OR r_sys.Action <> 'DELETE')
+        OPTIONAL MATCH (c)-[r_grp:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
+        WHERE (r_grp.Action IS NULL OR r_grp.Action <> 'DELETE')
           AND (g.Action IS NULL OR g.Action <> 'DELETE')
-        WITH c, g
-        WHERE ($group_id IS NULL OR g.id = $group_id)
-        RETURN properties(c) AS c, g.id AS group_id
+        WITH c, collect(DISTINCT s.id) AS sys_ids, collect(DISTINCT properties(g)) AS groups
+        WHERE ($system_id IS NULL OR $system_id IN sys_ids OR size(groups) > 0)
+          AND (
+            $group_id IS NULL
+            OR any(
+              grp IN groups
+              WHERE grp.id = $group_id OR grp.name = $group_id OR toUpper(grp.code) = toUpper($group_id)
+            )
+          )
+        RETURN properties(c) AS c, groups
         ORDER BY c.ae_title ASC
         """
         params = {
@@ -408,17 +439,16 @@ class SystemService:
             "role": role,
             "is_promiscuous": is_promiscuous,
             "is_local": is_local,
-            "group_id": group_id,
-            "include_tests": include_tests,
+            "group_id": clean_group_id,
+            "include_tests": include_tests or bool(test_id),
             "test_id": test_id,
         }
         records = await self.client.execute_query(query, params)
         res_list = []
         for r in records:
             c_dict = r.get("c", {})
-            if r.get("group_id"):
-                c_dict["group_id"] = r["group_id"]
-            res_list.append(_dict_to_dicom_config(c_dict))
+            groups = r.get("groups") or []
+            res_list.append(_dict_to_dicom_config(c_dict, groups=groups))
         return res_list
 
     async def get_configuration(self, config_id: str) -> Optional[Dict[str, Any]]:
@@ -426,27 +456,27 @@ class SystemService:
         query = """
         MATCH (c:DICOMConfiguration {id: $config_id})
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
-        OPTIONAL MATCH (c)-[r_serves:SERVES]->(g:Group)
-        WHERE (r_serves.Action IS NULL OR r_serves.Action <> 'DELETE')
+        OPTIONAL MATCH (c)-[r_grp:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
+        WHERE (r_grp.Action IS NULL OR r_grp.Action <> 'DELETE')
           AND (g.Action IS NULL OR g.Action <> 'DELETE')
-        RETURN properties(c) AS c, g.id AS group_id
+        RETURN properties(c) AS c, collect(DISTINCT properties(g)) AS groups
         LIMIT 1
         """
         records = await self.client.execute_query(query, {"config_id": config_id})
         if not records:
             return None
         raw_c = records[0].get("c", {})
-        if records[0].get("group_id"):
-            raw_c["group_id"] = records[0]["group_id"]
-        return _dict_to_dicom_config(raw_c)
+        groups = records[0].get("groups") or []
+        return _dict_to_dicom_config(raw_c, groups=groups)
 
     async def create_configuration(
         self,
         config_data: DICOMConfigurationCreateRequest,
+        assign_group: Optional[str] = None,
         acted_by: str = "system",
         system_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a new DICOMConfiguration node, link to System, and associate to target/catch-all Group."""
+        """Create or update a DICOMConfiguration node and attach it directly to its target Group."""
         norm_test_id = normalize_test_id(config_data.test_id)
         cfg_node = DICOMConfigurationNode(
             ae_title=config_data.ae_title,
@@ -466,37 +496,34 @@ class SystemService:
             dicomweb_qido_enabled=config_data.dicomweb_qido_enabled,
             dicomweb_wado_enabled=config_data.dicomweb_wado_enabled,
             dicomweb_stow_enabled=config_data.dicomweb_stow_enabled,
+            storage_root_uri=config_data.storage_root_uri,
             description=config_data.description,
             test_id=norm_test_id,
             ActedBy=acted_by,
         )
 
-        # Resolve system node
-        if not system_id:
-            sys_query = """
-            MATCH (s:System)
-            WHERE (($test_id IS NULL OR $test_id = '') AND (s.test_id IS NULL OR s.test_id = ''))
-               OR ($test_id IS NOT NULL AND $test_id <> '' AND s.test_id = $test_id)
-            RETURN s.id AS id
-            LIMIT 1
-            """
-            sys_rec = await self.client.execute_query(sys_query, {"test_id": norm_test_id})
-            if sys_rec:
-                system_id = sys_rec[0].get("id")
-            else:
-                # Bootstrap system if missing
-                boot = await self.bootstrap_system(acted_by=acted_by, test_id=norm_test_id)
-                system_id = boot["system"]["id"]
+        # Resolve target Group by ID, name, or code (defaulting to 'GoSmart Health')
+        effective_group_ident = assign_group if assign_group is not None else config_data.group_id
+        if effective_group_ident is not None and isinstance(effective_group_ident, str):
+            effective_group_ident = effective_group_ident.strip() or None
 
-        rel = HasDicomConfigurationRelation(
-            start_node_id=system_id,
-            end_node_id=cfg_node.id,
-            test_id=norm_test_id,
-            ActedBy=acted_by,
-        )
+        if effective_group_ident is None:
+            try:
+                target_group = await group_service.resolve_target_group(identifier=None, test_id=norm_test_id)
+            except RuntimeError:
+                target_group = await group_service.get_or_create_catch_all_group(
+                    test_id=norm_test_id,
+                    acted_by=acted_by,
+                )
+        else:
+            target_group = await group_service.resolve_target_group(
+                identifier=effective_group_ident,
+                test_id=norm_test_id,
+            )
+
+        target_group_id = target_group["id"]
 
         query = """
-        MATCH (s:System {id: $system_id})
         MERGE (c:DICOMConfiguration {id: $cfg.id})
         ON CREATE SET c.ae_title = $cfg.ae_title,
                       c.roles = $cfg.roles,
@@ -516,47 +543,61 @@ class SystemService:
                       c.dicomweb_qido_enabled = $cfg.dicomweb_qido_enabled,
                       c.dicomweb_wado_enabled = $cfg.dicomweb_wado_enabled,
                       c.dicomweb_stow_enabled = $cfg.dicomweb_stow_enabled,
+                      c.storage_root_uri = $cfg.storage_root_uri,
                       c.description = $cfg.description,
                       c.test_id = $cfg.test_id,
                       c.Action = 'CREATE',
                       c.ActedAt = datetime({timezone: 'UTC'}),
                       c.ActedBy = $cfg.ActedBy,
                       c.CreatedAt = datetime({timezone: 'UTC'})
-        MERGE (s)-[r:HAS_DICOM_CONFIGURATION {id: $rel.id}]->(c)
-        ON CREATE SET r.Action = 'CREATE',
-                      r.ActedAt = datetime({timezone: 'UTC'}),
-                      r.ActedBy = $rel.ActedBy,
-                      r.CreatedAt = datetime({timezone: 'UTC'}),
-                      r.test_id = $rel.test_id
+        ON MATCH SET  c.ae_title = $cfg.ae_title,
+                      c.roles = $cfg.roles,
+                      c.host = $cfg.host,
+                      c.port = $cfg.port,
+                      c.is_local = $cfg.is_local,
+                      c.is_promiscuous = $cfg.is_promiscuous,
+                      c.tls_enabled = $cfg.tls_enabled,
+                      c.tls_cert_path = $cfg.tls_cert_path,
+                      c.tls_key_path = $cfg.tls_key_path,
+                      c.tls_ca_path = $cfg.tls_ca_path,
+                      c.tls_ciphers = $cfg.tls_ciphers,
+                      c.dicom_services = $cfg.dicom_services,
+                      c.transfer_syntaxes = $cfg.transfer_syntaxes,
+                      c.dicomweb_enabled = $cfg.dicomweb_enabled,
+                      c.dicomweb_url_prefix = $cfg.dicomweb_url_prefix,
+                      c.dicomweb_qido_enabled = $cfg.dicomweb_qido_enabled,
+                      c.dicomweb_wado_enabled = $cfg.dicomweb_wado_enabled,
+                      c.dicomweb_stow_enabled = $cfg.dicomweb_stow_enabled,
+                      c.storage_root_uri = $cfg.storage_root_uri,
+                      c.description = $cfg.description,
+                      c.test_id = $cfg.test_id,
+                      c.Action = CASE WHEN c.Action = 'DELETE' THEN 'RESTORE' ELSE 'UPDATE' END,
+                      c.ActedAt = datetime({timezone: 'UTC'}),
+                      c.ActedBy = $cfg.ActedBy,
+                      c.UpdatedAt = datetime({timezone: 'UTC'})
+        WITH c
+        OPTIONAL MATCH (:System)-[stale_sys_rel:HAS_DICOM_CONFIGURATION]->(c)
+        DELETE stale_sys_rel
         RETURN properties(c) AS c
         """
 
         records = await self.client.execute_query(
             query,
             {
-                "system_id": system_id,
                 "cfg": cfg_node.model_dump(),
-                "rel": rel.model_dump(),
             },
         )
         raw_c = records[0].get("c", {}) if records else {}
 
-        # Resolve served group association
-        target_group_id = config_data.group_id
-        if not target_group_id:
-            catch_all = await group_service.get_or_create_catch_all_group(test_id=norm_test_id, acted_by=acted_by)
-            target_group_id = catch_all.get("id")
+        await group_service.associate_dicom_config_to_group(
+            config_id=cfg_node.id,
+            group_id=target_group_id,
+            test_id=norm_test_id,
+            acted_by=acted_by,
+        )
+        raw_c["group_id"] = target_group_id
 
-        if target_group_id:
-            await group_service.associate_dicom_config_to_group(
-                config_id=cfg_node.id,
-                group_id=target_group_id,
-                test_id=norm_test_id,
-                acted_by=acted_by,
-            )
-            raw_c["group_id"] = target_group_id
-
-        cfg_resp = _dict_to_dicom_config(raw_c)
+        cfg_resp = _dict_to_dicom_config(raw_c, groups=[target_group])
         try:
             from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
@@ -593,6 +634,7 @@ class SystemService:
             c.dicomweb_qido_enabled = coalesce($dicomweb_qido_enabled, c.dicomweb_qido_enabled),
             c.dicomweb_wado_enabled = coalesce($dicomweb_wado_enabled, c.dicomweb_wado_enabled),
             c.dicomweb_stow_enabled = coalesce($dicomweb_stow_enabled, c.dicomweb_stow_enabled),
+            c.storage_root_uri = coalesce($storage_root_uri, c.storage_root_uri),
             c.description = coalesce($description, c.description),
             c.Action = 'UPDATE',
             c.ActedAt = datetime({timezone: 'UTC'}),
@@ -619,6 +661,7 @@ class SystemService:
             "dicomweb_qido_enabled": update_data.dicomweb_qido_enabled,
             "dicomweb_wado_enabled": update_data.dicomweb_wado_enabled,
             "dicomweb_stow_enabled": update_data.dicomweb_stow_enabled,
+            "storage_root_uri": update_data.storage_root_uri,
             "description": update_data.description,
             "acted_by": acted_by,
         }
@@ -628,22 +671,28 @@ class SystemService:
         raw_c = records[0].get("c", {})
 
         # Handle group association update if provided
+        groups: List[Dict[str, Any]] = []
         if update_data.group_id is not None:
-            # Associate with new target group
-            await group_service.associate_dicom_config_to_group(
+            assoc_res = await group_service.associate_dicom_config_to_group(
                 config_id=config_id,
                 group_id=update_data.group_id,
                 test_id=raw_c.get("test_id"),
                 acted_by=acted_by,
             )
-            raw_c["group_id"] = update_data.group_id
+            grp = assoc_res.get("group") or {}
+            resolved_gid = grp.get("id") or update_data.group_id
+            raw_c["group_id"] = resolved_gid
+            if grp:
+                groups = [grp]
         else:
-            # Retain existing group_id if present
             existing = await self.get_configuration(config_id)
-            if existing and existing.get("group_id"):
-                raw_c["group_id"] = existing["group_id"]
+            if existing:
+                if existing.get("group_id"):
+                    raw_c["group_id"] = existing["group_id"]
+                if existing.get("groups"):
+                    groups = existing["groups"]
 
-        updated_cfg = _dict_to_dicom_config(raw_c)
+        updated_cfg = _dict_to_dicom_config(raw_c, groups=groups)
         try:
             from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 
@@ -658,7 +707,7 @@ class SystemService:
         acted_by: str = "system",
         hard_delete: bool = False,
     ) -> bool:
-        """Soft-delete (or hard-delete if requested) a DICOMConfiguration and negate relationship."""
+        """Soft-delete (or hard-delete if requested) a DICOMConfiguration and negate relationships."""
         if hard_delete:
             del_cypher = """
             MATCH (c:DICOMConfiguration {id: $config_id})
@@ -676,46 +725,100 @@ class SystemService:
                     logger.warning("scp_on_configuration_removed_failed", error=str(scp_err))
             return deleted
 
-        # Soft delete: swap relation to NOT_HAS_DICOM_CONFIGURATION and set Action='DELETE'
-        find_rel_query = """
-        MATCH (s:System)-[r:HAS_DICOM_CONFIGURATION]->(c:DICOMConfiguration {id: $config_id})
-        RETURN s.id AS sys_id
+        find_query = """
+        MATCH (c:DICOMConfiguration {id: $config_id})
+        WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
+        OPTIONAL MATCH (owner)-[r_has:HAS_DICOM_CONFIGURATION]->(c)
+        WHERE (owner:Group OR owner:System)
+        OPTIONAL MATCH (c)-[r_serves:SERVES]->(g:Group)
+        RETURN c.id AS cid,
+               collect(DISTINCT owner.id) AS owner_ids,
+               collect(DISTINCT g.id) AS served_group_ids
         LIMIT 1
         """
-        rel_recs = await self.client.execute_query(find_rel_query, {"config_id": config_id})
-        if not rel_recs:
+        recs = await self.client.execute_query(find_query, {"config_id": config_id})
+        if not recs or not recs[0].get("cid"):
             return False
 
-        sys_id = rel_recs[0].get("sys_id")
-        neg_type = to_negated_relation_type("HAS_DICOM_CONFIGURATION")
-        new_rel_id = generate_deterministic_id({"start_node_id": sys_id, "type": neg_type, "end_node_id": config_id})
+        owner_ids = [oid for oid in (recs[0].get("owner_ids") or []) if oid]
+        served_group_ids = [gid for gid in (recs[0].get("served_group_ids") or []) if gid]
 
-        swap_query = f"""
-        MATCH (s:System {{id: $sys_id}})-[r:HAS_DICOM_CONFIGURATION]->(c:DICOMConfiguration {{id: $config_id}})
-        WITH s, c, r, properties(r) AS old_props
-        CREATE (s)-[r_not:{neg_type}]->(c)
-        SET r_not = old_props,
-            r_not.id = $new_rel_id,
-            r_not.Action = 'DELETE',
-            r_not.ActedAt = datetime({{timezone: 'UTC'}}),
-            r_not.ActedBy = $acted_by
-        DELETE r
-        SET c.Action = 'DELETE',
-            c.ActedAt = datetime({{timezone: 'UTC'}}),
-            c.ActedBy = $acted_by
-        RETURN count(c) AS cnt
-        """
+        neg_has = to_negated_relation_type("HAS_DICOM_CONFIGURATION")
+        neg_serves = to_negated_relation_type("SERVES")
+
+        has_swaps = [
+            {
+                "owner_id": oid,
+                "new_rel_id": generate_deterministic_id(
+                    {"start_node_id": oid, "type": neg_has, "end_node_id": config_id}
+                ),
+            }
+            for oid in owner_ids
+        ]
+        serves_swaps = [
+            {
+                "group_id": gid,
+                "new_rel_id": generate_deterministic_id(
+                    {"start_node_id": config_id, "type": neg_serves, "end_node_id": gid}
+                ),
+            }
+            for gid in served_group_ids
+        ]
 
         async def _swap_tx(tx: Any) -> bool:
             res = await tx.run(
-                swap_query,
-                sys_id=sys_id,
+                f"""
+                MATCH (c:DICOMConfiguration {{id: $config_id}})
+                SET c.Action = 'DELETE',
+                    c.ActedAt = datetime({{timezone: 'UTC'}}),
+                    c.ActedBy = $acted_by
+                RETURN count(c) AS cnt
+                """,
                 config_id=config_id,
-                new_rel_id=new_rel_id,
                 acted_by=acted_by,
             )
             rec = await res.single()
-            return bool(rec and rec.get("cnt", 0) > 0)
+            if not rec or rec.get("cnt", 0) == 0:
+                return False
+
+            for item in has_swaps:
+                await tx.run(
+                    f"""
+                    MATCH (owner {{id: $owner_id}})-[r:HAS_DICOM_CONFIGURATION]->(c:DICOMConfiguration {{id: $config_id}})
+                    WITH owner, c, r, properties(r) AS old_props
+                    CREATE (owner)-[r_not:{neg_has}]->(c)
+                    SET r_not = old_props,
+                        r_not.id = $new_rel_id,
+                        r_not.Action = 'DELETE',
+                        r_not.ActedAt = datetime({{timezone: 'UTC'}}),
+                        r_not.ActedBy = $acted_by
+                    DELETE r
+                    """,
+                    owner_id=item["owner_id"],
+                    config_id=config_id,
+                    new_rel_id=item["new_rel_id"],
+                    acted_by=acted_by,
+                )
+
+            for item in serves_swaps:
+                await tx.run(
+                    f"""
+                    MATCH (c:DICOMConfiguration {{id: $config_id}})-[r:SERVES]->(g:Group {{id: $group_id}})
+                    WITH c, g, r, properties(r) AS old_props
+                    CREATE (c)-[r_not:{neg_serves}]->(g)
+                    SET r_not = old_props,
+                        r_not.id = $new_rel_id,
+                        r_not.Action = 'DELETE',
+                        r_not.ActedAt = datetime({{timezone: 'UTC'}}),
+                        r_not.ActedBy = $acted_by
+                    DELETE r
+                    """,
+                    config_id=config_id,
+                    group_id=item["group_id"],
+                    new_rel_id=item["new_rel_id"],
+                    acted_by=acted_by,
+                )
+            return True
 
         success = await self.client.execute_write_tx(_swap_tx)
         if success:
@@ -732,50 +835,108 @@ class SystemService:
         config_id: str,
         acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
-        """Restore a soft-deleted configuration by swapping relationship back and setting Action='RESTORE'."""
-        neg_type = to_negated_relation_type("HAS_DICOM_CONFIGURATION")
-        pos_type = to_positive_relation_type("HAS_DICOM_CONFIGURATION")
+        """Restore a soft-deleted configuration by swapping relationships back and setting Action='RESTORE'."""
+        neg_has = to_negated_relation_type("HAS_DICOM_CONFIGURATION")
+        pos_has = to_positive_relation_type("HAS_DICOM_CONFIGURATION")
+        neg_serves = to_negated_relation_type("SERVES")
+        pos_serves = to_positive_relation_type("SERVES")
 
         find_rel_query = f"""
-        MATCH (s:System)-[r:{neg_type}]->(c:DICOMConfiguration {{id: $config_id}})
-        RETURN s.id AS sys_id
+        MATCH (c:DICOMConfiguration {{id: $config_id}})
+        WHERE c.Action = 'DELETE'
+        OPTIONAL MATCH (owner)-[r_has:{neg_has}]->(c)
+        WHERE (owner:Group OR owner:System)
+        OPTIONAL MATCH (c)-[r_serves:{neg_serves}]->(g:Group)
+        RETURN c.id AS cid,
+               collect(DISTINCT owner.id) AS owner_ids,
+               collect(DISTINCT g.id) AS served_group_ids
         LIMIT 1
         """
         rel_recs = await self.client.execute_query(find_rel_query, {"config_id": config_id})
-        if not rel_recs:
+        if not rel_recs or not rel_recs[0].get("cid"):
             return None
 
-        sys_id = rel_recs[0].get("sys_id")
-        new_rel_id = generate_deterministic_id({"start_node_id": sys_id, "type": pos_type, "end_node_id": config_id})
+        owner_ids = [oid for oid in (rel_recs[0].get("owner_ids") or []) if oid]
+        served_group_ids = [gid for gid in (rel_recs[0].get("served_group_ids") or []) if gid]
 
-        restore_query = f"""
-        MATCH (s:System {{id: $sys_id}})-[r:{neg_type}]->(c:DICOMConfiguration {{id: $config_id}})
-        WITH s, c, r, properties(r) AS old_props
-        CREATE (s)-[r_pos:{pos_type}]->(c)
-        SET r_pos = old_props,
-            r_pos.id = $new_rel_id,
-            r_pos.Action = 'RESTORE',
-            r_pos.ActedAt = datetime({{timezone: 'UTC'}}),
-            r_pos.ActedBy = $acted_by
-        DELETE r
-        SET c.Action = 'RESTORE',
-            c.ActedAt = datetime({{timezone: 'UTC'}}),
-            c.ActedBy = $acted_by
-        RETURN properties(c) AS c
-        """
+        has_swaps = [
+            {
+                "owner_id": oid,
+                "new_rel_id": generate_deterministic_id(
+                    {"start_node_id": oid, "type": pos_has, "end_node_id": config_id}
+                ),
+            }
+            for oid in owner_ids
+        ]
+        serves_swaps = [
+            {
+                "group_id": gid,
+                "new_rel_id": generate_deterministic_id(
+                    {"start_node_id": config_id, "type": pos_serves, "end_node_id": gid}
+                ),
+            }
+            for gid in served_group_ids
+        ]
 
         async def _restore_tx(tx: Any) -> Optional[Dict[str, Any]]:
+            for item in has_swaps:
+                await tx.run(
+                    f"""
+                    MATCH (owner {{id: $owner_id}})-[r:{neg_has}]->(c:DICOMConfiguration {{id: $config_id}})
+                    WITH owner, c, r, properties(r) AS old_props
+                    CREATE (owner)-[r_pos:{pos_has}]->(c)
+                    SET r_pos = old_props,
+                        r_pos.id = $new_rel_id,
+                        r_pos.Action = 'RESTORE',
+                        r_pos.ActedAt = datetime({{timezone: 'UTC'}}),
+                        r_pos.ActedBy = $acted_by
+                    DELETE r
+                    """,
+                    owner_id=item["owner_id"],
+                    config_id=config_id,
+                    new_rel_id=item["new_rel_id"],
+                    acted_by=acted_by,
+                )
+
+            for item in serves_swaps:
+                await tx.run(
+                    f"""
+                    MATCH (c:DICOMConfiguration {{id: $config_id}})-[r:{neg_serves}]->(g:Group {{id: $group_id}})
+                    WITH c, g, r, properties(r) AS old_props
+                    CREATE (c)-[r_pos:{pos_serves}]->(g)
+                    SET r_pos = old_props,
+                        r_pos.id = $new_rel_id,
+                        r_pos.Action = 'RESTORE',
+                        r_pos.ActedAt = datetime({{timezone: 'UTC'}}),
+                        r_pos.ActedBy = $acted_by
+                    DELETE r
+                    """,
+                    config_id=config_id,
+                    group_id=item["group_id"],
+                    new_rel_id=item["new_rel_id"],
+                    acted_by=acted_by,
+                )
+
             res = await tx.run(
-                restore_query,
-                sys_id=sys_id,
+                """
+                MATCH (c:DICOMConfiguration {id: $config_id})
+                SET c.Action = 'RESTORE',
+                    c.ActedAt = datetime({timezone: 'UTC'}),
+                    c.ActedBy = $acted_by,
+                    c.UpdatedAt = datetime({timezone: 'UTC'})
+                WITH c
+                OPTIONAL MATCH (c)-[r_grp:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
+                WHERE (r_grp.Action IS NULL OR r_grp.Action <> 'DELETE')
+                  AND (g.Action IS NULL OR g.Action <> 'DELETE')
+                RETURN properties(c) AS c, collect(DISTINCT properties(g)) AS groups
+                """,
                 config_id=config_id,
-                new_rel_id=new_rel_id,
                 acted_by=acted_by,
             )
             rec = await res.single()
             if not rec:
                 return None
-            return _dict_to_dicom_config(rec.get("c", {}))
+            return _dict_to_dicom_config(rec.get("c", {}), groups=rec.get("groups") or [])
 
         restored_cfg = await self.client.execute_write_tx(_restore_tx)
         if restored_cfg:

@@ -21,6 +21,7 @@ from gosmart_graphite.model.auth import (
 from gosmart_graphite.model.fhir.relations import FHIR_RELATION_CLASSES
 from gosmart_graphite.model.fhir_config import HasFhirConfigRelation
 from gosmart_graphite.model.graph import (
+    HasDicomConfigurationRelation,
     HasInstanceRelation,
     HasSeriesRelation,
     HasStudyRelation,
@@ -28,11 +29,12 @@ from gosmart_graphite.model.graph import (
     generate_deterministic_id,
     to_negated_relation_type,
 )
-from gosmart_graphite.model.llm import HasLlmConfigRelation
+from gosmart_graphite.model.llm_config import HasLlmConfigRelation
 
 logger = get_logger("gosmart_gs.group_service")
 
 DEFAULT_MY_GROUP_MAX_DEPTH: int = 8
+DEFAULT_GROUP_NAME: str = "GoSmart Health"
 
 LOST_AND_FOUND_GROUP_NAME: str = "LostAndFound"
 LOST_AND_FOUND_GROUP_CODE: str = "LOST_AND_FOUND"
@@ -55,6 +57,7 @@ UPWARD_GROUP_RELATION_TYPES: Tuple[str, ...] = tuple(
             ServesRelation.__type__,
             ScopedToRelation.__type__,
             # Configuration sponsorship
+            HasDicomConfigurationRelation.__type__,
             HasLlmConfigRelation.__type__,
             HasFhirConfigRelation.__type__,
             # DICOM hierarchy
@@ -734,6 +737,96 @@ class GroupService:
             logger.warning("get_or_create_catch_all_group_sync_error", error=str(e))
             return {"id": node.id, "name": node.name, "code": node.code}
 
+    @staticmethod
+    def _build_resolve_group_query(identifier: Optional[str]) -> Tuple[LiteralString, Optional[str]]:
+        clean_ident = identifier.strip() if isinstance(identifier, str) and identifier.strip() else None
+        if clean_ident is None:
+            query: LiteralString = """
+            MATCH (g:Group)
+            WHERE g.name = $default_name
+              AND (g.Action IS NULL OR g.Action <> 'DELETE')
+              AND coalesce(g.is_active, true) = true
+              AND (
+                (($test_id IS NULL OR $test_id = '') AND (g.test_id IS NULL OR trim(toString(g.test_id)) = ''))
+                OR ($test_id IS NOT NULL AND $test_id <> '' AND g.test_id = $test_id)
+              )
+            RETURN properties(g) AS group
+            """
+            return query, None
+
+        query_by_ident: LiteralString = """
+        MATCH (g:Group)
+        WHERE (g.id = $identifier OR g.name = $identifier OR toUpper(g.code) = toUpper($identifier))
+          AND (g.Action IS NULL OR g.Action <> 'DELETE')
+          AND coalesce(g.is_active, true) = true
+          AND (
+            (($test_id IS NULL OR $test_id = '') AND (g.test_id IS NULL OR trim(toString(g.test_id)) = ''))
+            OR ($test_id IS NOT NULL AND $test_id <> '' AND g.test_id = $test_id)
+          )
+        RETURN properties(g) AS group
+        """
+        return query_by_ident, clean_ident
+
+    @staticmethod
+    def _validate_resolved_group_records(
+        records: List[Dict[str, Any]],
+        clean_ident: Optional[str],
+    ) -> Dict[str, Any]:
+        target_label = clean_ident or DEFAULT_GROUP_NAME
+        if not records:
+            if clean_ident is None:
+                raise RuntimeError(
+                    f"Default group '{DEFAULT_GROUP_NAME}' not found in Neo4j. "
+                    "Ensure system bootstrap has run or specify --assign <name or id>."
+                )
+            raise RuntimeError(f"Target group '{target_label}' not found in Neo4j.")
+        if len(records) > 1:
+            raise RuntimeError(
+                f"Ambiguous group match for '{target_label}': found {len(records)} active Group nodes. "
+                "Please specify a unique Group ID."
+            )
+        return _clean_neo4j_value(records[0].get("group", records[0]))
+
+    async def resolve_target_group(
+        self,
+        identifier: Optional[str] = None,
+        test_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Resolve a single active Group by id/name/code, or default 'GoSmart Health'.
+
+        Raises RuntimeError when 0 or > 1 matching active groups exist.
+        """
+        norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
+        query, clean_ident = self._build_resolve_group_query(identifier)
+        records = await self.client.execute_query(
+            query,
+            {
+                "identifier": clean_ident,
+                "default_name": DEFAULT_GROUP_NAME,
+                "test_id": norm_test_id,
+            },
+        )
+        return self._validate_resolved_group_records(records, clean_ident)
+
+    def resolve_target_group_sync(
+        self,
+        identifier: Optional[str] = None,
+        test_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Synchronously resolve a single active Group by id/name/code, or default 'GoSmart Health'."""
+        norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
+        query, clean_ident = self._build_resolve_group_query(identifier)
+        driver = self.client.get_sync_driver()
+        with driver.session(database=self.client.settings.DB_DATABASE) as session:
+            result = session.run(
+                query,
+                identifier=clean_ident,
+                default_name=DEFAULT_GROUP_NAME,
+                test_id=norm_test_id,
+            )
+            records = [r.data() for r in result]
+        return self._validate_resolved_group_records(records, clean_ident)
+
     async def associate_dicom_config_to_group(
         self,
         config_id: str,
@@ -741,35 +834,68 @@ class GroupService:
         test_id: Optional[str] = None,
         acted_by: str = "system",
     ) -> Dict[str, Any]:
-        """Associate a DICOMConfiguration to a Group via SERVES relationship."""
-        rel = ServesRelation(
+        """Associate a DICOMConfiguration to a Group via HAS_DICOM_CONFIGURATION and SERVES relationships.
+
+        Accepts group_id as an exact Group ID, Group name, or Group code.
+        """
+        norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
+        target_group = await self.resolve_target_group(identifier=group_id, test_id=norm_test_id)
+        resolved_group_id = target_group["id"]
+
+        rel_serves = ServesRelation(
             start_node_id=config_id,
-            end_node_id=group_id,
-            test_id=test_id,
+            end_node_id=resolved_group_id,
+            test_id=norm_test_id,
             ActedBy=acted_by,
         )
+        rel_has = HasDicomConfigurationRelation(
+            start_node_id=resolved_group_id,
+            end_node_id=config_id,
+            test_id=norm_test_id,
+            ActedBy=acted_by,
+        )
+        neg_serves = to_negated_relation_type("SERVES")
+        neg_has = to_negated_relation_type("HAS_DICOM_CONFIGURATION")
 
-        query = """
-        MATCH (c:DICOMConfiguration {id: $config_id})
-        MATCH (g:Group {id: $group_id})
-        MERGE (c)-[r:SERVES {id: $rel_id}]->(g)
+        query = f"""
+        MATCH (c:DICOMConfiguration {{id: $config_id}})
+        MATCH (g:Group {{id: $group_id}})
+        OPTIONAL MATCH (g)-[stale_not_has:{neg_has}]->(c)
+        DELETE stale_not_has
+        WITH c, g
+        OPTIONAL MATCH (c)-[stale_not_serves:{neg_serves}]->(g)
+        DELETE stale_not_serves
+        WITH c, g
+        MERGE (g)-[r_has:HAS_DICOM_CONFIGURATION {{id: $has_rel_id}}]->(c)
+        ON CREATE SET r_has.test_id = $test_id,
+                      r_has.Action = 'CREATE',
+                      r_has.ActedAt = datetime({{timezone: 'UTC'}}),
+                      r_has.ActedBy = $acted_by,
+                      r_has.CreatedAt = datetime({{timezone: 'UTC'}})
+        ON MATCH SET  r_has.test_id = coalesce($test_id, r_has.test_id),
+                      r_has.Action = 'UPDATE',
+                      r_has.ActedAt = datetime({{timezone: 'UTC'}}),
+                      r_has.ActedBy = $acted_by,
+                      r_has.UpdatedAt = datetime({{timezone: 'UTC'}})
+        MERGE (c)-[r:SERVES {{id: $rel_id}}]->(g)
         ON CREATE SET r.test_id = $test_id,
                       r.Action = 'CREATE',
-                      r.ActedAt = datetime({timezone: 'UTC'}),
+                      r.ActedAt = datetime({{timezone: 'UTC'}}),
                       r.ActedBy = $acted_by,
-                      r.CreatedAt = datetime({timezone: 'UTC'})
+                      r.CreatedAt = datetime({{timezone: 'UTC'}})
         ON MATCH SET  r.test_id = coalesce($test_id, r.test_id),
                       r.Action = 'UPDATE',
-                      r.ActedAt = datetime({timezone: 'UTC'}),
+                      r.ActedAt = datetime({{timezone: 'UTC'}}),
                       r.ActedBy = $acted_by,
-                      r.UpdatedAt = datetime({timezone: 'UTC'})
+                      r.UpdatedAt = datetime({{timezone: 'UTC'}})
         RETURN properties(r) AS rel, properties(c) AS config, properties(g) AS group
         """
         params = {
             "config_id": config_id,
-            "group_id": group_id,
-            "rel_id": rel.id,
-            "test_id": test_id,
+            "group_id": resolved_group_id,
+            "rel_id": rel_serves.id,
+            "has_rel_id": rel_has.id,
+            "test_id": norm_test_id,
             "acted_by": acted_by,
         }
         records = await self.client.execute_query(query, params)
@@ -780,13 +906,13 @@ class GroupService:
             actor_id=f"user:{acted_by}",
             actor=acted_by,
             target_id=f"config:{config_id}",
-            target=f"Group {group_id}",
+            target=f"Group {resolved_group_id}",
             status_code=200,
-            status_message=f"DICOM Configuration {config_id} now serves Group {group_id}",
+            status_message=f"DICOM Configuration {config_id} now serves Group {resolved_group_id}",
             severity="INFO",
-            result="SERVES relationship established",
-            details={"config_id": config_id, "group_id": group_id},
-            test_id=test_id,
+            result="HAS_DICOM_CONFIGURATION and SERVES relationships established",
+            details={"config_id": config_id, "group_id": resolved_group_id},
+            test_id=norm_test_id,
         )
         return res
 
@@ -796,20 +922,43 @@ class GroupService:
         group_id: str,
         acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
-        """Dissociate a DICOMConfiguration from a Group by swapping SERVES to NOT_SERVES."""
-        neg_type = to_negated_relation_type("SERVES")
-        new_rel_id = generate_deterministic_id({"start_node_id": config_id, "type": neg_type, "end_node_id": group_id})
+        """Dissociate a DICOMConfiguration from a Group by swapping HAS_DICOM_CONFIGURATION and SERVES to negated forms."""
+        neg_serves = to_negated_relation_type("SERVES")
+        neg_has = to_negated_relation_type("HAS_DICOM_CONFIGURATION")
+        new_serves_rel_id = generate_deterministic_id(
+            {"start_node_id": config_id, "type": neg_serves, "end_node_id": group_id}
+        )
+        new_has_rel_id = generate_deterministic_id(
+            {"start_node_id": group_id, "type": neg_has, "end_node_id": config_id}
+        )
 
         query = f"""
-        MATCH (c:DICOMConfiguration {{id: $config_id}})-[r:SERVES]->(g:Group {{id: $group_id}})
-        WITH c, g, r, properties(r) AS old_props
-        CREATE (c)-[r_not:{neg_type}]->(g)
-        SET r_not = old_props,
-            r_not.id = $new_rel_id,
-            r_not.Action = 'DELETE',
-            r_not.ActedAt = datetime({{timezone: 'UTC'}}),
-            r_not.ActedBy = $acted_by
-        DELETE r
+        MATCH (c:DICOMConfiguration {{id: $config_id}})
+        MATCH (g:Group {{id: $group_id}})
+        OPTIONAL MATCH (c)-[r_serves:SERVES]->(g)
+        OPTIONAL MATCH (g)-[r_has:HAS_DICOM_CONFIGURATION]->(c)
+        WITH c, g, r_serves, r_has
+        WHERE r_serves IS NOT NULL OR r_has IS NOT NULL
+        FOREACH (_ IN CASE WHEN r_serves IS NOT NULL THEN [1] ELSE [] END |
+            CREATE (c)-[r_not_serves:{neg_serves}]->(g)
+            SET r_not_serves = properties(r_serves),
+                r_not_serves.id = $new_serves_rel_id,
+                r_not_serves.Action = 'DELETE',
+                r_not_serves.ActedAt = datetime({{timezone: 'UTC'}}),
+                r_not_serves.ActedBy = $acted_by
+            DELETE r_serves
+        )
+        FOREACH (_ IN CASE WHEN r_has IS NOT NULL THEN [1] ELSE [] END |
+            CREATE (g)-[r_not_has:{neg_has}]->(c)
+            SET r_not_has = properties(r_has),
+                r_not_has.id = $new_has_rel_id,
+                r_not_has.Action = 'DELETE',
+                r_not_has.ActedAt = datetime({{timezone: 'UTC'}}),
+                r_not_has.ActedBy = $acted_by
+            DELETE r_has
+        )
+        WITH c, g
+        OPTIONAL MATCH (c)-[r_not:{neg_serves}]->(g)
         RETURN properties(r_not) AS r_not
         """
 
@@ -818,7 +967,8 @@ class GroupService:
                 query,
                 config_id=config_id,
                 group_id=group_id,
-                new_rel_id=new_rel_id,
+                new_serves_rel_id=new_serves_rel_id,
+                new_has_rel_id=new_has_rel_id,
                 acted_by=acted_by,
             )
             rec = await res.single()
@@ -837,21 +987,21 @@ class GroupService:
                 status_code=200,
                 status_message=f"DICOM Configuration {config_id} dissociated from Group {group_id}",
                 severity="INFO",
-                result="SERVES relationship disabled to NOT_SERVES",
+                result="HAS_DICOM_CONFIGURATION and SERVES relationships disabled",
                 details={"config_id": config_id, "group_id": group_id},
             )
         return result
 
     async def get_group_for_ae_title(self, ae_title: str) -> Optional[Dict[str, Any]]:
-        """Look up the active Group served by the given remote or local AE Title."""
+        """Look up the active Group associated with the given remote or local AE Title."""
         norm_aet = ae_title.strip()
         query = """
-        MATCH (c:DICOMConfiguration)-[r:SERVES]->(g:Group)
+        MATCH (c:DICOMConfiguration)-[r:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
         WHERE (c.ae_title = $ae_title OR (c.is_promiscuous = true AND c.ae_title = '*'))
           AND (c.Action IS NULL OR c.Action <> 'DELETE')
           AND (r.Action IS NULL OR r.Action <> 'DELETE')
           AND (g.Action IS NULL OR g.Action <> 'DELETE')
-          AND g.is_active = true
+          AND coalesce(g.is_active, true) = true
         RETURN properties(g) AS group, c.ae_title AS matched_aet
         ORDER BY CASE WHEN c.ae_title = $ae_title THEN 0 ELSE 1 END
         LIMIT 1
@@ -862,15 +1012,15 @@ class GroupService:
         return None
 
     def get_group_for_ae_title_sync(self, ae_title: str) -> Optional[Dict[str, Any]]:
-        """Synchronously look up the active Group served by the given AE Title."""
+        """Synchronously look up the active Group associated with the given AE Title."""
         norm_aet = ae_title.strip()
         query = """
-        MATCH (c:DICOMConfiguration)-[r:SERVES]->(g:Group)
+        MATCH (c:DICOMConfiguration)-[r:HAS_DICOM_CONFIGURATION|SERVES]-(g:Group)
         WHERE (c.ae_title = $ae_title OR (c.is_promiscuous = true AND c.ae_title = '*'))
           AND (c.Action IS NULL OR c.Action <> 'DELETE')
           AND (r.Action IS NULL OR r.Action <> 'DELETE')
           AND (g.Action IS NULL OR g.Action <> 'DELETE')
-          AND g.is_active = true
+          AND coalesce(g.is_active, true) = true
         RETURN properties(g) AS group, c.ae_title AS matched_aet
         ORDER BY CASE WHEN c.ae_title = $ae_title THEN 0 ELSE 1 END
         LIMIT 1
@@ -890,14 +1040,14 @@ class GroupService:
         """Resolve effective group scope for a caller AE title (group itself + downward closure)."""
         norm_aet = ae_title.strip()
         query = """
-        MATCH (c:DICOMConfiguration {ae_title: $ae_title})-[r:SERVES]->(root_grp:Group)
+        MATCH (c:DICOMConfiguration {ae_title: $ae_title})-[r:HAS_DICOM_CONFIGURATION|SERVES]-(root_grp:Group)
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
           AND (r.Action IS NULL OR r.Action <> 'DELETE')
           AND (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
-          AND root_grp.is_active = true
+          AND coalesce(root_grp.is_active, true) = true
         OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
         WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND sub_grp.is_active = true
+          AND coalesce(sub_grp.is_active, true) = true
         WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
         UNWIND accessible_groups AS g
         RETURN DISTINCT g.id AS id,
@@ -914,14 +1064,14 @@ class GroupService:
         """Synchronously resolve effective group scope for a caller AE title."""
         norm_aet = ae_title.strip()
         query = """
-        MATCH (c:DICOMConfiguration {ae_title: $ae_title})-[r:SERVES]->(root_grp:Group)
+        MATCH (c:DICOMConfiguration {ae_title: $ae_title})-[r:HAS_DICOM_CONFIGURATION|SERVES]-(root_grp:Group)
         WHERE (c.Action IS NULL OR c.Action <> 'DELETE')
           AND (r.Action IS NULL OR r.Action <> 'DELETE')
           AND (root_grp.Action IS NULL OR root_grp.Action <> 'DELETE')
-          AND root_grp.is_active = true
+          AND coalesce(root_grp.is_active, true) = true
         OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(root_grp)
         WHERE (sub_grp.Action IS NULL OR sub_grp.Action <> 'DELETE')
-          AND sub_grp.is_active = true
+          AND coalesce(sub_grp.is_active, true) = true
         WITH collect(DISTINCT root_grp) + collect(DISTINCT sub_grp) AS accessible_groups
         UNWIND accessible_groups AS g
         RETURN DISTINCT g.id AS id,

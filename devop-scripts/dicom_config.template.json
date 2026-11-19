@@ -16,5 +16,6 @@
   "dicomweb_qido_enabled": true,
   "dicomweb_wado_enabled": true,
   "dicomweb_stow_enabled": true,
-  "description": "Local development DICOM SCP configuration"
+  "description": "Local development DICOM SCP configuration",
+  "storage_root_uri": ""
 }

@@ -15,7 +15,7 @@ from rich.table import Table
 from gosmart_graphite.core.logging import setup_logging
 from gosmart_graphite.db.neo4j import neo4j_client
 from gosmart_graphite.model.fhir_config import FHIRConfigurationCreateRequest
-from gosmart_graphite.model.llm import LLMConfigCreateRequest
+from gosmart_graphite.model.llm_config import LLMConfigCreateRequest
 from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
 from gosmart_graphite.service.fhir_config_service import fhir_config_service
 from gosmart_graphite.service.llm_config_service import llm_config_service
@@ -148,7 +148,7 @@ def configure_dicom_config(
         None,
         "--assign",
         "-a",
-        help="Target exact Group ID served by this DICOMConfiguration (defaults to 'GoSmart Health').",
+        help="Target Group ID, name, or code served by this DICOMConfiguration (defaults to 'GoSmart Health').",
     ),
     acted_by: str = typer.Option(
         "cli:configure",
@@ -181,6 +181,7 @@ def configure_dicom_config(
         try:
             return await system_service.create_configuration(
                 config_data=req,
+                assign_group=assign,
                 acted_by=acted_by,
             )
         finally:
@@ -192,6 +193,9 @@ def configure_dicom_config(
         console.print(f"[red]Error: Failed to persist DICOMConfiguration in Neo4j: {exc}[/red]")
         raise typer.Exit(code=1)
 
+    groups_display = ", ".join(
+        f"{g.get('name', g.get('id', ''))} ({g.get('id', '')})" for g in (saved.get("groups") or [])
+    )
     table = Table(title=f"DICOM Configuration Registered ({saved.get('action', 'CREATE')})")
     table.add_column("Field", style="cyan", no_wrap=True)
     table.add_column("Value", style="green")
@@ -208,8 +212,10 @@ def configure_dicom_config(
     table.add_row("Transfer Syntaxes", ", ".join(saved.get("transfer_syntaxes") or []) or "-")
     table.add_row("DICOMweb Enabled", str(saved.get("dicomweb_enabled", True)))
     table.add_row("DICOMweb Prefix", str(saved.get("dicomweb_url_prefix") or "-"))
+    table.add_row("Storage Root URI", str(saved.get("storage_root_uri") or "-"))
     table.add_row("Description", str(saved.get("description") or "-"))
     table.add_row("Group ID", str(saved.get("group_id") or "-"))
+    table.add_row("Sponsoring Groups", groups_display or str(saved.get("group_id") or "-"))
     if saved.get("test_id"):
         table.add_row("Test ID", str(saved.get("test_id")))
 
@@ -228,7 +234,7 @@ def configure_fhir_config(
         None,
         "--assign",
         "-a",
-        help="Target exact Group ID to associate with this FHIRConfiguration (defaults to 'GoSmart Health').",
+        help="Target Group ID, name, or code to associate with this FHIRConfiguration (defaults to 'GoSmart Health').",
     ),
     acted_by: str = typer.Option(
         "cli:configure",

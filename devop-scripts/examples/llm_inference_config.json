@@ -1,0 +1,13 @@
+{
+  "tag": "inference-v1",
+  "provider": "ollama",
+  "model": "gemma4.e2b",
+  "url": "http://manabusb3.local.:11434",
+  "dimensions": 768,
+  "dimensions_truncated": null,
+  "api_key": "",
+  "location": "us-myhome1",
+  "project_id": null,
+  "extra_config": null,
+  "description": "A local development inference model"
+  }

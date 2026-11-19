@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, LiteralString, Optional
 
 from gosmart_graphite.actor.audit_actor import record_audit
+from gosmart_graphite.core.auth_dependency import get_active_group_id
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.audit import AuditAction
@@ -21,6 +22,12 @@ from gosmart_graphite.service.system_service import clean_neo4j_value, normalize
 logger = get_logger("gosmart_gs.fhir_config")
 
 DEFAULT_FHIR_GROUP_NAME = "GoSmart Health"
+
+
+def _dict_to_fhir_config_model(data: Dict[str, Any]) -> FHIRConfigurationNode:
+    """Convert raw Neo4j node properties to a FHIRConfigurationNode domain model."""
+    clean = clean_neo4j_value(data)
+    return FHIRConfigurationNode(**clean)
 
 
 def _dict_to_fhir_config_response(
@@ -79,6 +86,41 @@ def _node_props_payload(cfg_node: FHIRConfigurationNode) -> Dict[str, Any]:
 class FHIRConfigService:
     """Service managing Neo4j-persisted, group-scoped FHIR configurations."""
 
+    _ANCESTOR_RESOLVE_CYPHER: LiteralString = """
+    MATCH path = (start_g:Group {id: $group_id})-[:SUB_GROUP_OF*0..]->(anc:Group)
+    WHERE (start_g.Action IS NULL OR start_g.Action <> 'DELETE')
+      AND coalesce(start_g.is_active, true) = true
+      AND all(n IN nodes(path) WHERE (n.Action IS NULL OR n.Action <> 'DELETE') AND coalesce(n.is_active, true) = true)
+      AND all(rel IN relationships(path) WHERE rel.Action IS NULL OR rel.Action <> 'DELETE')
+    MATCH (anc)-[r:HAS_FHIR_CONFIG]->(f:FHIRConfiguration)
+    WHERE (r.Action IS NULL OR r.Action <> 'DELETE')
+      AND (f.Action IS NULL OR f.Action <> 'DELETE')
+      AND (
+        (($test_id IS NULL OR $test_id = '') AND (f.test_id IS NULL OR trim(toString(f.test_id)) = ''))
+        OR ($test_id IS NOT NULL AND $test_id <> '' AND f.test_id = $test_id)
+      )
+    WITH f, anc, min(length(path)) AS depth
+    ORDER BY depth ASC
+    RETURN properties(f) AS config, anc.id AS group_id, depth
+    """
+
+    _DEFAULT_GROUP_RESOLVE_CYPHER: LiteralString = """
+    MATCH (g:Group {name: $default_name})-[r:HAS_FHIR_CONFIG]->(f:FHIRConfiguration)
+    WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
+      AND coalesce(g.is_active, true) = true
+      AND (r.Action IS NULL OR r.Action <> 'DELETE')
+      AND (f.Action IS NULL OR f.Action <> 'DELETE')
+      AND (
+        (
+          ($test_id IS NULL OR $test_id = '')
+          AND (f.test_id IS NULL OR trim(toString(f.test_id)) = '')
+          AND (g.test_id IS NULL OR trim(toString(g.test_id)) = '')
+        )
+        OR ($test_id IS NOT NULL AND $test_id <> '' AND f.test_id = $test_id AND g.test_id = $test_id)
+      )
+    RETURN properties(f) AS config, g.id AS group_id
+    """
+
     def __init__(self, client: Optional[Neo4jClient] = None) -> None:
         self.client = client or neo4j_client
 
@@ -99,9 +141,10 @@ class FHIRConfigService:
             """
             return query, None
 
-        query_by_id: LiteralString = """
-        MATCH (g:Group {id: $group_id})
-        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
+        query_by_ident: LiteralString = """
+        MATCH (g:Group)
+        WHERE (g.id = $group_id OR g.name = $group_id OR toUpper(g.code) = toUpper($group_id))
+          AND (g.Action IS NULL OR g.Action <> 'DELETE')
           AND coalesce(g.is_active, true) = true
           AND (
             (($test_id IS NULL OR $test_id = '') AND (g.test_id IS NULL OR trim(toString(g.test_id)) = ''))
@@ -109,7 +152,7 @@ class FHIRConfigService:
           )
         RETURN properties(g) AS group
         """
-        return query_by_id, clean_gid
+        return query_by_ident, clean_gid
 
     @staticmethod
     def _validate_resolved_group_records(
@@ -136,7 +179,7 @@ class FHIRConfigService:
         group_id: Optional[str] = None,
         test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Resolve a single active Group by exact ID, or default 'GoSmart Health'.
+        """Resolve a single active Group by id/name/code, or default 'GoSmart Health'.
 
         Raises RuntimeError when 0 or > 1 matching active groups exist.
         """
@@ -151,6 +194,106 @@ class FHIRConfigService:
             },
         )
         return self._validate_resolved_group_records(records, clean_gid)
+
+    def resolve_target_group_sync(
+        self,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Synchronously resolve a single active Group by id/name/code, or default 'GoSmart Health'."""
+        norm_test_id = normalize_test_id(test_id)
+        query, clean_gid = self._build_resolve_group_query(group_id)
+        driver = self.client.get_sync_driver()
+        with driver.session(database=self.client.settings.DB_DATABASE) as session:
+            result = session.run(
+                query,
+                group_id=clean_gid,
+                default_name=DEFAULT_FHIR_GROUP_NAME,
+                test_id=norm_test_id,
+            )
+            records = [r.data() for r in result]
+        return self._validate_resolved_group_records(records, clean_gid)
+
+    @staticmethod
+    def _pick_ancestor_record(
+        records: List[Dict[str, Any]],
+        group_id: str,
+    ) -> Optional[FHIRConfigurationNode]:
+        if not records:
+            return None
+        min_depth = records[0]["depth"]
+        at_min = [r for r in records if r["depth"] == min_depth]
+        distinct_ids = {r["config"].get("id") for r in at_min if r.get("config")}
+        if len(distinct_ids) > 1:
+            raise RuntimeError(
+                f"Ambiguous FHIRConfiguration at depth {min_depth} starting from group '{group_id}'."
+            )
+        return _dict_to_fhir_config_model(at_min[0]["config"])
+
+    @staticmethod
+    def _pick_default_record(records: List[Dict[str, Any]]) -> Optional[FHIRConfigurationNode]:
+        if not records:
+            return None
+        distinct_ids = {r["config"].get("id") for r in records if r.get("config")}
+        if len(distinct_ids) > 1:
+            raise RuntimeError(f"Ambiguous FHIRConfiguration on default group '{DEFAULT_FHIR_GROUP_NAME}'.")
+        return _dict_to_fhir_config_model(records[0]["config"])
+
+    async def resolve_config_for_group(
+        self,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
+    ) -> Optional[FHIRConfigurationNode]:
+        """Resolve an active FHIRConfiguration by traversing upward from group_id, falling back to 'GoSmart Health'."""
+        norm_test_id = normalize_test_id(test_id)
+        effective_group_id = (
+            group_id.strip() if isinstance(group_id, str) and group_id.strip() else get_active_group_id()
+        )
+
+        if effective_group_id:
+            records = await self.client.execute_query(
+                self._ANCESTOR_RESOLVE_CYPHER,
+                {"group_id": effective_group_id, "test_id": norm_test_id},
+            )
+            picked = self._pick_ancestor_record(records, effective_group_id)
+            if picked is not None:
+                return picked
+
+        default_records = await self.client.execute_query(
+            self._DEFAULT_GROUP_RESOLVE_CYPHER,
+            {"default_name": DEFAULT_FHIR_GROUP_NAME, "test_id": norm_test_id},
+        )
+        return self._pick_default_record(default_records)
+
+    def resolve_config_for_group_sync(
+        self,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
+    ) -> Optional[FHIRConfigurationNode]:
+        """Synchronously resolve an active FHIRConfiguration upward from group_id, falling back to 'GoSmart Health'."""
+        norm_test_id = normalize_test_id(test_id)
+        effective_group_id = (
+            group_id.strip() if isinstance(group_id, str) and group_id.strip() else get_active_group_id()
+        )
+
+        driver = self.client.get_sync_driver()
+        with driver.session(database=self.client.settings.DB_DATABASE) as session:
+            if effective_group_id:
+                res = session.run(
+                    self._ANCESTOR_RESOLVE_CYPHER,
+                    group_id=effective_group_id,
+                    test_id=norm_test_id,
+                )
+                picked = self._pick_ancestor_record([r.data() for r in res], effective_group_id)
+                if picked is not None:
+                    return picked
+
+            def_res = session.run(
+                self._DEFAULT_GROUP_RESOLVE_CYPHER,
+                default_name=DEFAULT_FHIR_GROUP_NAME,
+                test_id=norm_test_id,
+            )
+            return self._pick_default_record([r.data() for r in def_res])
 
     @staticmethod
     def _parse_create_request(
@@ -222,6 +365,10 @@ class FHIRConfigService:
                               f.Action = 'CREATE',
                               f.ActedAt = datetime({{timezone: 'UTC'}}),
                               f.CreatedAt = datetime({{timezone: 'UTC'}})
+                ON MATCH SET  f += $props,
+                              f.Action = CASE WHEN f.Action = 'DELETE' THEN 'RESTORE' ELSE 'UPDATE' END,
+                              f.ActedAt = datetime({{timezone: 'UTC'}}),
+                              f.UpdatedAt = datetime({{timezone: 'UTC'}})
                 WITH tg, f
                 OPTIONAL MATCH (tg)-[stale_not:{neg_type}]->(f)
                 DELETE stale_not
@@ -232,6 +379,11 @@ class FHIRConfigService:
                               r.ActedAt = datetime({{timezone: 'UTC'}}),
                               r.ActedBy = $acted_by,
                               r.CreatedAt = datetime({{timezone: 'UTC'}})
+                ON MATCH SET  r.test_id = coalesce($test_id, r.test_id),
+                              r.Action = 'UPDATE',
+                              r.ActedAt = datetime({{timezone: 'UTC'}}),
+                              r.ActedBy = $acted_by,
+                              r.UpdatedAt = datetime({{timezone: 'UTC'}})
                 WITH f
                 OPTIONAL MATCH (g:Group)-[gr:HAS_FHIR_CONFIG]->(f)
                 WHERE (gr.Action IS NULL OR gr.Action <> 'DELETE')

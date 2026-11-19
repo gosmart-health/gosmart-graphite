@@ -15,7 +15,7 @@ from genkit_ollama import Ollama
 
 from gosmart_graphite.core.config import Settings, get_settings
 from gosmart_graphite.core.logging import get_logger
-from gosmart_graphite.model.llm import LLM_Config
+from gosmart_graphite.model.llm_config import LLM_Config
 
 if TYPE_CHECKING:
     from gosmart_graphite.service.llm_config_service import LLMConfigService

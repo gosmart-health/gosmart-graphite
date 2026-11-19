@@ -243,3 +243,255 @@ def test_api_system_test_cleanup(client):
         assert data["deleted_by_label"]["Patient"] == 1
         assert data["test_id"] == "test_mock_123"
         assert len(data["labels_cleaned"]) == 6
+
+
+@pytest.mark.anyio
+async def test_fhir_config_service_group_resolution_and_hierarchy():
+    """Verify FHIRConfigService resolves groups by ID, name, or code and supports upward hierarchy resolution."""
+    from unittest.mock import MagicMock
+
+    from gosmart_graphite.service.fhir_config_service import FHIRConfigService
+
+    mock_client = MagicMock()
+    svc = FHIRConfigService(client=mock_client)
+
+    # 1. Resolve by name ("GoSmart Health")
+    mock_client.execute_query = AsyncMock(
+        return_value=[{"group": {"id": "grp_root", "name": "GoSmart Health", "code": "GOSMART_HEALTH"}}]
+    )
+    resolved = await svc.resolve_target_group("GoSmart Health")
+    assert resolved["id"] == "grp_root"
+    query_sent = mock_client.execute_query.call_args.args[0]
+    assert "g.name = $group_id" in query_sent
+    assert "toUpper(g.code) = toUpper($group_id)" in query_sent
+
+    # 2. Ambiguous group identifier raises RuntimeError
+    mock_client.execute_query = AsyncMock(
+        return_value=[
+            {"group": {"id": "grp_1", "name": "Clinic", "code": "C1"}},
+            {"group": {"id": "grp_2", "name": "Clinic", "code": "C2"}},
+        ]
+    )
+    with pytest.raises(RuntimeError, match="Ambiguous group match"):
+        await svc.resolve_target_group("Clinic")
+
+    # 3. Upward hierarchy resolution picks nearest ancestor (depth 0 over depth 2)
+    mock_client.execute_query = AsyncMock(
+        return_value=[
+            {
+                "config": {
+                    "id": "fhir_child",
+                    "name": "Child FHIR",
+                    "server_url": "https://child.fhir/r4",
+                    "fhir_release": "R4",
+                    "auth_type": "none",
+                },
+                "group": {"id": "grp_child", "name": "Child Clinic", "code": "CHILD"},
+                "depth": 0,
+            },
+            {
+                "config": {
+                    "id": "fhir_root",
+                    "name": "Root FHIR",
+                    "server_url": "https://root.fhir/r4",
+                    "fhir_release": "R4",
+                    "auth_type": "none",
+                },
+                "group": {"id": "grp_root", "name": "GoSmart Health", "code": "GOSMART_HEALTH"},
+                "depth": 2,
+            },
+        ]
+    )
+    nearest = await svc.resolve_config_for_group(group_id="grp_child")
+    assert nearest is not None
+    assert nearest["id"] == "fhir_child"
+
+
+@pytest.mark.anyio
+async def test_system_service_create_configuration_attaches_to_group():
+    """Verify SystemService.create_configuration resolves the target group and attaches to (:Group), not (:System)."""
+    from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
+    from gosmart_graphite.service.group_service import group_service
+
+    req = DICOMConfigurationCreateRequest(
+        ae_title="MDICOM",
+        roles=["SCP", "SCU"],
+        host="0.0.0.0",
+        port=11112,
+        is_local=True,
+        storage_root_uri="file://~/.gosmart/vna",
+        description="GoSmart Local DICOM SCP",
+    )
+
+    mock_group = {"id": "grp_root", "name": "GoSmart Health", "code": "GOSMART_HEALTH", "group_type": "ORGANIZATION"}
+    captured_queries: list[tuple[str, dict]] = []
+
+    async def _fake_execute_query(query: str, parameters: dict):
+        captured_queries.append((query, parameters))
+        return [
+            {
+                "config": {
+                    "id": "cfg_mdicom",
+                    "ae_title": "MDICOM",
+                    "roles": ["SCP", "SCU"],
+                    "host": "0.0.0.0",
+                    "port": 11112,
+                    "is_local": True,
+                    "is_promiscuous": False,
+                    "tls_enabled": False,
+                    "dicom_services": ["*"],
+                    "transfer_syntaxes": ["*"],
+                    "storage_root_uri": "file://~/.gosmart/vna",
+                    "dicomweb_enabled": True,
+                    "dicomweb_url_prefix": "/dicomweb",
+                    "dicomweb_qido_enabled": True,
+                    "dicomweb_wado_enabled": True,
+                    "dicomweb_stow_enabled": True,
+                    "description": "GoSmart Local DICOM SCP",
+                    "Action": "CREATE",
+                    "CreatedAt": "2026-11-18T00:00:00Z",
+                },
+                "group": mock_group,
+            }
+        ]
+
+    with (
+        patch.object(group_service, "resolve_target_group", new=AsyncMock(return_value=mock_group)) as mock_resolve,
+        patch("gosmart_graphite.service.system_service.neo4j_client.execute_query", side_effect=_fake_execute_query),
+        patch("gosmart_graphite.service.system_service.record_audit"),
+    ):
+        res = await system_service.create_configuration(
+            config_data=req,
+            acted_by="cli_admin",
+            assign_group="GoSmart Health",
+        )
+
+    mock_resolve.assert_awaited_once_with(identifier="GoSmart Health", test_id=None)
+    assert len(captured_queries) == 1
+    cypher, params = captured_queries[0]
+    assert "MATCH (g:Group {id: $group_id})" in cypher
+    assert "MERGE (g)-[r:HAS_DICOM_CONFIGURATION]->(c)" in cypher
+    assert "MERGE (c)-[sr:SERVES]->(g)" in cypher
+    assert params["group_id"] == "grp_root"
+    assert params["props"]["storage_root_uri"] == "file://~/.gosmart/vna"
+    assert res["group_id"] == "grp_root"
+    assert res["group_ids"] == ["grp_root"]
+    assert res["storage_root_uri"] == "file://~/.gosmart/vna"
+
+
+def test_group_service_upward_relations_include_has_dicom_configuration():
+    """Verify UPWARD_GROUP_RELATION_TYPES includes HAS_DICOM_CONFIGURATION for my_group upward traversal."""
+    from gosmart_graphite.service.group_service import UPWARD_GROUP_RELATION_TYPES
+
+    assert "HAS_DICOM_CONFIGURATION" in UPWARD_GROUP_RELATION_TYPES
+    assert "SERVES" in UPWARD_GROUP_RELATION_TYPES
+
+
+def test_cli_configure_dicom_and_fhir_group_assignment(tmp_path):
+    """Verify CLI `configure dicom-config` and `configure fhir-config` pass `--assign` to the underlying services."""
+    import json
+
+    from typer.testing import CliRunner
+
+    from gosmart_graphite.cli import cli_app
+    from gosmart_graphite.db.neo4j import neo4j_client
+    from gosmart_graphite.service.fhir_config_service import fhir_config_service
+
+    runner = CliRunner()
+
+    # 1. configure dicom-config --assign "GoSmart Health"
+    dicom_file = tmp_path / "dicom_cfg.json"
+    dicom_file.write_text(
+        json.dumps(
+            {
+                "ae_title": "MDICOM",
+                "roles": ["SCP", "SCU"],
+                "host": "0.0.0.0",
+                "port": 11112,
+                "is_local": True,
+                "storage_root_uri": "file://~/.gosmart/vna",
+            }
+        ),
+        encoding="utf-8",
+    )
+    mock_dicom_saved = {
+        "id": "cfg_mdicom",
+        "ae_title": "MDICOM",
+        "roles": ["SCP", "SCU"],
+        "host": "0.0.0.0",
+        "port": 11112,
+        "is_local": True,
+        "is_promiscuous": False,
+        "tls_enabled": False,
+        "dicom_services": ["*"],
+        "transfer_syntaxes": ["*"],
+        "storage_root_uri": "file://~/.gosmart/vna",
+        "dicomweb_enabled": True,
+        "dicomweb_url_prefix": "/dicomweb",
+        "group_id": "grp_root",
+        "group_ids": ["grp_root"],
+        "groups": [{"id": "grp_root", "name": "GoSmart Health", "code": "GOSMART_HEALTH", "group_type": "ORGANIZATION"}],
+        "action": "CREATE",
+    }
+    with (
+        patch.object(
+            system_service,
+            "create_configuration",
+            new=AsyncMock(return_value=mock_dicom_saved),
+        ) as mock_create_dicom,
+        patch.object(neo4j_client, "close", new=AsyncMock()),
+    ):
+        res_dicom = runner.invoke(
+            cli_app,
+            ["configure", "dicom-config", "--file", str(dicom_file), "--assign", "GoSmart Health"],
+        )
+        assert res_dicom.exit_code == 0, res_dicom.output
+        assert "MDICOM" in res_dicom.output
+        assert "GoSmart Health" in res_dicom.output
+        mock_create_dicom.assert_awaited_once()
+        assert mock_create_dicom.call_args.kwargs["assign_group"] == "GoSmart Health"
+
+    # 2. configure fhir-config --assign "GoSmart Health"
+    fhir_file = tmp_path / "fhir_cfg.json"
+    fhir_file.write_text(
+        json.dumps(
+            {
+                "name": "Local Medplum R4",
+                "server_url": "http://localhost:8103/fhir/R4",
+                "fhir_release": "R4",
+                "auth_type": "none",
+            }
+        ),
+        encoding="utf-8",
+    )
+    mock_fhir_saved = {
+        "id": "fhir_medplum",
+        "name": "Local Medplum R4",
+        "server_url": "http://localhost:8103/fhir/R4",
+        "fhir_release": "R4",
+        "auth_type": "none",
+        "timeout_seconds": 30,
+        "verify_ssl": True,
+        "group_id": "grp_root",
+        "group_name": "GoSmart Health",
+        "group_code": "GOSMART_HEALTH",
+        "action": "CREATE",
+    }
+    with (
+        patch.object(
+            fhir_config_service,
+            "create_fhir_config",
+            new=AsyncMock(return_value=mock_fhir_saved),
+        ) as mock_create_fhir,
+        patch.object(neo4j_client, "close", new=AsyncMock()),
+    ):
+        res_fhir = runner.invoke(
+            cli_app,
+            ["configure", "fhir-config", "--file", str(fhir_file), "--assign", "GoSmart Health"],
+        )
+        assert res_fhir.exit_code == 0, res_fhir.output
+        assert "Local Medplum R4" in res_fhir.output
+        assert "GoSmart Health" in res_fhir.output
+        mock_create_fhir.assert_awaited_once()
+        assert mock_create_fhir.call_args.kwargs["config_data"].group_id == "GoSmart Health"
+

@@ -10,6 +10,37 @@ This directory contains various scripts and tools used for DevOps tasks.
 > Do not patch these tools or hard-code sensitive information into them.
 > `.env` files should never be committed to version control.
 
+## Command Line Configuration Tooling
+
+The initial system configuration is as following:
+
+```mermaid
+flowchart TD
+    n2((":GROUP<br>Go Smart Health")) --> n1(("System"))
+    n3((":DICOM_Configuration<br>GOSMART_GRAPHITE<br>SCP")) -- CONFIGURES --> n2
+    n4((":FHIR_Configuration")) --> n2
+    n5((":LLM_Configuration<br>embedding_v1")) --> n2
+    n6((":LLM_Configuration<br>inference_v1")) --> n2
+    n7((":GROUP<br>Lost and Found")) --> n1
+
+```
+
+```
+Usage: gosmart-graphite configure [OPTIONS] COMMAND [ARGS]...                                                                                                                                                                                                                                                   
+                                                                                                                                                                                                                                                                                                                 
+ Configure runtime settings persisted in Neo4j.                                                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                                                                                                 
+╭─ Options ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ --help        <bool>  Show this message and exit.                                                                                                                                                                                                                                                             │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ llm-config    Register or overwrite a purpose-tagged LLM_Config node from a JSON file and assign it to a Group.                                                                                                                                                                                               │
+│ dicom-config  Register a DICOMConfiguration node from a JSON file and assign it to a Group.                                                                                                                                                                                                                   │
+│ fhir-config   Register a FHIRConfiguration node from a JSON file and assign it to a Group.                                                                                                                                                                                                                    │
+╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+```
+
 ## `configure-llm.sh` & `llm_config.template.json` — LLM Configuration Registration
 
 Registers or overwrites a purpose-tagged `(:LLM_Config)` node in Neo4j and

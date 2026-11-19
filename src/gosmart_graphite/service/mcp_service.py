@@ -335,11 +335,13 @@ async def create_dicom_configuration(
         tls_enabled: bool = False,
         dicom_services_json: Optional[str] = None,
         transfer_syntaxes_json: Optional[str] = None,
+        storage_root_uri: Optional[str] = None,
+        group_id: Optional[str] = None,
         description: Optional[str] = None,
         test_id: Optional[str] = None,
         acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
-    """Create a new DICOM Configuration (* for promiscuous mode) linked to the System."""
+    """Create a new DICOM Configuration attached to a sponsoring Group (or default 'GoSmart Health')."""
     check_mcp_admin_role()
     effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
     roles = json.loads(roles_json) if roles_json else ["SCP"]
@@ -355,11 +357,15 @@ async def create_dicom_configuration(
         tls_enabled=tls_enabled,
         dicom_services=dicom_services,
         transfer_syntaxes=transfer_syntaxes,
+        storage_root_uri=storage_root_uri,
+        group_id=group_id,
         description=description,
         test_id=test_id,
     )
-    cfg = await system_service.create_configuration(config_data=req, acted_by=effective_acted_by)
-    logger.info("mcp_create_dicom_configuration_executed", config_id=cfg.get("id"), ae_title=ae_title)
+    cfg = await system_service.create_configuration(
+        config_data=req, acted_by=effective_acted_by, assign_group=group_id
+    )
+    logger.info("mcp_create_dicom_configuration_executed", config_id=cfg.get("id"), ae_title=ae_title, group_id=group_id)
     return cfg
 
 
@@ -372,6 +378,7 @@ async def update_dicom_configuration(
         port: Optional[int] = None,
         is_local: Optional[bool] = None,
         tls_enabled: Optional[bool] = None,
+        storage_root_uri: Optional[str] = None,
         description: Optional[str] = None,
         acted_by: str = "mcp_agent",
 ) -> Optional[Dict[str, Any]]:
@@ -386,6 +393,7 @@ async def update_dicom_configuration(
         port=port,
         is_local=is_local,
         tls_enabled=tls_enabled,
+        storage_root_uri=storage_root_uri,
         description=description,
     )
     updated = await system_service.update_configuration(
