@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
 from gosmart_graphite.model.dicom import DicomIngestResponse
 from gosmart_graphite.service.dicom_service import dicom_service

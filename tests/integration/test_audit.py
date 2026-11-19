@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from gosmart_graphite.actor.audit_actor import get_audit_actor, record_audit, stop_audit_actor
-from gosmart_graphite.actor.dicom_actor import stop_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import stop_dicom_actor
 from gosmart_graphite.model.audit import AuditAction, AuditNode
 from gosmart_graphite.service.graph_service import graph_service
 
@@ -199,7 +199,7 @@ def test_dicom_c_echo_records_audit():
 
 def test_dicom_actor_mock_ingestion_records_audit():
     """Test that DicomIngestionActor records audit event on mock ingestion."""
-    from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+    from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 
     ingest_actor = get_dicom_actor()
     test_id = f"test_ingest_{uuid.uuid4().hex[:6]}"

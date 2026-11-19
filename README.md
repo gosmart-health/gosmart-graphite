@@ -72,7 +72,7 @@ gosmart-graphite/
 │   ├── actor/                   # Pykka Actor system
 │   │   ├── __init__.py
 │   │   ├── audit_actor.py       # Background audit logging actor
-│   │   ├── dicom_actor.py       # DICOM ingestion & processing actor
+│   │   ├── dicom_ingestion_actor.py  # DICOM ingestion & processing actor
 │   │   ├── fhir_actor.py        # Background FHIR fetching & graph registration actor
 │   │   └── store_scu_actor.py   # Outbound C-STORE SCU transfer actor
 │   ├── api/                     # FastAPI routes & endpoints

@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from gosmart_graphite.actor.dicom_actor import get_dicom_actor, stop_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor, stop_dicom_actor
 from gosmart_graphite.cli.configure import configure_app
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger, setup_logging

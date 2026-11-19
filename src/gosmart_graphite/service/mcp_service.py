@@ -65,7 +65,7 @@ def check_mcp_admin_role() -> None:
 @mcp.tool()
 async def health_check() -> Dict[str, Any]:
     """Check system health status (Neo4j, Pykka Actor, Storage URI)."""
-    from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+    from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 
     settings = get_settings()
     neo4j_healthy = await neo4j_client.verify_connectivity()
@@ -136,7 +136,7 @@ async def generate_mock_dicom(
 async def ingest_dicom_file(file_path: str, use_actor: bool = True) -> Dict[str, Any]:
     """Parse and ingest a local DICOM file into the knowledge graph and storage root."""
     if use_actor:
-        from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+        from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 
         actor = get_dicom_actor()
         res = actor.ask({"type": "INGEST_FILE", "file_path": file_path}, block=True)

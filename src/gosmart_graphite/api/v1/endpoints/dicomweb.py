@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 
 from gosmart_graphite.actor.audit_actor import record_audit
-from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.model.audit import AuditAction

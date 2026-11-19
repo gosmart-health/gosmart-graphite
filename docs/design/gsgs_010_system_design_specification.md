@@ -33,7 +33,7 @@ graph TD
         PyNetDicom --> DicomService
         APIRouter --> DicomService
         
-        DicomService -->|Dispatch Ingestion Task| PykkaActor[DicomIngestionActor<br/>actor/dicom_actor.py]
+        DicomService -->|Dispatch Ingestion Task| PykkaActor[DicomIngestionActor<br/>actor/dicom_ingestion_actor.py]
         PykkaActor -->|Sync Graph Save| GraphService[Graph Service<br/>service/graph_service.py]
         MCPServer --> GraphService
         APIRouter --> GraphService
@@ -151,7 +151,7 @@ graph TD
 
 
 ### 3.5 Actor Subsystem (`actor/`)
-* **`dicom_actor.py`**:
+* **`dicom_ingestion_actor.py`**:
   - `DicomIngestionActor`: Subclasses `pykka.ThreadingActor` to process ingestion tasks asynchronously in a background worker thread.
   - Handles messages: `PING`, `INGEST_FILE`, `INGEST_MOCK`.
   - Maintains processed counters and execution status.
