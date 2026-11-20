@@ -777,12 +777,10 @@ class PyNetDicomService:
         dataset = event.dataset
 
         # 1. Attach file_meta to construct compliant Part-10 FileDataset
+        # (pydicom >=3 reads endianness/VR encoding from file_meta.TransferSyntaxUID during save_as)
         file_meta = getattr(event, "file_meta", None)
         if file_meta is not None:
             dataset.file_meta = file_meta
-            if hasattr(file_meta, "TransferSyntaxUID"):
-                dataset.is_little_endian = file_meta.TransferSyntaxUID.is_little_endian
-                dataset.is_implicit_VR = file_meta.TransferSyntaxUID.is_implicit_VR
 
         # 2. Determine SOP Instance UID and extract association provenance
         sop_uid = str(

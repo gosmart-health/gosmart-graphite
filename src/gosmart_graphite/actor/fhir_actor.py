@@ -44,6 +44,12 @@ class FhirActor(pykka.ThreadingActor):
                     self._loop.run_until_complete(self._fhir_service.fetcher.close())
                 except Exception as why:
                     logger.error("Failed to close FHIR fetcher", why=why)
+            try:
+                from gosmart_graphite.db.neo4j import neo4j_client
+
+                self._loop.run_until_complete(neo4j_client.close_current_loop_driver())
+            except Exception as why:
+                logger.error("Failed to close FHIR actor Neo4j async driver", why=why)
             self._loop.close()
 
     def _resolve_fhir_service(

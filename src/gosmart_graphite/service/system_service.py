@@ -1003,8 +1003,7 @@ class SystemService:
         # 2. Query breakdown of matching nodes by label before deletion
         count_query = """
         UNWIND $target_labels AS target_label
-        CALL {
-            WITH target_label
+        CALL (target_label) {
             MATCH (n)
             WHERE target_label IN labels(n)
               AND n.test_id IS NOT NULL

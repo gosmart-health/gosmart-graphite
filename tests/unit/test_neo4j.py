@@ -74,3 +74,51 @@ async def test_driver_notification_suppression_config():
         assert sync_kwargs.get("notifications_disabled_classifications") == [NotificationDisabledClassification.SCHEMA]
 
     await client.close()
+
+
+def test_multi_loop_async_driver_isolation() -> None:
+    """Verify Neo4jClient isolates async drivers per event loop and closes only the active loop's driver."""
+    import asyncio
+    import threading
+
+    client = Neo4jClient()
+    driver_main = AsyncMock(name="driver_main")
+    driver_worker = AsyncMock(name="driver_worker")
+    created_drivers = [driver_main, driver_worker]
+
+    loop_main = asyncio.new_event_loop()
+    loop_worker = asyncio.new_event_loop()
+    try:
+        with patch("gosmart_graphite.db.neo4j.AsyncGraphDatabase.driver", side_effect=created_drivers) as mock_factory:
+            # Main loop acquires driver_main
+            got_main_1 = loop_main.run_until_complete(client.get_async_driver())
+            assert got_main_1 is driver_main
+
+            # Worker thread with its own event loop acquires driver_worker without discarding driver_main
+            worker_result: list[object] = []
+
+            def _worker() -> None:
+                asyncio.set_event_loop(loop_worker)
+                got_worker = loop_worker.run_until_complete(client.get_async_driver())
+                worker_result.append(got_worker)
+                loop_worker.run_until_complete(client.close_current_loop_driver())
+
+            t = threading.Thread(target=_worker)
+            t.start()
+            t.join(timeout=5.0)
+
+            assert worker_result == [driver_worker]
+            driver_worker.close.assert_awaited_once()
+            driver_main.close.assert_not_awaited()
+
+            # Main loop still gets its original driver_main (no duplicate creation)
+            got_main_2 = loop_main.run_until_complete(client.get_async_driver())
+            assert got_main_2 is driver_main
+            assert mock_factory.call_count == 2
+
+            loop_main.run_until_complete(client.close())
+            driver_main.close.assert_awaited_once()
+    finally:
+        loop_worker.close()
+        loop_main.close()
+

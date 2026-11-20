@@ -151,8 +151,7 @@ ON CREATE SET r_ei.test_id = $rel_ei.test_id,
 ON MATCH SET  r_ei.test_id = coalesce($rel_ei.test_id, r_ei.test_id)
 
 WITH p, s, se, i
-CALL {
-    WITH p, s
+CALL (p, s) {
     WITH p, s, $group_id AS gid
     WHERE gid IS NOT NULL AND gid <> ''
     MATCH (g:Group {id: gid})
