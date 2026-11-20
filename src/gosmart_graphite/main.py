@@ -18,10 +18,33 @@ from gosmart_graphite.service.graph_service import graph_service
 
 logger = get_logger("gosmart_gs.server")
 
+def logo_print():
+    logo = (
+"""
+ ██████╗  ██████╗ ███████╗███╗   ███╗ █████╗ ██████╗ ████████╗
+██╔════╝ ██╔═══██╗██╔════╝████╗ ████║██╔══██╗██╔══██╗╚══██╔══╝
+██║  ███╗██║   ██║███████╗██╔████╔██║███████║██████╔╝   ██║   
+██║   ██║██║   ██║╚════██║██║╚██╔╝██║██╔══██║██╔══██╗   ██║   
+╚██████╔╝╚██████╔╝███████║██║ ╚═╝ ██║██║  ██║██║  ██║   ██║   
+ ╚═════╝  ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝   
+                                                              
+ ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗██╗████████╗███████╗ 
+██╔════╝ ██╔══██╗██╔══██╗██╔══██╗██║  ██║██║╚══██╔══╝██╔════╝ 
+██║  ███╗██████╔╝███████║██████╔╝███████║██║   ██║   █████╗   
+██║   ██║██╔══██╗██╔══██║██╔═══╝ ██╔══██║██║   ██║   ██╔══╝   
+╚██████╔╝██║  ██║██║  ██║██║     ██║  ██║██║   ██║   ███████╗ 
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝╚═╝   ╚═╝   ╚══════╝ 
+
+Copyright (c) 2026, GoSmart Health, Apache 2.0 License
+https://gosmart.health
+"""
+    )
+    print(logo)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan for managing background services and DB drivers."""
+    logo_print()
     setup_logging()
     settings = get_settings()
     logger.info(
