@@ -124,6 +124,13 @@ Without specific instructions, Neo4j will just "guess" the Node captions.
 We can change this behavior as following:
 
 1. Open the Neo4j Browser.
-2. Run the following query in the Stream tab
-3. Download it, and edit it
-4. Drop the file to the style settings
+2. In the streams tab, type in a query with just `:style`. The JSON-like 
+   `style` sheet will appear.
+3. Using the top right of the panel press the download button, and edit it on 
+   your device.
+4. Using the top right of the panel press the upload button to upload the 
+   changes.
+5. For individual style change you can make the change with the `paint brush` 
+   icon of the left tool panel. Click the node name, and Use the `Format`
+
+You will find an example `neo4j_style.glass` file in the `examples` folder.

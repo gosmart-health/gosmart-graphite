@@ -1,0 +1,326 @@
+node.FHIRConfiguration {
+  color: #ffb2ff;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.LLM_Config {
+  color: #F79767;
+  size: 25px;
+    caption: "<type>";
+
+}
+
+node.TransferStatus {
+  color: #e96fa3;
+  size: 25px;
+    caption: "<type>";
+}
+
+node.Procedure {
+  color: #ECB5C9;
+  size: 25px;
+    caption: "<type>";
+
+}
+
+node.ServiceRequest {
+  color: #4C8EDA;
+  size: 25px;
+    caption: "<type>";
+
+}
+
+node.Practitioner {
+  color: #8727da;
+  size: 25px;
+  caption: "{name}";
+}
+
+node.DiagnosticReport {
+  color: #959AA1;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Organization {
+  color: #D9C8AE;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Observation {
+  color: #F16667;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Location {
+  color: #57C7E3;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.ImagingStudy {
+  color: #C990C0;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Condition {
+  color: #569480;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Encounter {
+  color: #D9D9D9;
+  size: 30px;
+  caption: "<type>";
+}
+
+node.FHIR_Patient {
+  color: #FFE081;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.AuditLog {
+  color: #a9a96d;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Group {
+  color: #d2f9bd;
+  size: 30px;
+  caption: "<type>";
+}
+
+node.Authenticator {
+  color: #ebd0a9;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Identity {
+  color: #cc80ff;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.User {
+  color: #9fc67b;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.DICOMConfiguration {
+  color: #ffb400;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.System {
+  color: #e7b04f;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Instance {
+  color: #fbbfc7;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Series {
+  color: #e1c0ff;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Study {
+  color: #ff9dce;
+  size: 25px;
+  caption: "<type>";
+}
+
+node.Patient {
+  color: #c5aa7b;
+  size: 25px;
+  caption: "<type>";
+}
+
+relationship.HAS_IDENTITY {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.USES_AUTHENTICATOR {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.MEMBER_OF {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.HAS_DICOM_CONFIGURATION {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.SERVES {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.HAS_STUDY {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.HAS_SERIES {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.HAS_INSTANCE {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.BELONGS_TO {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.PERFORMED_AT {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.HAS_AUTHENTICATOR {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.SUB_GROUP_OF {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.NOT_PERFORMED_AT {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.SUBJECT {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.PERFORMED_IN {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.SAME_AS {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.REFERENCES_STUDY {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.REFERENCES_SERIES {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.HAS_ENCOUNTER {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.SUPPORTS_REPORT {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.NOT_HAS_DICOM_CONFIGURATION {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.HAS_LLM_CONFIG {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.NOT_HAS_LLM_CONFIG {
+  width: 1px;
+  color: #959aa1ff;
+  caption: "<type>";
+}
+
+relationship.SERVICE_PROVIDER {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.PERFORMS {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.CREATES {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.HAS_LOST_AND_FOUND {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.HAS_FHIR_CONFIG {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.NOT_HAS_FHIR_CONFIG {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.NOT_SERVES {
+  width: 1px;
+  caption: "<type>";
+}
+
+relationship.NOT_BELONGS_TO {
+  width: 1px;
+  caption: "<type>";
+}
