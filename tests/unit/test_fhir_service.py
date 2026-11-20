@@ -22,6 +22,7 @@ from gosmart_graphite.service.fhir_service import (
     EncRelevantResources,
     FHIRBatchFetcher,
     FhirService,
+    _extract_fhir_meta,
     location_to_node,
     organization_to_node,
     practitioner_to_node,
@@ -1001,3 +1002,61 @@ async def test_fetch_relevant_resources_of_study_mocked():
         assert len(full_res.imaging_studies) >= 1
         assert full_res.imaging_studies[0].id == "study-100"
         assert full_res.errors == []
+
+
+def test_extract_fhir_meta_parsing():
+    """Verify extraction of FHIR meta.versionId and meta.lastUpdated from raw JSON."""
+    assert _extract_fhir_meta(None) == (None, None)
+    assert _extract_fhir_meta("not-json") == (None, None)
+    assert _extract_fhir_meta('{"resourceType":"Patient","id":"p1"}') == (None, None)
+    assert _extract_fhir_meta(
+        '{"resourceType":"Encounter","id":"e1","meta":{"versionId":"3","lastUpdated":"2026-05-01T12:00:00Z"}}'
+    ) == ("3", "2026-05-01T12:00:00Z")
+
+
+@pytest.mark.anyio
+async def test_upsert_relevant_resources_merges_by_uid_with_conditional_update_params():
+    """Verify upsert_relevant_resources merges on uid and passes status, meta, and payload change parameters."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    executed_calls: list[tuple[str, dict]] = []
+
+    async def _fake_execute_query(query: str, params: dict | None = None):
+        executed_calls.append((query, params or {}))
+        if "MERGE (n:" in query:
+            p = params or {}
+            return [{"id": p["id"], "uid": p["uid"], "resource_id": p["props"]["resource_id"], "action": "UNCHANGED"}]
+        return []
+
+    fake_client = MagicMock()
+    fake_client.execute_query = AsyncMock(side_effect=_fake_execute_query)
+    fake_graph_svc = MagicMock()
+    fake_graph_svc.init_schema_constraints = AsyncMock()
+
+    svc = FhirService(client=fake_client, graph_svc=fake_graph_svc)
+    enc = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-meta-1",
+            "meta": {"versionId": "2", "lastUpdated": "2026-06-10T08:30:00Z"},
+            "status": "in-progress",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+        }
+    )
+
+    res = await svc.upsert_relevant_resources(
+        EncRelevantResources(encounter=enc),
+        test_id="t_uid_merge",
+        acted_by="unit_tester",
+    )
+
+    node_calls = [(q, p) for q, p in executed_calls if "MERGE (n:" in q]
+    assert len(node_calls) == 1
+    query, params = node_calls[0]
+    assert "MERGE (n:Encounter {uid: $uid})" in query
+    assert params["uid"] == "fhir:t_uid_merge:enc-meta-1"
+    assert params["status"] == "in-progress"
+    assert params["meta_version_id"] == "2"
+    assert params["meta_last_updated"] == "2026-06-10T08:30:00Z"
+    assert params["op_token"]
+    assert res["nodes"][0]["action"] == "UNCHANGED"

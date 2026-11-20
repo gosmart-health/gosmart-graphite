@@ -14,7 +14,10 @@ from gosmart_graphite.actor.audit_actor import record_audit
 from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
 from gosmart_graphite.core.logging import get_logger
-from gosmart_graphite.model.actor_message import DicomIngestionMessage
+from gosmart_graphite.model.actor_message import (
+    DicomAssociationReleasedMessage,
+    DicomIngestionMessage,
+)
 from gosmart_graphite.model.audit import AuditAction
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.dicomweb_service import dicomweb_service
@@ -329,56 +332,64 @@ async def stow_store_instances(
     actor = get_dicom_actor()
     referenced_sop_items: List[Dict[str, Any]] = []
     failed_sop_items: List[Dict[str, Any]] = []
+    association_id = f"stow:{uuid.uuid4()}"
+    dispatched_any = False
 
-    for payload in payloads:
-        sop_uid = None
-        sop_class_uid = "1.2.840.10008.5.1.4.1.1.7"
-        try:
-            ds = pydicom.dcmread(io.BytesIO(payload), force=True)
-            sop_uid = getattr(ds, "SOPInstanceUID", None)
-            sop_class_uid = getattr(ds, "SOPClassUID", sop_class_uid)
-        except Exception as parse_err:
-            logger.warning("stow_parse_warning", error=str(parse_err))
+    try:
+        for payload in payloads:
+            sop_uid = None
+            sop_class_uid = "1.2.840.10008.5.1.4.1.1.7"
+            try:
+                ds = pydicom.dcmread(io.BytesIO(payload), force=True)
+                sop_uid = getattr(ds, "SOPInstanceUID", None)
+                sop_class_uid = getattr(ds, "SOPClassUID", sop_class_uid)
+            except Exception as parse_err:
+                logger.warning("stow_parse_warning", error=str(parse_err))
 
-        # First order of action: Persist raw object into blackbox storage unconditionally
-        storage_uid = str(sop_uid) if sop_uid else f"unparsed_{uuid.uuid4().hex}"
-        try:
-            file_path = dicom_service.save_raw_dicom(payload, storage_uid)
-        except Exception as save_err:
-            logger.error("stow_blackbox_save_failed", sop_uid=storage_uid, error=str(save_err))
-            if sop_uid:
-                failed_sop_items.append(
-                    {
-                        "00081150": {"vr": "UI", "Value": [sop_class_uid]},
-                        "00081155": {"vr": "UI", "Value": [sop_uid]},
-                        "00081197": {"vr": "US", "Value": [272]},  # Out of Resources
-                    }
+            # First order of action: Persist raw object into blackbox storage unconditionally
+            storage_uid = str(sop_uid) if sop_uid else f"unparsed_{uuid.uuid4().hex}"
+            try:
+                file_path = dicom_service.save_raw_dicom(payload, storage_uid)
+            except Exception as save_err:
+                logger.error("stow_blackbox_save_failed", sop_uid=storage_uid, error=str(save_err))
+                if sop_uid:
+                    failed_sop_items.append(
+                        {
+                            "00081150": {"vr": "UI", "Value": [sop_class_uid]},
+                            "00081155": {"vr": "UI", "Value": [sop_uid]},
+                            "00081197": {"vr": "US", "Value": [272]},  # Out of Resources
+                        }
+                    )
+                continue
+
+            if not sop_uid:
+                continue
+
+            # Ingestion pipeline: index into knowledge graph via actor
+            if actor and actor.is_alive():
+                actor.tell(
+                    DicomIngestionMessage(
+                        file_path=str(file_path),
+                        source=source,
+                        source_identity=source_identity,
+                        destination=destination,
+                        destination_identity=destination_identity,
+                        acted_by=f"user:{user_id}",
+                        group_id=group_id,
+                        association_id=association_id,
+                    )
                 )
-            continue
+                dispatched_any = True
 
-        if not sop_uid:
-            continue
-
-        # Ingestion pipeline: index into knowledge graph via actor
-        if actor.is_alive():
-            actor.tell(
-                DicomIngestionMessage(
-                    file_path=str(file_path),
-                    source=source,
-                    source_identity=source_identity,
-                    destination=destination,
-                    destination_identity=destination_identity,
-                    acted_by=f"user:{user_id}",
-                    group_id=group_id,
-                )
+            referenced_sop_items.append(
+                {
+                    "00081150": {"vr": "UI", "Value": [sop_class_uid]},
+                    "00081155": {"vr": "UI", "Value": [sop_uid]},
+                }
             )
-
-        referenced_sop_items.append(
-            {
-                "00081150": {"vr": "UI", "Value": [sop_class_uid]},
-                "00081155": {"vr": "UI", "Value": [sop_uid]},
-            }
-        )
+    finally:
+        if dispatched_any and actor and actor.is_alive():
+            actor.tell(DicomAssociationReleasedMessage(association_id=association_id))
 
     stow_response: Dict[str, Any] = {}
     if referenced_sop_items:

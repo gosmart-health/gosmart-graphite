@@ -54,6 +54,10 @@ class DicomIngestionMessage(BaseModel):
         default=False,
         description="If True, remove the local staging file_path after successful destination storage and graph save",
     )
+    association_id: Optional[str] = Field(
+        default=None,
+        description="Optional DICOM association or batch session ID for FHIR pull deduplication",
+    )
 
     @field_validator("file_path", mode="before")
     @classmethod
@@ -70,6 +74,37 @@ class DicomIngestionMessage(BaseModel):
         if v is None or (isinstance(v, str) and not v.strip()):
             return "actor"
         return v
+
+    @field_validator("association_id", mode="before")
+    @classmethod
+    def normalize_association_id(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
+
+class DicomAssociationReleasedMessage(BaseModel):
+    """Validated message payload notifying DicomIngestionActor that an association/batch has closed."""
+
+    type: Literal["ASSOCIATION_RELEASED"] = Field(
+        default="ASSOCIATION_RELEASED",
+        description="Actor message type discriminator",
+    )
+    association_id: str = Field(
+        ...,
+        min_length=1,
+        description="Identifier of the released DICOM association or batch session",
+    )
+
+    @field_validator("association_id", mode="before")
+    @classmethod
+    def validate_association_id(cls, v: Any) -> str:
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("association_id must be a non-empty string")
+        return v.strip()
 
 
 class DicomMockIngestionMessage(BaseModel):

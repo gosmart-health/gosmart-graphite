@@ -8,6 +8,7 @@ from gosmart_graphite.actor.audit_actor import record_audit
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.model.actor_message import (
+    DicomAssociationReleasedMessage,
     DicomIngestionMessage,
     DicomMockIngestionMessage,
     FhirIngestionMessage,
@@ -63,11 +64,13 @@ class DicomIngestionActor(pykka.ThreadingActor):
         self.processed_count: int = 0
         self.last_status: str = "INITIALIZED"
         self.group_service = GroupService()
+        self._association_fhir_pulled: Dict[str, set[tuple[str, str]]] = {}
 
     def on_start(self) -> None:
         logger.info("actor_started", actor_urn=self.actor_ref.actor_urn)
 
     def on_stop(self) -> None:
+        self._association_fhir_pulled.clear()
         logger.info("actor_stopped", actor_urn=self.actor_ref.actor_urn)
 
     def _resolve_group_id(
@@ -122,6 +125,10 @@ class DicomIngestionActor(pykka.ThreadingActor):
             logger.debug("actor_message_received", msg_type=message.type)
             return self._handle_ingest_file(message)
 
+        if isinstance(message, DicomAssociationReleasedMessage):
+            logger.debug("actor_message_received", msg_type=message.type)
+            return self._handle_association_released(message)
+
         if isinstance(message, DicomMockIngestionMessage):
             logger.debug("actor_message_received", msg_type=message.type)
             return self._handle_ingest_mock(message)
@@ -144,6 +151,14 @@ class DicomIngestionActor(pykka.ThreadingActor):
                 return {"success": False, "error": f"Invalid DicomIngestionMessage: {e}"}
             return self._handle_ingest_file(ingest_msg)
 
+        elif msg_type == "ASSOCIATION_RELEASED":
+            try:
+                release_msg = DicomAssociationReleasedMessage.model_validate(message)
+            except ValidationError as e:
+                logger.warning("actor_invalid_message", msg_type=msg_type, error=str(e))
+                return {"success": False, "error": f"Invalid DicomAssociationReleasedMessage: {e}"}
+            return self._handle_association_released(release_msg)
+
         elif msg_type == "INGEST_MOCK":
             try:
                 mock_msg = DicomMockIngestionMessage.model_validate(message)
@@ -155,6 +170,35 @@ class DicomIngestionActor(pykka.ThreadingActor):
         else:
             logger.warning("actor_unrecognized_message", msg_type=msg_type)
             return {"error": f"Unknown message type: {msg_type}"}
+
+    def _should_trigger_fhir_pull(
+        self,
+        association_id: Optional[str],
+        study_uid: Optional[str],
+        series_uid: Optional[str],
+    ) -> bool:
+        """Return True if FHIR resources should be pulled for this (association_id, study_uid, series_uid)."""
+        if not study_uid:
+            return False
+        if not association_id:
+            return True
+        seen = self._association_fhir_pulled.get(association_id)
+        return seen is None or (study_uid, series_uid or "") not in seen
+
+    def _handle_association_released(self, msg: DicomAssociationReleasedMessage) -> Dict[str, Any]:
+        """Clear tracked (study_uid, series_uid) FHIR pull state for a closed association/batch."""
+        cleared_entries = self._association_fhir_pulled.pop(msg.association_id, None)
+        cleared_count = len(cleared_entries) if cleared_entries else 0
+        logger.debug(
+            "actor_association_released",
+            association_id=msg.association_id,
+            cleared_count=cleared_count,
+        )
+        return {
+            "success": True,
+            "association_id": msg.association_id,
+            "cleared_count": cleared_count,
+        }
 
     def _handle_ingest_file(self, msg: DicomIngestionMessage) -> Dict[str, Any]:
         from gosmart_graphite.service.graph_service import graph_service
@@ -258,30 +302,48 @@ class DicomIngestionActor(pykka.ThreadingActor):
 
             # 6. Trigger asynchronous FHIR association (links :Patient -[:SAME_AS]-> :FHIR_Patient)
             study_uid = hierarchy.study.study_instance_uid
+            series_uid = hierarchy.series.series_instance_uid
+            association_id = msg.association_id
+            fhir_notified = False
             if study_uid:
-                try:
-                    from gosmart_graphite.actor.fhir_actor import get_fhir_actor
+                if self._should_trigger_fhir_pull(association_id, study_uid, series_uid):
+                    try:
+                        from gosmart_graphite.actor.fhir_actor import get_fhir_actor
 
-                    fhir_actor = get_fhir_actor()
-                    if not fhir_actor:
-                        raise ValueError("FHIR actor not available")
-                    fhir_actor.tell(
-                        FhirIngestionMessage(
-                            patient_id=hierarchy.patient.patient_id,
-                            accession_number=hierarchy.study.accession_number,
-                            study_uid=study_uid,
-                            series_uid=hierarchy.series.series_instance_uid,
-                            test_id=test_id,
-                            acted_by=acted_by,
-                            group_id=hierarchy.group_id,
+                        fhir_actor = get_fhir_actor()
+                        if not fhir_actor:
+                            raise ValueError("FHIR actor not available")
+                        fhir_actor.tell(
+                            FhirIngestionMessage(
+                                patient_id=hierarchy.patient.patient_id,
+                                accession_number=hierarchy.study.accession_number,
+                                study_uid=study_uid,
+                                series_uid=series_uid,
+                                test_id=test_id,
+                                acted_by=acted_by,
+                                group_id=hierarchy.group_id,
+                            )
                         )
-                    )
-                except Exception as fhir_err:
-                    logger.error(
-                        "fhir_actor_notify_failed",
+                        fhir_notified = True
+                        if association_id:
+                            self._association_fhir_pulled.setdefault(association_id, set()).add(
+                                (study_uid, series_uid or "")
+                            )
+                    except Exception as fhir_err:
+                        logger.error(
+                            "fhir_actor_notify_failed",
+                            study_uid=study_uid,
+                            series_uid=series_uid,
+                            association_id=association_id,
+                            error=str(fhir_err),
+                            exc_info=True,
+                        )
+                else:
+                    logger.debug(
+                        "fhir_actor_notify_skipped_duplicate_in_association",
+                        association_id=association_id,
                         study_uid=study_uid,
-                        error=str(fhir_err),
-                        exc_info=True,
+                        series_uid=series_uid,
                     )
             return {
                 "success": True,
@@ -291,6 +353,7 @@ class DicomIngestionActor(pykka.ThreadingActor):
                 "storage_uri": persisted_uri,
                 "group_id": hierarchy.group_id,
                 "test_id": test_id,
+                "fhir_notified": fhir_notified,
                 "graph_result": result,
             }
         except Exception as e:

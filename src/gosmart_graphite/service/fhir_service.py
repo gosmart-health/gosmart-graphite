@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import datetime
 from typing import Any, Mapping, Optional, Sequence, Union
 
@@ -61,7 +62,7 @@ from gosmart_graphite.model.fhir import (
     format_coding_macro,
     format_reference_macro,
 )
-from gosmart_graphite.model.graph import AuditableRelation
+from gosmart_graphite.model.graph import AuditableRelation, generate_deterministic_id
 from gosmart_graphite.service.graph_service import GraphService, graph_service
 
 logger = get_logger("gosmart_gs.fhir_service")
@@ -111,6 +112,26 @@ class EncRelevantResources(BaseModel):
 # =============================================================================
 # FHIR R4B Resource -> FHIRDomainResourceNode Conversion Helpers
 # =============================================================================
+
+
+def _extract_fhir_meta(resource_json: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Extract FHIR Resource.meta.versionId and meta.lastUpdated strings from serialized JSON."""
+    if not resource_json:
+        return None, None
+    try:
+        parsed = json.loads(resource_json)
+    except Exception:
+        return None, None
+    if not isinstance(parsed, Mapping):
+        return None, None
+    meta = parsed.get("meta")
+    if not isinstance(meta, Mapping):
+        return None, None
+    version_id = meta.get("versionId")
+    last_updated = meta.get("lastUpdated")
+    norm_version = str(version_id).strip() if version_id is not None and str(version_id).strip() else None
+    norm_updated = str(last_updated).strip() if last_updated is not None and str(last_updated).strip() else None
+    return norm_version, norm_updated
 
 
 def _extract_reference(ref_obj: Optional[Mapping[str, Any]]) -> Optional[str]:
@@ -1990,68 +2011,121 @@ class FhirService:
         )
 
         upserted_nodes: list[dict[str, Any]] = []
+        persisted_id_map: dict[str, str] = {}
         for node in nodes:
             label = node.__label__
             props = self._serialize_node_props(node)
             expires_at = node.ExpiresAt.isoformat() if node.ExpiresAt else None
+            op_token = uuid.uuid4().hex
+            meta_version_id, meta_last_updated = _extract_fhir_meta(node.resource)
             if node.id in stub_node_ids:
                 query = f"""
-                MERGE (n:{label} {{id: $id}})
-                ON CREATE SET n += $props,
+                MERGE (n:{label} {{uid: $uid}})
+                ON CREATE SET n.id = $id,
+                              n += $props,
+                              n._is_stub = true,
                               n.Action = "CREATE",
                               n.ActedAt = datetime({{timezone: 'UTC'}}),
                               n.ActedBy = $acted_by,
                               n.CreatedAt = datetime({{timezone: 'UTC'}}),
-                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END
-                ON MATCH SET  n.name = coalesce(n.name, $stub_name),
-                              n.test_id = coalesce($test_id, n.test_id),
-                              n.Action = "UPDATE",
-                              n.ActedAt = datetime({{timezone: 'UTC'}}),
-                              n.ActedBy = $acted_by,
-                              n.UpdatedAt = datetime({{timezone: 'UTC'}}),
-                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
-                                                 THEN datetime($expires_at)
-                                                 ELSE n.ExpiresAt END
+                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END,
+                              n._op_token = $op_token
+                WITH n, (coalesce(n._op_token, '') = $op_token) AS was_created
+                FOREACH (_ IN CASE WHEN was_created THEN [1] ELSE [] END |
+                    REMOVE n._op_token
+                )
+                WITH n, was_created,
+                     (NOT was_created AND coalesce(n._is_stub, false) = true
+                      AND n.name IS NULL AND $stub_name IS NOT NULL) AS should_update
+                FOREACH (_ IN CASE WHEN should_update THEN [1] ELSE [] END |
+                    SET n.name = $stub_name,
+                        n.resource = coalesce($resource, n.resource),
+                        n.test_id = coalesce($test_id, n.test_id),
+                        n.Action = "UPDATE",
+                        n.ActedAt = datetime({{timezone: 'UTC'}}),
+                        n.ActedBy = $acted_by,
+                        n.UpdatedAt = datetime({{timezone: 'UTC'}}),
+                        n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
+                                           THEN datetime($expires_at)
+                                           ELSE n.ExpiresAt END
+                )
                 RETURN n.id AS id,
                        n.uid AS uid,
                        n.resource_id AS resource_id,
-                       n.Action AS action
+                       CASE WHEN was_created THEN "CREATE"
+                            WHEN should_update THEN "UPDATE"
+                            ELSE "UNCHANGED" END AS action
                 """
                 params: dict[str, Any] = {
                     "id": node.id,
+                    "uid": node.uid,
                     "props": props,
                     "stub_name": props.get("name"),
+                    "resource": node.resource,
                     "test_id": node.test_id,
                     "acted_by": acted_by,
                     "expires_at": expires_at,
+                    "op_token": op_token,
                 }
             else:
                 query = f"""
-                MERGE (n:{label} {{id: $id}})
-                ON CREATE SET n += $props,
+                MERGE (n:{label} {{uid: $uid}})
+                ON CREATE SET n.id = $id,
+                              n += $props,
+                              n.metaVersionId = $meta_version_id,
+                              n.metaLastUpdated = $meta_last_updated,
+                              n._is_stub = false,
                               n.Action = "CREATE",
                               n.ActedAt = datetime({{timezone: 'UTC'}}),
                               n.ActedBy = $acted_by,
                               n.CreatedAt = datetime({{timezone: 'UTC'}}),
-                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END
-                ON MATCH SET  n += $props,
-                              n.Action = "UPDATE",
-                              n.ActedAt = datetime({{timezone: 'UTC'}}),
-                              n.ActedBy = $acted_by,
-                              n.UpdatedAt = datetime({{timezone: 'UTC'}}),
-                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
-                                                 THEN datetime($expires_at)
-                                                 ELSE n.ExpiresAt END
+                              n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END,
+                              n._op_token = $op_token
+                WITH n, (coalesce(n._op_token, '') = $op_token) AS was_created
+                FOREACH (_ IN CASE WHEN was_created THEN [1] ELSE [] END |
+                    REMOVE n._op_token
+                )
+                WITH n, was_created,
+                     (NOT was_created AND (
+                         coalesce(n._is_stub, false) = true
+                         OR ($status IS NOT NULL AND (n.status IS NULL OR n.status <> $status))
+                         OR ($meta_version_id IS NOT NULL AND coalesce(n.metaVersionId, '') <> $meta_version_id)
+                         OR ($meta_last_updated IS NOT NULL AND coalesce(n.metaLastUpdated, '') <> $meta_last_updated)
+                         OR ($resource IS NOT NULL AND coalesce(n.resource, '') <> $resource)
+                         OR ($resource_uri IS NOT NULL AND coalesce(n.resourceUri, '') <> $resource_uri)
+                     )) AS should_update
+                FOREACH (_ IN CASE WHEN should_update THEN [1] ELSE [] END |
+                    SET n += $props,
+                        n.metaVersionId = coalesce($meta_version_id, n.metaVersionId),
+                        n.metaLastUpdated = coalesce($meta_last_updated, n.metaLastUpdated),
+                        n._is_stub = false,
+                        n.Action = "UPDATE",
+                        n.ActedAt = datetime({{timezone: 'UTC'}}),
+                        n.ActedBy = $acted_by,
+                        n.UpdatedAt = datetime({{timezone: 'UTC'}}),
+                        n.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
+                                           THEN datetime($expires_at)
+                                           ELSE n.ExpiresAt END
+                )
                 RETURN n.id AS id,
                        n.uid AS uid,
                        n.resource_id AS resource_id,
-                       n.Action AS action
+                       CASE WHEN was_created THEN "CREATE"
+                            WHEN should_update THEN "UPDATE"
+                            ELSE "UNCHANGED" END AS action
                 """
                 params = {
                     "id": node.id,
+                    "uid": node.uid,
                     "props": props,
+                    "status": node.status,
+                    "meta_version_id": meta_version_id,
+                    "meta_last_updated": meta_last_updated,
+                    "resource": node.resource,
+                    "resource_uri": node.resourceUri,
                     "acted_by": acted_by,
                     "expires_at": expires_at,
+                    "op_token": op_token,
                 }
             records = await self.client.execute_query(query, params)
             rec = (
@@ -2064,6 +2138,7 @@ class FhirService:
                     "action": "CREATE",
                 }
             )
+            persisted_id_map[node.id] = rec["id"]
             node_info = {
                 "id": rec["id"],
                 "label": label,
@@ -2092,6 +2167,19 @@ class FhirService:
         for rel in all_relations:
             rel_type = rel.__type__
             expires_at = rel.ExpiresAt.isoformat() if rel.ExpiresAt else None
+            start_node_id = persisted_id_map.get(rel.start_node_id, rel.start_node_id)
+            end_node_id = persisted_id_map.get(rel.end_node_id, rel.end_node_id)
+            if start_node_id != rel.start_node_id or end_node_id != rel.end_node_id:
+                rel_id = generate_deterministic_id(
+                    {
+                        "start_node_id": start_node_id,
+                        "type": rel_type,
+                        "end_node_id": end_node_id,
+                    }
+                )
+            else:
+                rel_id = rel.id
+            op_token = uuid.uuid4().hex
             rel_query = f"""
             MATCH (a {{id: $start_node_id}})
             MATCH (b {{id: $end_node_id}})
@@ -2101,40 +2189,38 @@ class FhirService:
                           r.ActedAt = datetime({{timezone: 'UTC'}}),
                           r.ActedBy = $acted_by,
                           r.CreatedAt = datetime({{timezone: 'UTC'}}),
-                          r.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END
-            ON MATCH SET  r.test_id = coalesce($test_id, r.test_id),
-                          r.Action = "UPDATE",
-                          r.ActedAt = datetime({{timezone: 'UTC'}}),
-                          r.ActedBy = $acted_by,
-                          r.UpdatedAt = datetime({{timezone: 'UTC'}}),
-                          r.ExpiresAt = CASE WHEN $expires_at IS NOT NULL
-                                             THEN datetime($expires_at)
-                                             ELSE r.ExpiresAt END
+                          r.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END,
+                          r._op_token = $op_token
+            WITH a, b, r, (coalesce(r._op_token, '') = $op_token) AS was_created
+            FOREACH (_ IN CASE WHEN was_created THEN [1] ELSE [] END |
+                REMOVE r._op_token
+            )
             RETURN r.id AS id,
                    type(r) AS type,
                    a.id AS start_node_id,
                    b.id AS end_node_id,
-                   r.Action AS action
+                   CASE WHEN was_created THEN "CREATE" ELSE "UNCHANGED" END AS action
             """
             records = await self.client.execute_query(
                 rel_query,
                 {
-                    "id": rel.id,
-                    "start_node_id": rel.start_node_id,
-                    "end_node_id": rel.end_node_id,
+                    "id": rel_id,
+                    "start_node_id": start_node_id,
+                    "end_node_id": end_node_id,
                     "test_id": rel.test_id,
                     "acted_by": acted_by,
                     "expires_at": expires_at,
+                    "op_token": op_token,
                 },
             )
             rec = (
                 records[0]
                 if records
                 else {
-                    "id": rel.id,
+                    "id": rel_id,
                     "type": rel_type,
-                    "start_node_id": rel.start_node_id,
-                    "end_node_id": rel.end_node_id,
+                    "start_node_id": start_node_id,
+                    "end_node_id": end_node_id,
                     "action": "CREATE",
                 }
             )

@@ -1,4 +1,5 @@
 from gosmart_graphite.model.actor_message import (
+    DicomAssociationReleasedMessage,
     DicomIngestionMessage,
     DicomMockIngestionMessage,
     FhirIngestionMessage,
@@ -125,6 +126,7 @@ from gosmart_graphite.model.system import (
 )
 
 __all__ = [
+    "DicomAssociationReleasedMessage",
     "DicomIngestionMessage",
     "DicomMockIngestionMessage",
     "FhirIngestionMessage",

@@ -116,3 +116,14 @@ Use this tool to help you bulk-build your `.env` values in the CI/CD pipeline.
 ```shell
 uv run env-secrets-upload.py
 ```
+## Neo4j Web User Interface Tips
+
+### Modifying the Graph Captions
+
+Without specific instructions, Neo4j will just "guess" the Node captions.
+We can change this behavior as following:
+
+1. Open the Neo4j Browser.
+2. Run the following query in the Stream tab
+3. Download it, and edit it
+4. Drop the file to the style settings

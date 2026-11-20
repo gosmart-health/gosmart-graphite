@@ -34,7 +34,10 @@ from gosmart_graphite.actor.audit_actor import record_audit
 from gosmart_graphite.core.config import Settings, get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import neo4j_client
-from gosmart_graphite.model.actor_message import DicomIngestionMessage
+from gosmart_graphite.model.actor_message import (
+    DicomAssociationReleasedMessage,
+    DicomIngestionMessage,
+)
 from gosmart_graphite.model.audit import AuditAction
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.group_service import group_service
@@ -194,6 +197,7 @@ class PyNetDicomService:
         self._draining_instances: List[SCPInstance] = []
         self._lock = threading.Lock()
         self._client_ae: Optional[AE] = None
+        self._association_ids: Dict[int, str] = {}
 
     @property
     def _server(self) -> Optional[Any]:
@@ -366,6 +370,9 @@ class PyNetDicomService:
             (evt.EVT_C_FIND, self.handle_c_find),
             (evt.EVT_C_MOVE, self.handle_c_move),
             (evt.EVT_C_GET, self.handle_c_get),
+            (evt.EVT_RELEASED, self.handle_association_released),
+            (evt.EVT_ABORTED, self.handle_association_released),
+            (evt.EVT_CONN_CLOSE, self.handle_association_released),
         ]
 
         # Setup TLS if configured
@@ -579,6 +586,8 @@ class PyNetDicomService:
             all_instances = list(self._instances.values()) + list(self._draining_instances)
             self._instances.clear()
             self._draining_instances.clear()
+            remaining_assoc_ids = list(self._association_ids.values())
+            self._association_ids.clear()
 
         for inst in all_instances:
             try:
@@ -586,6 +595,8 @@ class PyNetDicomService:
                 inst.status = "STOPPED"
             except Exception as e:
                 logger.warning("scp_stop_all_error", config_id=inst.config_id, error=str(e))
+        for assoc_id in remaining_assoc_ids:
+            self._notify_association_released(assoc_id)
         logger.info("all_scp_servers_stopped")
 
     def get_instance(self, config_id: str) -> Optional[SCPInstance]:
@@ -717,6 +728,44 @@ class PyNetDicomService:
                 for pylogger, prev in zip(pydicom_loggers, prev_levels):
                     pylogger.setLevel(prev)
 
+    def _get_or_create_association_id(self, assoc: Any) -> Optional[str]:
+        """Return a stable unique association_id for the given pynetdicom Association instance."""
+        if assoc is None:
+            return None
+        assoc_key = id(assoc)
+        with self._lock:
+            assoc_id = self._association_ids.get(assoc_key)
+            if assoc_id is None:
+                assoc_id = f"dimse:{uuid.uuid4()}"
+                self._association_ids[assoc_key] = assoc_id
+            return assoc_id
+
+    @staticmethod
+    def _notify_association_released(assoc_id: str) -> None:
+        """Send a fire-and-forget DicomAssociationReleasedMessage to DicomIngestionActor."""
+        try:
+            from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
+
+            actor = get_dicom_actor()
+            if actor is not None and actor.is_alive():
+                actor.tell(DicomAssociationReleasedMessage(association_id=assoc_id))
+        except Exception as e:
+            logger.warning(
+                "association_released_actor_notify_failed",
+                association_id=assoc_id,
+                error=str(e),
+            )
+
+    def handle_association_released(self, event: Any) -> None:
+        """Release per-association FHIR pull tracking in DicomIngestionActor when an association closes."""
+        assoc = getattr(event, "assoc", None)
+        if assoc is None:
+            return
+        with self._lock:
+            assoc_id = self._association_ids.pop(id(assoc), None)
+        if assoc_id:
+            self._notify_association_released(assoc_id)
+
     def handle_c_store(self, event: Any) -> int:
         """Handle incoming C-STORE request.
 
@@ -743,6 +792,7 @@ class PyNetDicomService:
         )
 
         assoc = getattr(event, "assoc", None)
+        association_id = self._get_or_create_association_id(assoc)
 
         requestor = getattr(assoc, "requestor", None)
         client_ip = getattr(requestor, "address", "unknown")
@@ -802,6 +852,7 @@ class PyNetDicomService:
                     destination=f"dimse:{server_ip}:{server_port}",
                     destination_identity=f"ae:{called_aet}",
                     cleanup_source=True,
+                    association_id=association_id,
                 )
             )
         except Exception as e:

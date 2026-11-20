@@ -8,6 +8,7 @@ from gosmart_graphite.actor.dicom_ingestion_actor import DicomIngestionActor
 from gosmart_graphite.actor.fhir_actor import FhirActor, notify_fhir
 from gosmart_graphite.core.config import Settings
 from gosmart_graphite.model.actor_message import (
+    DicomAssociationReleasedMessage,
     DicomIngestionMessage,
     DicomMockIngestionMessage,
     FhirIngestionMessage,
@@ -55,19 +56,35 @@ def test_actor_lifecycle_and_messaging():
 
 
 def test_dicom_ingestion_message_validation():
-    msg = DicomIngestionMessage.model_validate({"file_path": Path("/tmp/test.dcm"), "acted_by": None})
+    msg = DicomIngestionMessage.model_validate(
+        {"file_path": Path("/tmp/test.dcm"), "acted_by": None, "association_id": "   "}
+    )
     assert msg.type == "INGEST_FILE"
     assert msg.file_path == "/tmp/test.dcm"
     assert msg.acted_by == "actor"
     assert msg.group_id is None
     assert msg.storage_root_uri is None
     assert msg.cleanup_source is False
+    assert msg.association_id is None
+
+    msg_with_assoc = DicomIngestionMessage(file_path="/tmp/test.dcm", association_id="  dimse:abc  ")
+    assert msg_with_assoc.association_id == "dimse:abc"
 
     with pytest.raises(ValidationError):
         DicomIngestionMessage(file_path="")
 
     with pytest.raises(ValidationError):
         DicomIngestionMessage(file_path="   ")
+
+    rel_msg = DicomAssociationReleasedMessage(association_id="  dimse:abc  ")
+    assert rel_msg.type == "ASSOCIATION_RELEASED"
+    assert rel_msg.association_id == "dimse:abc"
+
+    with pytest.raises(ValidationError):
+        DicomAssociationReleasedMessage(association_id="")
+
+    with pytest.raises(ValidationError):
+        DicomAssociationReleasedMessage(association_id="   ")
 
 
 def test_dicom_mock_ingestion_message_defaults():
@@ -175,6 +192,182 @@ def test_dicom_ingestion_actor_does_not_notify_fhir_on_ingest_file_failure():
         mock_fhir_actor.tell.assert_not_called()
     finally:
         actor.stop()
+
+
+def test_dicom_ingestion_actor_deduplicates_fhir_by_association_study_series_and_clears_on_release():
+    """Within an association, FHIR pull runs once per unique (association_id, study_uid, series_uid) and resets on release."""
+
+    def _make_hierarchy(study_uid: str, series_uid: str, sop_uid: str) -> DicomHierarchy:
+        return DicomHierarchy(
+            patient=PatientModel(patient_id="PT-DEDUP"),
+            study=StudyModel(study_instance_uid=study_uid, accession_number="ACC-DEDUP"),
+            series=SeriesModel(series_instance_uid=series_uid, modality="CT"),
+            instance=InstanceModel(sop_instance_uid=sop_uid),
+        )
+
+    hierarchies = [
+        _make_hierarchy("1.2.840.1", "1.2.840.1.1", "1.2.840.1.1.1"),  # assoc_1, s1, se1 -> notify #1
+        _make_hierarchy("1.2.840.1", "1.2.840.1.1", "1.2.840.1.1.2"),  # assoc_1, s1, se1 -> SKIP
+        _make_hierarchy("1.2.840.1", "1.2.840.1.2", "1.2.840.1.2.1"),  # assoc_1, s1, se2 -> notify #2
+        _make_hierarchy("1.2.840.2", "1.2.840.1.1", "1.2.840.2.1.1"),  # assoc_1, s2, se1 -> notify #3
+        _make_hierarchy("1.2.840.1", "1.2.840.1.1", "1.2.840.1.1.3"),  # assoc_2, s1, se1 -> notify #4
+        _make_hierarchy("1.2.840.1", "1.2.840.1.1", "1.2.840.1.1.4"),  # assoc_1 after release -> notify #5
+    ]
+    mock_fhir_actor = MagicMock()
+    actor = DicomIngestionActor.start()
+    try:
+        with (
+            patch.object(DicomService, "parse_file", side_effect=hierarchies),
+            patch.object(MediaService, "copy_sync", return_value="file:///tmp/out.dcm"),
+            patch.object(GraphService, "save_hierarchy_sync", return_value={"status": "saved"}),
+            patch("gosmart_graphite.actor.dicom_ingestion_actor.record_audit"),
+            patch("gosmart_graphite.actor.fhir_actor.get_fhir_actor", return_value=mock_fhir_actor),
+        ):
+            r1 = actor.ask(
+                DicomIngestionMessage(file_path="/tmp/1.dcm", group_id="g1", association_id="assoc_1"),
+                timeout=2.0,
+            )
+            r2 = actor.ask(
+                DicomIngestionMessage(file_path="/tmp/2.dcm", group_id="g1", association_id="assoc_1"),
+                timeout=2.0,
+            )
+            r3 = actor.ask(
+                DicomIngestionMessage(file_path="/tmp/3.dcm", group_id="g1", association_id="assoc_1"),
+                timeout=2.0,
+            )
+            r4 = actor.ask(
+                DicomIngestionMessage(file_path="/tmp/4.dcm", group_id="g1", association_id="assoc_1"),
+                timeout=2.0,
+            )
+            r5 = actor.ask(
+                DicomIngestionMessage(file_path="/tmp/5.dcm", group_id="g1", association_id="assoc_2"),
+                timeout=2.0,
+            )
+
+            assert r1["fhir_notified"] is True
+            assert r2["fhir_notified"] is False
+            assert r3["fhir_notified"] is True
+            assert r4["fhir_notified"] is True
+            assert r5["fhir_notified"] is True
+            assert mock_fhir_actor.tell.call_count == 4
+
+            # Release assoc_1 via typed message -> clears 3 entries
+            rel1 = actor.ask(DicomAssociationReleasedMessage(association_id="assoc_1"), timeout=2.0)
+            assert rel1 == {"success": True, "association_id": "assoc_1", "cleared_count": 3}
+
+            # Same (assoc_1, s1, se1) now triggers FHIR pull again
+            r6 = actor.ask(
+                DicomIngestionMessage(file_path="/tmp/6.dcm", group_id="g1", association_id="assoc_1"),
+                timeout=2.0,
+            )
+            assert r6["fhir_notified"] is True
+            assert mock_fhir_actor.tell.call_count == 5
+
+            # Release assoc_2 via dict message
+            rel2 = actor.ask({"type": "ASSOCIATION_RELEASED", "association_id": "assoc_2"}, timeout=2.0)
+            assert rel2 == {"success": True, "association_id": "assoc_2", "cleared_count": 1}
+
+            # Invalid dict release message rejected cleanly
+            bad_rel = actor.ask({"type": "ASSOCIATION_RELEASED", "association_id": "   "}, timeout=2.0)
+            assert bad_rel["success"] is False
+            assert "Invalid DicomAssociationReleasedMessage" in bad_rel["error"]
+    finally:
+        actor.stop()
+
+
+def test_dicom_ingestion_actor_always_notifies_fhir_when_association_id_is_none():
+    """When association_id is None, every ingested file triggers FHIR notification (backward compatible)."""
+    h1 = DicomHierarchy(
+        patient=PatientModel(patient_id="PT-NO-ASSOC"),
+        study=StudyModel(study_instance_uid="1.2.840.99", accession_number="ACC-99"),
+        series=SeriesModel(series_instance_uid="1.2.840.99.1", modality="MR"),
+        instance=InstanceModel(sop_instance_uid="1.2.840.99.1.1"),
+    )
+    h2 = DicomHierarchy(
+        patient=PatientModel(patient_id="PT-NO-ASSOC"),
+        study=StudyModel(study_instance_uid="1.2.840.99", accession_number="ACC-99"),
+        series=SeriesModel(series_instance_uid="1.2.840.99.1", modality="MR"),
+        instance=InstanceModel(sop_instance_uid="1.2.840.99.1.2"),
+    )
+    mock_fhir_actor = MagicMock()
+    actor = DicomIngestionActor.start()
+    try:
+        with (
+            patch.object(DicomService, "parse_file", side_effect=[h1, h2]),
+            patch.object(MediaService, "copy_sync", return_value="file:///tmp/out.dcm"),
+            patch.object(GraphService, "save_hierarchy_sync", return_value={"status": "saved"}),
+            patch("gosmart_graphite.actor.dicom_ingestion_actor.record_audit"),
+            patch("gosmart_graphite.actor.fhir_actor.get_fhir_actor", return_value=mock_fhir_actor),
+        ):
+            r1 = actor.ask(DicomIngestionMessage(file_path="/tmp/a.dcm", group_id="g1"), timeout=2.0)
+            r2 = actor.ask(DicomIngestionMessage(file_path="/tmp/b.dcm", group_id="g1"), timeout=2.0)
+        assert r1["fhir_notified"] is True
+        assert r2["fhir_notified"] is True
+        assert mock_fhir_actor.tell.call_count == 2
+    finally:
+        actor.stop()
+
+
+def test_pynetdicom_c_store_association_id_and_release_lifecycle(tmp_path: Path):
+    """Verify PyNetDicomService assigns stable association_id per Association and emits release once."""
+    settings = Settings(DICOM_STAGING_DIR=str(tmp_path / "assoc_staging"))
+    svc = PyNetDicomService(settings=settings)
+
+    def _make_event(assoc_obj: MagicMock, sop_suffix: str) -> MagicMock:
+        ds = dicom_service.create_mock_dicom(patient_id=f"PT-{sop_suffix}", modality="CT")
+        ev = MagicMock()
+        ev.request.AffectedSOPInstanceUID = str(ds.SOPInstanceUID)
+        ev.dataset = ds
+        ev.file_meta = ds.file_meta
+        ev.assoc = assoc_obj
+        return ev
+
+    assoc_a = MagicMock()
+    assoc_a.requestor.address = "10.0.0.1"
+    assoc_a.requestor.ae_title = "SCU_A"
+    assoc_a.acceptor.address = "127.0.0.1"
+    assoc_a.acceptor.port = 11112
+    assoc_a.acceptor.ae_title = "GOSMART_GRAPHITE"
+
+    assoc_b = MagicMock()
+    assoc_b.requestor.address = "10.0.0.2"
+    assoc_b.requestor.ae_title = "SCU_B"
+    assoc_b.acceptor.address = "127.0.0.1"
+    assoc_b.acceptor.port = 11112
+    assoc_b.acceptor.ae_title = "GOSMART_GRAPHITE"
+
+    assoc_echo_only = MagicMock()
+
+    mock_actor = MagicMock()
+    mock_actor.is_alive.return_value = True
+
+    with (
+        patch("gosmart_graphite.actor.dicom_ingestion_actor.get_dicom_actor", return_value=mock_actor),
+        patch("gosmart_graphite.service.pynetdicom_service.record_audit"),
+    ):
+        assert svc.handle_c_store(_make_event(assoc_a, "A1")) == 0x0000
+        assert svc.handle_c_store(_make_event(assoc_a, "A2")) == 0x0000
+        assert svc.handle_c_store(_make_event(assoc_b, "B1")) == 0x0000
+
+        # Simulate both EVT_RELEASED and EVT_CONN_CLOSE firing for assoc_a (should notify once)
+        rel_event_a = MagicMock(assoc=assoc_a)
+        svc.handle_association_released(rel_event_a)
+        svc.handle_association_released(rel_event_a)
+
+        # Simulate release for an association that never did C-STORE (should NOT notify)
+        svc.handle_association_released(MagicMock(assoc=assoc_echo_only))
+
+    sent_messages = [call.args[0] for call in mock_actor.tell.call_args_list]
+    assert len(sent_messages) == 4
+    m_a1, m_a2, m_b1, m_rel_a = sent_messages
+    assert isinstance(m_a1, DicomIngestionMessage)
+    assert isinstance(m_a2, DicomIngestionMessage)
+    assert isinstance(m_b1, DicomIngestionMessage)
+    assert isinstance(m_rel_a, DicomAssociationReleasedMessage)
+    assert m_a1.association_id is not None and m_a1.association_id.startswith("dimse:")
+    assert m_a1.association_id == m_a2.association_id
+    assert m_b1.association_id is not None and m_b1.association_id != m_a1.association_id
+    assert m_rel_a.association_id == m_a1.association_id
 
 
 def test_dicom_ingestion_actor_ae_group_and_storage_copy_and_cleanup(tmp_path: Path):

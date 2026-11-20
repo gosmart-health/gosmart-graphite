@@ -43,7 +43,7 @@ async def cleanup_fhir_test_graph(
 
 @pytest.mark.anyio
 async def test_upsert_relevant_resources_with_cross_domain_and_cleanup_toggle():
-    """Verify FHIR upsert (CREATE then UPDATE), cross-domain DICOM linking, and cleanup toggle."""
+    """Verify FHIR upsert (CREATE, UNCHANGED no-op, conditional UPDATE), cross-domain DICOM linking, and cleanup."""
     if not await neo4j_client.verify_connectivity():
         pytest.skip(f"Neo4j database is not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
 
@@ -157,12 +157,103 @@ async def test_upsert_relevant_resources_with_cross_domain_and_cleanup_toggle():
             "FULFILLED_BY",
         }.issubset(rel_types)
 
-        # Pass 2: UPDATE
+        # Pass 2: Identical resources -> idempotent UNCHANGED no-op (Action stays CREATE, UpdatedAt stays null)
         res2 = await svc.upsert_relevant_resources(resources, test_id=test_id, acted_by="pytest_pass2")
         assert res2["node_ids"] == res1["node_ids"]
         assert res2["relationship_ids"] == res1["relationship_ids"]
-        assert all(n["action"] == "UPDATE" for n in res2["nodes"])
-        assert all(r["action"] == "UPDATE" for r in res2["relationships"])
+        assert all(n["action"] == "UNCHANGED" for n in res2["nodes"])
+        assert all(r["action"] == "UNCHANGED" for r in res2["relationships"])
+
+        noop_check = await neo4j_client.execute_query(
+            """
+            MATCH (n)
+            WHERE n.id IN $node_ids
+            RETURN collect(distinct n.Action) AS actions, count(n.UpdatedAt) AS updated_cnt
+            """,
+            {"node_ids": res2["node_ids"]},
+        )
+        assert noop_check[0]["actions"] == ["CREATE"]
+        assert noop_check[0]["updated_cnt"] == 0
+
+        # Pass 3: Mutate status (ServiceRequest), meta (Encounter), and payload (Patient); keep ImagingStudy unchanged
+        updated_resources = EncRelevantResources(
+            patient=Patient.model_validate(
+                {
+                    "resourceType": "Patient",
+                    "id": "pat-cross-1",
+                    "active": True,
+                    "identifier": [{"system": "http://hospital.example.org/mrn", "value": "MRN-CROSS-001"}],
+                    "name": [{"given": ["Jane", "Marie"], "family": "Cross"}],
+                }
+            ),
+            encounter=Encounter.model_validate(
+                {
+                    "resourceType": "Encounter",
+                    "id": "enc-cross-1",
+                    "meta": {"versionId": "2", "lastUpdated": "2026-07-01T00:00:00Z"},
+                    "status": "finished",
+                    "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+                    "subject": {"reference": "Patient/pat-cross-1"},
+                }
+            ),
+            serviceRequests=[
+                ServiceRequest.model_validate(
+                    {
+                        "resourceType": "ServiceRequest",
+                        "id": "sr-cross-1",
+                        "status": "completed",
+                        "intent": "order",
+                        "identifier": [{"system": "http://hospital.example.org/acc", "value": "ACC-CROSS-001"}],
+                        "code": {"coding": [{"system": "http://loinc.org", "code": "24627-2"}]},
+                        "subject": {"reference": "Patient/pat-cross-1"},
+                        "encounter": {"reference": "Encounter/enc-cross-1"},
+                    }
+                )
+            ],
+            imaging_studies=resources.imaging_studies,
+        )
+        res3 = await svc.upsert_relevant_resources(updated_resources, test_id=test_id, acted_by="pytest_pass3")
+        assert res3["node_ids"] == res1["node_ids"]
+        assert res3["relationship_ids"] == res1["relationship_ids"]
+        actions_by_label = {n["label"]: n["action"] for n in res3["nodes"]}
+        assert actions_by_label["FHIR_Patient"] == "UPDATE"
+        assert actions_by_label["Encounter"] == "UPDATE"
+        assert actions_by_label["ServiceRequest"] == "UPDATE"
+        assert actions_by_label["ImagingStudy"] == "UNCHANGED"
+        assert all(r["action"] == "UNCHANGED" for r in res3["relationships"])
+
+        sr_rows = await neo4j_client.execute_query(
+            "MATCH (sr:ServiceRequest {uid: $uid}) RETURN sr.status AS status, sr.Action AS action, sr.UpdatedAt AS updated_at",
+            {"uid": f"fhir:{test_id}:sr-cross-1"},
+        )
+        assert len(sr_rows) == 1
+        assert sr_rows[0]["status"] == "completed"
+        assert sr_rows[0]["action"] == "UPDATE"
+        assert sr_rows[0]["updated_at"] is not None
+
+        enc_rows = await neo4j_client.execute_query(
+            "MATCH (e:Encounter {uid: $uid}) RETURN e.metaVersionId AS ver, e.Action AS action",
+            {"uid": f"fhir:{test_id}:enc-cross-1"},
+        )
+        assert len(enc_rows) == 1
+        assert enc_rows[0]["ver"] == "2"
+        assert enc_rows[0]["action"] == "UPDATE"
+
+        pat_rows = await neo4j_client.execute_query(
+            "MATCH (p:FHIR_Patient {uid: $uid}) RETURN p.name AS name, p.Action AS action",
+            {"uid": f"fhir:{test_id}:pat-cross-1"},
+        )
+        assert len(pat_rows) == 1
+        assert pat_rows[0]["name"] == ["Jane Marie Cross"]
+        assert pat_rows[0]["action"] == "UPDATE"
+
+        img_rows = await neo4j_client.execute_query(
+            "MATCH (i:ImagingStudy {uid: $uid}) RETURN i.Action AS action, i.UpdatedAt AS updated_at",
+            {"uid": f"fhir:{test_id}:is-cross-1"},
+        )
+        assert len(img_rows) == 1
+        assert img_rows[0]["action"] == "CREATE"
+        assert img_rows[0]["updated_at"] is None
 
         # Verify cleanup disabled leaves nodes in DB
         no_op = await cleanup_fhir_test_graph(
@@ -245,6 +336,10 @@ async def test_upsert_stub_non_clobbering_and_upgrade():
     )
 
     try:
+        pass2_actions = {n["resource_id"]: n["action"] for n in res2["nodes"]}
+        assert pass2_actions["org-upg-1"] == "UNCHANGED"
+        assert pass2_actions["pract-upg-1"] == "UPDATE"
+
         org_rows = await neo4j_client.execute_query(
             "MATCH (o:Organization {resource_id: 'org-upg-1', test_id: $test_id}) "
             "RETURN o.name AS name, o.identifiers AS identifiers, o.resource AS resource",
