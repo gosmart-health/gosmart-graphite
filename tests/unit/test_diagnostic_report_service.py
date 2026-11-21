@@ -1,22 +1,26 @@
 """Unit tests for DiagnosticReportService.
 
-Covers ``_detect_attachment_type``, ``_extract_sections`` and
-``parse_diagnostic_report``. Self-contained tests suitable for CI
-without external services.
+Covers ``_detect_attachment_type``, ``_extract_sections``,
+``parse_diagnostic_report``, ``config_ensure``, and ``compute_embeddings``.
+Self-contained tests suitable for CI without external services.
 """
 
+import asyncio
 import base64
 from typing import Final, TypedDict
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fhir.resources.diagnosticreport import DiagnosticReport
 
 from gosmart_graphite.model import Group
 from gosmart_graphite.model.llm_config import LLM_Config
+from gosmart_graphite.model.result import STATUS_BAD_DATA, STATUS_INTERNAL_ERROR, STATUS_OK
 from gosmart_graphite.service.diagnostic_report_service import (
     DiagnosticReportService,
     ReportTexts,
 )
+from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
 
 CONCLUSION_TEXT: Final[str] = "Structured conclusion."
 CT_ABDOMEN_CODE: Final[dict[str, str]] = {"text": "CT ABDOMEN"}
@@ -374,10 +378,6 @@ def test_parse_diagnostic_report_passes_group_context_and_llm_config_through(
 
 
 def test_config_ensure_preserves_existing_group_and_llm_config() -> None:
-    from unittest.mock import MagicMock
-
-    from gosmart_graphite.model.result import STATUS_OK
-
     mock_group_svc = MagicMock()
     mock_llm_svc = MagicMock()
     svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
@@ -404,11 +404,7 @@ def test_config_ensure_preserves_existing_group_and_llm_config() -> None:
 
 
 def test_config_ensure_resolves_group_from_diagnostic_report_then_llm_config() -> None:
-    from unittest.mock import MagicMock
-
     from gosmart_graphite.model.fhir import DiagnosticReportNode
-    from gosmart_graphite.model.result import STATUS_OK
-    from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
 
     resolved_group = Group(name="Half Moon Bay Clinic", code="HMB_01", test_id="t_cfg_dr")
     resolved_llm = LLM_Config(
@@ -446,11 +442,7 @@ def test_config_ensure_resolves_group_from_diagnostic_report_then_llm_config() -
 
 
 def test_config_ensure_falls_back_to_encounter_reference_for_group() -> None:
-    from unittest.mock import MagicMock
-
     from gosmart_graphite.model.fhir import DiagnosticReportNode, EncounterNode
-    from gosmart_graphite.model.result import STATUS_OK
-    from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
 
     resolved_group = Group(name="Encounter Clinic", code="ENC_CLINIC", test_id="t_cfg_enc")
     resolved_llm = LLM_Config(
@@ -494,11 +486,6 @@ def test_config_ensure_falls_back_to_encounter_reference_for_group() -> None:
 
 
 def test_config_ensure_falls_back_to_lost_and_found_when_group_unresolved() -> None:
-    from unittest.mock import MagicMock, patch
-
-    from gosmart_graphite.model.result import STATUS_OK
-    from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
-
     lost_and_found = Group(name="LostAndFound", code="LOST_AND_FOUND", group_type="SYSTEM")
     default_llm = LLM_Config(
         tag=DEFAULT_EMBEDDING_TAG,
@@ -531,10 +518,6 @@ def test_config_ensure_falls_back_to_lost_and_found_when_group_unresolved() -> N
 
 
 def test_config_ensure_returns_bad_data_when_llm_config_not_found() -> None:
-    from unittest.mock import MagicMock
-
-    from gosmart_graphite.model.result import STATUS_BAD_DATA
-
     resolved_group = Group(name="No LLM Clinic", code="NO_LLM_01")
     mock_group_svc = MagicMock()
     mock_group_svc.my_group_sync.return_value = resolved_group
@@ -552,10 +535,6 @@ def test_config_ensure_returns_bad_data_when_llm_config_not_found() -> None:
 
 
 def test_config_ensure_returns_internal_error_on_llm_config_exception() -> None:
-    from unittest.mock import MagicMock
-
-    from gosmart_graphite.model.result import STATUS_INTERNAL_ERROR
-
     resolved_group = Group(name="Ambiguous Clinic", code="AMB_01")
     mock_group_svc = MagicMock()
     mock_group_svc.my_group_sync.return_value = resolved_group
@@ -572,23 +551,272 @@ def test_config_ensure_returns_internal_error_on_llm_config_exception() -> None:
 
 @pytest.mark.anyio
 async def test_compute_embeddings_and_graph_register_propagate_config_ensure_failure() -> None:
-    from unittest.mock import MagicMock
-
-    from gosmart_graphite.model.result import STATUS_BAD_DATA
-
     resolved_group = Group(name="Propagation Clinic", code="PROP_01")
     mock_group_svc = MagicMock()
     mock_group_svc.my_group_sync.return_value = resolved_group
     mock_llm_svc = MagicMock()
     mock_llm_svc.resolve_config_for_group_sync.return_value = None
-    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+    mock_emb_svc = MagicMock()
+    mock_emb_svc.embed_text_async = AsyncMock()
+    svc = DiagnosticReportService(
+        group_service=mock_group_svc,
+        llm_config_service=mock_llm_svc,
+        embedding_service=mock_emb_svc,
+    )
 
-    rt_embed = ReportTexts(report=_diagnostic_report(report_id="dr-prop-1"))
+    rt_embed = ReportTexts(report=_diagnostic_report(report_id="dr-prop-1"), findings="Liver normal.")
     embed_res = await svc.compute_embeddings(rt_embed)
     assert embed_res.status == STATUS_BAD_DATA
     assert "No active LLM_Config found" in embed_res.message
+    mock_emb_svc.embed_text_async.assert_not_awaited()
 
     rt_reg = ReportTexts(report=_diagnostic_report(report_id="dr-prop-2"))
     reg_res = svc.graph_register(rt_reg)
     assert reg_res.status == STATUS_BAD_DATA
     assert "No active LLM_Config found" in reg_res.message
+
+
+# ---------------------------------------------------------------------------
+# compute_embeddings
+# ---------------------------------------------------------------------------
+
+
+def _sample_group_and_llm(test_id: str = "t_embed") -> tuple[Group, LLM_Config]:
+    group = Group(name="Embedding Clinic", code="EMB_01", test_id=test_id)
+    llm_cfg = LLM_Config(
+        tag=DEFAULT_EMBEDDING_TAG,
+        provider="ollama",
+        model="nomic-embed-text:latest",
+        url="http://localhost:11434",
+        dimensions=3,
+        test_id=test_id,
+    )
+    return group, llm_cfg
+
+
+@pytest.mark.anyio
+async def test_compute_embeddings_both_findings_and_conclusion_concurrent() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_embed_both")
+
+    started = 0
+    both_started = asyncio.Event()
+
+    async def _fake_embed(text: str, **kwargs: object) -> list[float]:
+        nonlocal started
+        assert kwargs["is_query"] is False
+        assert kwargs["title"] == "none"
+        assert kwargs["llm_config"] is llm_cfg
+        assert kwargs["group_id"] == group.id
+        assert kwargs["tag"] == DEFAULT_EMBEDDING_TAG
+        assert kwargs["test_id"] == "t_embed_both"
+
+        started += 1
+        if started == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), timeout=2.0)
+
+        if text == "Liver is normal in size.":
+            return [0.6, 0.8, 0.0]
+        if text == "No acute abdominal process.":
+            return [0.0, 0.6, 0.8]
+        raise AssertionError(f"Unexpected text: {text!r}")
+
+    mock_emb_svc = MagicMock()
+    mock_emb_svc.embed_text_async = AsyncMock(side_effect=_fake_embed)
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=mock_emb_svc,
+    )
+
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-both"),
+        group_context=group,
+        llm_config=llm_cfg,
+        hasText=True,
+        findings="  Liver is normal in size.  ",
+        conclusion="No acute abdominal process.",
+    )
+
+    res = await svc.compute_embeddings(rt)
+    assert res.status == STATUS_OK
+    assert res.value is rt
+    assert rt.embedding_findings == [0.6, 0.8, 0.0]
+    assert rt.embedding_conclusion == [0.0, 0.6, 0.8]
+    assert mock_emb_svc.embed_text_async.await_count == 2
+
+
+@pytest.mark.anyio
+async def test_compute_embeddings_only_findings_returns_empty_conclusion_vector() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_embed_findings")
+
+    mock_emb_svc = MagicMock()
+    mock_emb_svc.embed_text_async = AsyncMock(return_value=[1.0, 0.0, 0.0])
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=mock_emb_svc,
+    )
+
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-findings-only"),
+        group_context=group,
+        llm_config=llm_cfg,
+        hasText=True,
+        findings="Lungs are clear.",
+        conclusion="   ",
+        embedding_conclusion=[0.1, 0.2, 0.3],  # stale vector must be cleared
+    )
+
+    res = await svc.compute_embeddings(rt)
+    assert res.status == STATUS_OK
+    assert rt.embedding_findings == [1.0, 0.0, 0.0]
+    assert rt.embedding_conclusion == []
+    mock_emb_svc.embed_text_async.assert_awaited_once_with(
+        "Lungs are clear.",
+        is_query=False,
+        group_id=group.id,
+        tag=DEFAULT_EMBEDDING_TAG,
+        test_id="t_embed_findings",
+        title="none",
+        llm_config=llm_cfg,
+    )
+
+
+@pytest.mark.anyio
+async def test_compute_embeddings_only_conclusion_returns_empty_findings_vector() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_embed_conclusion")
+
+    mock_emb_svc = MagicMock()
+    mock_emb_svc.embed_text_async = AsyncMock(return_value=[0.0, 1.0, 0.0])
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=mock_emb_svc,
+    )
+
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-conclusion-only"),
+        group_context=group,
+        llm_config=llm_cfg,
+        hasText=True,
+        findings="",
+        conclusion="Normal chest radiograph.",
+        embedding_findings=[0.9, 0.1, 0.0],  # stale vector must be cleared
+    )
+
+    res = await svc.compute_embeddings(rt)
+    assert res.status == STATUS_OK
+    assert rt.embedding_findings == []
+    assert rt.embedding_conclusion == [0.0, 1.0, 0.0]
+    mock_emb_svc.embed_text_async.assert_awaited_once_with(
+        "Normal chest radiograph.",
+        is_query=False,
+        group_id=group.id,
+        tag=DEFAULT_EMBEDDING_TAG,
+        test_id="t_embed_conclusion",
+        title="none",
+        llm_config=llm_cfg,
+    )
+
+
+@pytest.mark.anyio
+async def test_compute_embeddings_empty_and_whitespace_texts_skip_embedder() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_embed_empty")
+
+    mock_emb_svc = MagicMock()
+    mock_emb_svc.embed_text_async = AsyncMock()
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=mock_emb_svc,
+    )
+
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-empty"),
+        group_context=group,
+        llm_config=llm_cfg,
+        findings="   \n\t ",
+        conclusion="",
+        embedding_findings=[0.5, 0.5],
+        embedding_conclusion=[0.5, 0.5],
+    )
+
+    res = await svc.compute_embeddings(rt)
+    assert res.status == STATUS_OK
+    assert rt.embedding_findings == []
+    assert rt.embedding_conclusion == []
+    mock_emb_svc.embed_text_async.assert_not_awaited()
+
+
+@pytest.mark.anyio
+async def test_compute_embeddings_value_error_returns_bad_data_and_resets_vectors() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_embed_val_err")
+
+    mock_emb_svc = MagicMock()
+    mock_emb_svc.embed_text_async = AsyncMock(
+        side_effect=ValueError("Embedding vector length (2) is smaller than configured dimensions (3).")
+    )
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=mock_emb_svc,
+    )
+
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-val-err"),
+        group_context=group,
+        llm_config=llm_cfg,
+        findings="Findings text",
+        conclusion="Conclusion text",
+        embedding_findings=[0.1, 0.2],
+        embedding_conclusion=[0.3, 0.4],
+    )
+
+    with patch("gosmart_graphite.service.diagnostic_report_service.logger") as mock_logger:
+        res = await svc.compute_embeddings(rt)
+
+    assert res.status == STATUS_BAD_DATA
+    assert "smaller than configured dimensions" in res.message
+    assert rt.embedding_findings == []
+    assert rt.embedding_conclusion == []
+    mock_logger.error.assert_called_once()
+    assert mock_logger.error.call_args.args[0] == "diagnostic_report_embedding_bad_data"
+
+
+@pytest.mark.anyio
+async def test_compute_embeddings_runtime_error_returns_internal_error_and_resets_vectors() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_embed_rt_err")
+
+    async def _partial_fail(text: str, **kwargs: object) -> list[float]:
+        if text == "Findings text":
+            return [0.6, 0.8, 0.0]
+        raise RuntimeError("Empty embedding response returned from embedder.")
+
+    mock_emb_svc = MagicMock()
+    mock_emb_svc.embed_text_async = AsyncMock(side_effect=_partial_fail)
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=mock_emb_svc,
+    )
+
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-rt-err"),
+        group_context=group,
+        llm_config=llm_cfg,
+        findings="Findings text",
+        conclusion="Conclusion text",
+        embedding_findings=[0.1, 0.2],
+        embedding_conclusion=[0.3, 0.4],
+    )
+
+    with patch("gosmart_graphite.service.diagnostic_report_service.logger") as mock_logger:
+        res = await svc.compute_embeddings(rt)
+
+    assert res.status == STATUS_INTERNAL_ERROR
+    assert "Empty embedding response" in res.message
+    assert rt.embedding_findings == []
+    assert rt.embedding_conclusion == []
+    mock_logger.error.assert_called_once()
+    assert mock_logger.error.call_args.args[0] == "diagnostic_report_embedding_failed"

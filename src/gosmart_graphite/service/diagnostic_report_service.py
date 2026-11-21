@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import re
 from typing import Optional, Tuple
@@ -14,7 +15,7 @@ from gosmart_graphite.model.result import (
     STATUS_INTERNAL_ERROR,
     STATUS_OK,
 )
-from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
+from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG, EmbeddingService
 from gosmart_graphite.service.group_service import GroupService
 from gosmart_graphite.service.llm_config_service import LLMConfigService
 
@@ -37,9 +38,11 @@ class DiagnosticReportService:
         self,
         group_service: Optional[GroupService] = None,
         llm_config_service: Optional[LLMConfigService] = None,
+        embedding_service: Optional[EmbeddingService] = None,
     ) -> None:
         self.group_service = group_service or GroupService()
         self.llm_config_service = llm_config_service or LLMConfigService()
+        self.embedding_service = embedding_service or EmbeddingService(llm_config_service=self.llm_config_service)
 
     @staticmethod
     def _detect_attachment_type(base64_data: str) -> Tuple[str, str]:
@@ -370,14 +373,97 @@ class DiagnosticReportService:
         # structured report elements (e.g. conclusion) when available.
         return self._extract_sections(result, "")
 
-    async def compute_embeddings(self, report_texts: ReportTexts) -> Result[ReportTexts]:
+    async def compute_embeddings(
+        self,
+        report_texts: ReportTexts,
+        *,
+        tag: str = DEFAULT_EMBEDDING_TAG,
+        test_id: Optional[str] = None,
+    ) -> Result[ReportTexts]:
+        """Compute L2-normalized findings and conclusion embeddings for a ReportTexts object.
+
+        Ensures ``group_context`` and ``llm_config`` are resolved first via
+        :meth:`config_ensure`. Non-empty ``findings`` and ``conclusion`` strings
+        are embedded concurrently with :meth:`EmbeddingService.embed_text_async`;
+        empty or whitespace-only strings produce empty (0-element) vectors.
+        """
         result = Result[ReportTexts](value=report_texts)
-        cfg_result = self.config_ensure(report_texts)
+        cfg_result = self.config_ensure(report_texts, tag=tag, test_id=test_id)
         if cfg_result.status != STATUS_OK:
             result.status = cfg_result.status
             result.message = cfg_result.message
             return result
 
+        findings_text = (report_texts.findings or "").strip()
+        conclusion_text = (report_texts.conclusion or "").strip()
+
+        if not findings_text and not conclusion_text:
+            report_texts.embedding_findings = []
+            report_texts.embedding_conclusion = []
+            result.status = STATUS_OK
+            result.message = "Vector embeddings Computed"
+            return result
+
+        group_id = report_texts.group_context.id if report_texts.group_context else None
+        effective_test_id = (
+            test_id
+            or (report_texts.group_context.test_id if report_texts.group_context else None)
+            or (report_texts.llm_config.test_id if report_texts.llm_config else None)
+        )
+
+        async def _embed(text: str) -> list[float]:
+            return await self.embedding_service.embed_text_async(
+                text,
+                is_query=False,
+                group_id=group_id,
+                tag=tag,
+                test_id=effective_test_id,
+                title="none",
+                llm_config=report_texts.llm_config,
+            )
+
+        try:
+            if findings_text and conclusion_text:
+                findings_vec, conclusion_vec = await asyncio.gather(
+                    _embed(findings_text),
+                    _embed(conclusion_text),
+                )
+            elif findings_text:
+                findings_vec = await _embed(findings_text)
+                conclusion_vec = []
+            else:
+                findings_vec = []
+                conclusion_vec = await _embed(conclusion_text)
+        except ValueError as exc:
+            report_texts.embedding_findings = []
+            report_texts.embedding_conclusion = []
+            logger.error(
+                "diagnostic_report_embedding_bad_data",
+                diagnostic_report_id=getattr(report_texts.report, "id", None),
+                group_id=group_id,
+                tag=tag,
+                error=str(exc),
+            )
+            result.status = STATUS_BAD_DATA
+            result.message = f"Failed to compute vector embeddings: {exc}"
+            return result
+        except Exception as exc:
+            report_texts.embedding_findings = []
+            report_texts.embedding_conclusion = []
+            logger.error(
+                "diagnostic_report_embedding_failed",
+                diagnostic_report_id=getattr(report_texts.report, "id", None),
+                group_id=group_id,
+                tag=tag,
+                error=str(exc),
+                exc_info=True,
+            )
+            result.status = STATUS_INTERNAL_ERROR
+            result.message = f"Failed to compute vector embeddings: {exc}"
+            return result
+
+        report_texts.embedding_findings = findings_vec
+        report_texts.embedding_conclusion = conclusion_vec
         result.status = STATUS_OK
         result.message = "Vector embeddings Computed"
         return result
