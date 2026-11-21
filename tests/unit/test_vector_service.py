@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from gosmart_graphite.core.config import Settings
-from gosmart_graphite.model.llm import LLM_Config
+from gosmart_graphite.model.llm_config import LLM_Config
 from gosmart_graphite.service import VectorService
 from gosmart_graphite.service.embedding_service import (
     DEFAULT_EMBEDDING_TAG,

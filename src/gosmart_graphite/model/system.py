@@ -39,7 +39,9 @@ class DICOMConfigurationResponse(BaseModel):
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
     storage_root_uri: Optional[str] = Field(
         default=None,
-        description="Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})",
+        description=(
+            "Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})"
+        ),
     )
     description: Optional[str] = Field(default=None, description="Human readable description")
     group_id: Optional[str] = Field(default=None, description="Associated Group ID served by this configuration")
@@ -80,7 +82,9 @@ class DICOMConfigurationCreateRequest(BaseModel):
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
     storage_root_uri: Optional[str] = Field(
         default=None,
-        description="Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})",
+        description=(
+            "Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})"
+        ),
     )
     description: Optional[str] = Field(default=None, description="Human readable description")
     group_id: Optional[str] = Field(

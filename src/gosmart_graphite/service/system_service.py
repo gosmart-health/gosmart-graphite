@@ -767,10 +767,10 @@ class SystemService:
 
         async def _swap_tx(tx: Any) -> bool:
             res = await tx.run(
-                f"""
-                MATCH (c:DICOMConfiguration {{id: $config_id}})
+                """
+                MATCH (c:DICOMConfiguration {id: $config_id})
                 SET c.Action = 'DELETE',
-                    c.ActedAt = datetime({{timezone: 'UTC'}}),
+                    c.ActedAt = datetime({timezone: 'UTC'}),
                     c.ActedBy = $acted_by
                 RETURN count(c) AS cnt
                 """,
@@ -784,7 +784,8 @@ class SystemService:
             for item in has_swaps:
                 await tx.run(
                     f"""
-                    MATCH (owner {{id: $owner_id}})-[r:HAS_DICOM_CONFIGURATION]->(c:DICOMConfiguration {{id: $config_id}})
+                    MATCH (owner {{id: $owner_id}})-[r:HAS_DICOM_CONFIGURATION]->
+                          (c:DICOMConfiguration {{id: $config_id}})
                     WITH owner, c, r, properties(r) AS old_props
                     CREATE (owner)-[r_not:{neg_has}]->(c)
                     SET r_not = old_props,

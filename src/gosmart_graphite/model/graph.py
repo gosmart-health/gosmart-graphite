@@ -293,7 +293,9 @@ class DICOMConfigurationNode(AuditableNode):
     dicomweb_stow_enabled: bool = Field(default=True, description="Enable STOW-RS")
     storage_root_uri: Optional[str] = Field(
         default=None,
-        description="Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})",
+        description=(
+            "Bucket or filesystem storage root URI for media files (defaults to /tmp/gosmart_graphite/{ae_title})"
+        ),
     )
     description: Optional[str] = Field(default=None, description="Human readable description")
 

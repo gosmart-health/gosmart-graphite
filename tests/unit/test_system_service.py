@@ -95,9 +95,7 @@ def test_fhir_configuration_node_unit():
     assert cfg.url == "https://fhir.example.org/r4"
     assert cfg.poll_sec == 60
 
-    expected_id = generate_deterministic_id(
-        {"entity": "FHIRConfiguration", "url": "https://fhir.example.org/r4"}
-    )
+    expected_id = generate_deterministic_id({"entity": "FHIRConfiguration", "url": "https://fhir.example.org/r4"})
     assert cfg.id == expected_id
 
     cfg_test = FHIRConfigurationNode(url="https://fhir.example.org/r4", test_id="t1")

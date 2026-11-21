@@ -230,9 +230,7 @@ class FHIRConfigService:
         at_min = [r for r in records if r["depth"] == min_depth]
         distinct_ids = {r["config"].get("id") for r in at_min if r.get("config")}
         if len(distinct_ids) > 1:
-            raise RuntimeError(
-                f"Ambiguous FHIRConfiguration at depth {min_depth} starting from group '{group_id}'."
-            )
+            raise RuntimeError(f"Ambiguous FHIRConfiguration at depth {min_depth} starting from group '{group_id}'.")
         return _dict_to_fhir_config_model(at_min[0]["config"])
 
     @staticmethod

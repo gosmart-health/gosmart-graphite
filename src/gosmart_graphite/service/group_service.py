@@ -94,8 +94,8 @@ def _dict_to_group_node(data: Optional[Dict[str, Any]]) -> Optional[GroupNode]:
 
 
 def _build_default_lost_and_found_group(
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
 ) -> GroupNode:
     """Construct the deterministic LostAndFound GroupNode."""
     return GroupNode(
@@ -201,8 +201,8 @@ RETURN properties(g) AS group
 
 
 def _build_lost_and_found_params(
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
 ) -> Tuple[GroupNode, Dict[str, Any]]:
     """Build parameters for persisting the System -> HAS_LOST_AND_FOUND -> LostAndFound Group in Neo4j."""
     sys_node = SystemNode(test_id=test_id, ActedBy=acted_by)
@@ -283,8 +283,8 @@ RETURN properties(g) AS group
 
 
 def _build_catch_all_group_params(
-        test_id: Optional[str] = None,
-        acted_by: str = "system",
+    test_id: Optional[str] = None,
+    acted_by: str = "system",
 ) -> Tuple[GroupNode, Dict[str, Any]]:
     """Build parameters for persisting GoSmart Health Group -> BELONGS_TO -> System in Neo4j."""
     sys_node = SystemNode(test_id=test_id, ActedBy=acted_by)
@@ -362,8 +362,8 @@ class GroupService:
 
     @staticmethod
     def _validate_resolved_group_records(
-            records: List[Dict[str, Any]],
-            clean_ident: Optional[str],
+        records: List[Dict[str, Any]],
+        clean_ident: Optional[str],
     ) -> Dict[str, Any]:
         target_label = clean_ident or DEFAULT_GROUP_NAME
         if not records:
@@ -381,15 +381,15 @@ class GroupService:
         return _clean_neo4j_value(records[0].get("group", records[0]))
 
     async def add_user_to_group(
-            self,
-            user_id: str,
-            group_id: str,
-            roles: Optional[List[str]] = None,
-            permissions: Optional[List[str]] = None,
-            status: str = "ACTIVE",
-            is_primary: bool = False,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        user_id: str,
+        group_id: str,
+        roles: Optional[List[str]] = None,
+        permissions: Optional[List[str]] = None,
+        status: str = "ACTIVE",
+        is_primary: bool = False,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Affiliate a User with a Group via MEMBER_OF relationship."""
         roles_list = roles or ["Viewer"]
@@ -446,11 +446,11 @@ class GroupService:
         return {}
 
     async def associate_dicom_config_to_group(
-            self,
-            config_id: str,
-            group_id: str,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        config_id: str,
+        group_id: str,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Associate a DICOMConfiguration to a Group via HAS_DICOM_CONFIGURATION and SERVES relationships.
 
@@ -535,12 +535,12 @@ class GroupService:
         return res
 
     async def associate_study_and_patient_to_group(
-            self,
-            patient_id: str,
-            study_uid: str,
-            group_id: str,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        patient_id: str,
+        study_uid: str,
+        group_id: str,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Attach Patient (BELONGS_TO) and Study (PERFORMED_AT) to target Group."""
         query = """
@@ -588,14 +588,14 @@ class GroupService:
         return res
 
     async def create_group(
-            self,
-            name: str,
-            code: str,
-            group_type: str = "FACILITY",
-            is_active: bool = True,
-            description: Optional[str] = None,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        name: str,
+        code: str,
+        group_type: str = "FACILITY",
+        is_active: bool = True,
+        description: Optional[str] = None,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Create or update an organizational group/facility node."""
         node = GroupNode(
@@ -647,12 +647,12 @@ class GroupService:
         return {}
 
     async def dissociate_dicom_config_from_group(
-            self,
-            config_id: str,
-            group_id: str,
-            acted_by: str = "system",
+        self,
+        config_id: str,
+        group_id: str,
+        acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
-        """Dissociate a DICOMConfiguration from a Group by swapping HAS_DICOM_CONFIGURATION and SERVES to negated forms."""
+        """Dissociate a DICOMConfiguration from a Group by negating HAS_DICOM_CONFIGURATION and SERVES."""
         neg_serves = to_negated_relation_type("SERVES")
         neg_has = to_negated_relation_type("HAS_DICOM_CONFIGURATION")
         new_serves_rel_id = generate_deterministic_id(
@@ -723,9 +723,9 @@ class GroupService:
         return result
 
     async def ensure_lost_and_found_group(
-            self,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> GroupNode:
         """Ensure the 'LostAndFound' operational recovery Group and its System association exist in Neo4j."""
         default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
@@ -744,9 +744,9 @@ class GroupService:
         return default_node
 
     def ensure_lost_and_found_group_sync(
-            self,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> GroupNode:
         """Synchronously ensure the 'LostAndFound' Group and its System association exist in Neo4j."""
         default_node, params = _build_lost_and_found_params(test_id=test_id, acted_by=acted_by)
@@ -769,8 +769,8 @@ class GroupService:
         return default_node
 
     async def get_effective_accessible_groups(
-            self,
-            user_id: str,
+        self,
+        user_id: str,
     ) -> List[Dict[str, Any]]:
         """Resolve effective group scope for a user by evaluating downward hierarchy from active memberships."""
         query = """
@@ -968,8 +968,8 @@ class GroupService:
         return None
 
     async def get_group_hierarchy_closure(
-            self,
-            group_id: str,
+        self,
+        group_id: str,
     ) -> List[Dict[str, Any]]:
         """Resolve downward hierarchy closure for a specific group (itself + child subgroups)."""
         query = """
@@ -997,9 +997,9 @@ class GroupService:
         return [_clean_neo4j_value(r) for r in records]
 
     async def get_or_create_catch_all_group(
-            self,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Ensure the resilient 'GoSmart Health' catch-all root organization exists and belongs to System."""
         _, params = _build_catch_all_group_params(test_id=test_id, acted_by=acted_by)
@@ -1009,9 +1009,9 @@ class GroupService:
         return {}
 
     def get_or_create_catch_all_group_sync(
-            self,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Synchronously ensure 'GoSmart Health' catch-all root organization exists and belongs to System."""
         node, params = _build_catch_all_group_params(test_id=test_id, acted_by=acted_by)
@@ -1026,9 +1026,9 @@ class GroupService:
             return {"id": node.id, "name": node.name, "code": node.code}
 
     async def get_user_affiliations(
-            self,
-            user_id: str,
-            include_inactive: bool = False,
+        self,
+        user_id: str,
+        include_inactive: bool = False,
     ) -> List[Dict[str, Any]]:
         """Get all groups and roles associated with a user."""
         query = """
@@ -1049,8 +1049,8 @@ class GroupService:
         return [_clean_neo4j_value(r) for r in records]
 
     def group_or_lost_and_found(
-            self,
-            group: Optional[Union[Group, Dict[str, Any]]] = None,
+        self,
+        group: Optional[Union[Group, Dict[str, Any]]] = None,
     ) -> Group:
         """Return the provided Group if present, or fall back to the LostAndFound operational recovery Group."""
         if isinstance(group, GroupNode):
@@ -1062,11 +1062,11 @@ class GroupService:
         return self._lost_and_found_group
 
     async def list_groups(
-            self,
-            include_inactive: bool = False,
-            include_tests: bool = True,
-            test_id: Optional[str] = None,
-            limit: int = 100,
+        self,
+        include_inactive: bool = False,
+        include_tests: bool = True,
+        test_id: Optional[str] = None,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """List groups with optional status and test_id filtering."""
         query = """
@@ -1096,11 +1096,11 @@ class GroupService:
         return self._lost_and_found_group
 
     def _resolve_missing_group(
-            self,
-            node_id: str,
-            max_depth: int,
-            return_lost_and_found_group: bool,
-            method: str = "my_group",
+        self,
+        node_id: str,
+        max_depth: int,
+        return_lost_and_found_group: bool,
+        method: str = "my_group",
     ) -> Optional[GroupNode]:
         """Log the fallback decision and return LostAndFound or None when no Group is found."""
         if return_lost_and_found_group:
@@ -1127,10 +1127,10 @@ class GroupService:
         return None
 
     async def my_group(
-            self,
-            node_id: str,
-            max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
-            return_lost_and_found_group: bool = True,
+        self,
+        node_id: str,
+        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+        return_lost_and_found_group: bool = True,
     ) -> Optional[GroupNode]:
         """Traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
         depth = _validate_max_depth(max_depth)
@@ -1151,10 +1151,10 @@ class GroupService:
         )
 
     def my_group_sync(
-            self,
-            node_id: str,
-            max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
-            return_lost_and_found_group: bool = True,
+        self,
+        node_id: str,
+        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+        return_lost_and_found_group: bool = True,
     ) -> Optional[GroupNode]:
         """Synchronously traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
         depth = _validate_max_depth(max_depth)
@@ -1184,11 +1184,11 @@ class GroupService:
         )
 
     async def nest_group(
-            self,
-            child_group_id: str,
-            parent_group_id: str,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        child_group_id: str,
+        parent_group_id: str,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Establish hierarchical relationship: (Child Group)-[:BELONGS_TO]->(Parent Group)."""
         rel = BelongsToRelation(
@@ -1229,11 +1229,11 @@ class GroupService:
         return {}
 
     async def reassociate_study_to_group(
-            self,
-            study_instance_uid: str,
-            target_group_id: str,
-            test_id: Optional[str] = None,
-            acted_by: str = "system",
+        self,
+        study_instance_uid: str,
+        target_group_id: str,
+        test_id: Optional[str] = None,
+        acted_by: str = "system",
     ) -> Dict[str, Any]:
         """Triage tool: Re-associate study from old group / catch-all to target Group."""
         neg_type = to_negated_relation_type("PERFORMED_AT")
@@ -1329,9 +1329,9 @@ class GroupService:
         return res
 
     async def resolve_target_group(
-            self,
-            identifier: Optional[str] = None,
-            test_id: Optional[str] = None,
+        self,
+        identifier: Optional[str] = None,
+        test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Resolve a single active Group by id/name/code, or default 'GoSmart Health'.
 
@@ -1350,9 +1350,9 @@ class GroupService:
         return self._validate_resolved_group_records(records, clean_ident)
 
     def resolve_target_group_sync(
-            self,
-            identifier: Optional[str] = None,
-            test_id: Optional[str] = None,
+        self,
+        identifier: Optional[str] = None,
+        test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronously resolve a single active Group by id/name/code, or default 'GoSmart Health'."""
         norm_test_id = test_id.strip() if isinstance(test_id, str) and test_id.strip() else None
@@ -1369,11 +1369,11 @@ class GroupService:
         return self._validate_resolved_group_records(records, clean_ident)
 
     async def update_user_group_status(
-            self,
-            user_id: str,
-            group_id: str,
-            status: str,
-            acted_by: str = "system",
+        self,
+        user_id: str,
+        group_id: str,
+        status: str,
+        acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
         """Update affiliation status (e.g. 'ACTIVE', 'INACTIVE', 'SUSPENDED') on MEMBER_OF relationship."""
         query = """
@@ -1398,9 +1398,9 @@ group_service = GroupService()
 
 
 async def my_group(
-        node_id: str,
-        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
-        return_lost_and_found_group: bool = True,
+    node_id: str,
+    max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+    return_lost_and_found_group: bool = True,
 ) -> Optional[GroupNode]:
     """Traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
     return await group_service.my_group(
@@ -1411,9 +1411,9 @@ async def my_group(
 
 
 def my_group_sync(
-        node_id: str,
-        max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
-        return_lost_and_found_group: bool = True,
+    node_id: str,
+    max_depth: int = DEFAULT_MY_GROUP_MAX_DEPTH,
+    return_lost_and_found_group: bool = True,
 ) -> Optional[GroupNode]:
     """Synchronously traverse up from node_id (up to max_depth hops) to resolve the nearest active GroupNode."""
     return group_service.my_group_sync(
@@ -1424,7 +1424,7 @@ def my_group_sync(
 
 
 def group_or_lost_and_found(
-        group: Optional[Union[Group, Dict[str, Any]]] = None,
+    group: Optional[Union[Group, Dict[str, Any]]] = None,
 ) -> Group:
     """Return the provided Group if present, or fall back to the LostAndFound operational recovery Group."""
     return group_service.group_or_lost_and_found(group)

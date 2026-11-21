@@ -69,8 +69,8 @@ def _dict_to_llm_config_model(data: Dict[str, Any]) -> LLM_Config:
 
 
 def _dict_to_llm_config_response(
-        data: Dict[str, Any],
-        groups: Optional[List[Dict[str, Any]]] = None,
+    data: Dict[str, Any],
+    groups: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Map raw Neo4j LLM_Config properties into a sanitized LLMConfigResponse dictionary."""
     clean = _clean_neo4j_value(data)
@@ -225,8 +225,8 @@ class LLMConfigService:
 
     @staticmethod
     def _validate_resolved_group_records(
-            records: List[Dict[str, Any]],
-            clean_ident: Optional[str],
+        records: List[Dict[str, Any]],
+        clean_ident: Optional[str],
     ) -> Dict[str, Any]:
         target_label = clean_ident or DEFAULT_LLM_GROUP_NAME
         if not records:
@@ -244,9 +244,9 @@ class LLMConfigService:
         return _clean_neo4j_value(records[0].get("group", records[0]))
 
     async def resolve_target_group(
-            self,
-            identifier: Optional[str] = None,
-            test_id: Optional[str] = None,
+        self,
+        identifier: Optional[str] = None,
+        test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Resolve a single active Group by id/name/code, or default 'GoSmart Health'.
 
@@ -265,9 +265,9 @@ class LLMConfigService:
         return self._validate_resolved_group_records(records, clean_ident)
 
     def resolve_target_group_sync(
-            self,
-            identifier: Optional[str] = None,
-            test_id: Optional[str] = None,
+        self,
+        identifier: Optional[str] = None,
+        test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronously resolve a single active Group by id/name/code, or default 'GoSmart Health'."""
         norm_test_id = normalize_test_id(test_id)
@@ -289,9 +289,9 @@ class LLMConfigService:
 
     @staticmethod
     def _parse_upsert_request(
-            config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
-            assign_group: Optional[str],
-            test_id: Optional[str],
+        config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
+        assign_group: Optional[str],
+        test_id: Optional[str],
     ) -> tuple[LLMConfigCreateRequest, Optional[str], Optional[str]]:
         if isinstance(config_data, dict):
             req = LLMConfigCreateRequest(**config_data)
@@ -319,12 +319,12 @@ class LLMConfigService:
 
     @classmethod
     def _prepare_upsert_payload(
-            cls,
-            config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
-            assign_group: Optional[str],
-            acted_by: str,
-            test_id: Optional[str],
-            group_id: Optional[str] = None,
+        cls,
+        config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
+        assign_group: Optional[str],
+        acted_by: str,
+        test_id: Optional[str],
+        group_id: Optional[str] = None,
     ) -> tuple[LLM_Config, Dict[str, Any], Optional[str], Optional[str]]:
         req, effective_assign, norm_test_id = cls._parse_upsert_request(
             config_data=config_data,
@@ -356,10 +356,10 @@ class LLMConfigService:
 
     @staticmethod
     def _plan_upsert_mutation(
-            check_rec: Optional[Dict[str, Any]],
-            target_group_id: str,
-            scoped_cfg_id: str,
-            props: Dict[str, Any],
+        check_rec: Optional[Dict[str, Any]],
+        target_group_id: str,
+        scoped_cfg_id: str,
+        props: Dict[str, Any],
     ) -> tuple[str, Dict[str, Any], bool, List[str], Optional[Dict[str, Any]], Optional[str]]:
         """Determine target node ID, archive flag, prior groups, and shared-config dissociation."""
         grp_existing = check_rec.get("grp_existing") if check_rec else None
@@ -402,11 +402,11 @@ class LLMConfigService:
         )
 
     async def upsert_llm_config(
-            self,
-            config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
-            assign_group: Optional[str] = None,
-            acted_by: str = "system",
-            test_id: Optional[str] = None,
+        self,
+        config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
+        assign_group: Optional[str] = None,
+        acted_by: str = "system",
+        test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create or overwrite a group-scoped LLM_Config and assign it via (:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config).
 
@@ -596,11 +596,11 @@ class LLMConfigService:
         return resp
 
     def upsert_llm_config_sync(
-            self,
-            config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
-            assign_group: Optional[str] = None,
-            acted_by: str = "system",
-            test_id: Optional[str] = None,
+        self,
+        config_data: LLMConfigCreateRequest | LLM_Config | Dict[str, Any],
+        assign_group: Optional[str] = None,
+        acted_by: str = "system",
+        test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronously create or overwrite a group-scoped LLM_Config and assign it to a Group."""
         req, effective_assign, norm_test_id = self._parse_upsert_request(
@@ -825,9 +825,9 @@ class LLMConfigService:
 
     @staticmethod
     def _pick_ancestor_record(
-            records: List[Dict[str, Any]],
-            tag: str,
-            group_id: str,
+        records: List[Dict[str, Any]],
+        tag: str,
+        group_id: str,
     ) -> Optional[LLM_Config]:
         if not records:
             return None
@@ -850,10 +850,10 @@ class LLMConfigService:
         return _dict_to_llm_config_model(records[0]["config"])
 
     async def resolve_config_for_group(
-            self,
-            tag: str,
-            group_id: Optional[str] = None,
-            test_id: Optional[str] = None,
+        self,
+        tag: str,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
     ) -> Optional[LLM_Config]:
         """Resolve an active LLM_Config by traversing upward from group_id, falling back to 'GoSmart Health'."""
         clean_tag = tag.strip()
@@ -878,10 +878,10 @@ class LLMConfigService:
         return self._pick_default_record(default_records, clean_tag)
 
     def resolve_config_for_group_sync(
-            self,
-            tag: str,
-            group_id: Optional[str] = None,
-            test_id: Optional[str] = None,
+        self,
+        tag: str,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
     ) -> Optional[LLM_Config]:
         """Synchronously resolve an active LLM_Config upward from group_id, falling back to 'GoSmart Health'."""
         clean_tag = tag.strip()
@@ -916,12 +916,12 @@ class LLMConfigService:
     # ------------------------------------------------------------------
 
     async def list_llm_configs(
-            self,
-            tag: Optional[str] = None,
-            provider: Optional[str] = None,
-            group_id: Optional[str] = None,
-            include_tests: bool = False,
-            test_id: Optional[str] = None,
+        self,
+        tag: Optional[str] = None,
+        provider: Optional[str] = None,
+        group_id: Optional[str] = None,
+        include_tests: bool = False,
+        test_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List active LLM_Config nodes with associated sponsoring groups (api_key masked)."""
         norm_test_id = normalize_test_id(test_id)
@@ -957,11 +957,11 @@ class LLMConfigService:
         return [_dict_to_llm_config_response(r.get("config", {}), r.get("groups", [])) for r in records]
 
     async def get_llm_config(
-            self,
-            config_id: Optional[str] = None,
-            tag: Optional[str] = None,
-            group_id: Optional[str] = None,
-            test_id: Optional[str] = None,
+        self,
+        config_id: Optional[str] = None,
+        tag: Optional[str] = None,
+        group_id: Optional[str] = None,
+        test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Retrieve a single active LLM_Config by ID or by (tag[, group_id]) (api_key masked)."""
         norm_test_id = normalize_test_id(test_id)
@@ -1064,10 +1064,10 @@ class LLMConfigService:
         raise ValueError("Either config_id or tag must be provided.")
 
     async def update_llm_config(
-            self,
-            config_id: str,
-            update_data: LLMConfigUpdateRequest,
-            acted_by: str = "system",
+        self,
+        config_id: str,
+        update_data: LLMConfigUpdateRequest,
+        acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
         """Update mutable properties of an active LLM_Config (cloning prior state with NOT_HAS_LLM_CONFIG)."""
         fetch_query = """
@@ -1259,11 +1259,11 @@ class LLMConfigService:
         return _dict_to_llm_config_response(updated_props, updated_groups)
 
     async def assign_to_group(
-            self,
-            config_id: str,
-            group_identifier: str,
-            acted_by: str = "system",
-            test_id: Optional[str] = None,
+        self,
+        config_id: str,
+        group_identifier: str,
+        acted_by: str = "system",
+        test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Assign an existing active LLM_Config to an active Group via HAS_LLM_CONFIG."""
         cfg = await self.get_llm_config(config_id=config_id)
@@ -1354,10 +1354,10 @@ class LLMConfigService:
         return _dict_to_llm_config_response(tx_res[0], tx_res[1])
 
     async def dissociate_from_group(
-            self,
-            config_id: str,
-            group_id: str,
-            acted_by: str = "system",
+        self,
+        config_id: str,
+        group_id: str,
+        acted_by: str = "system",
     ) -> bool:
         """Soft-dissociate a Group from an LLM_Config by swapping HAS_LLM_CONFIG to NOT_HAS_LLM_CONFIG."""
         neg_type = to_negated_relation_type("HAS_LLM_CONFIG")
@@ -1407,10 +1407,10 @@ class LLMConfigService:
         return success
 
     async def delete_llm_config(
-            self,
-            config_id: str,
-            acted_by: str = "system",
-            hard_delete: bool = False,
+        self,
+        config_id: str,
+        acted_by: str = "system",
+        hard_delete: bool = False,
     ) -> bool:
         """Soft-delete (or hard-delete) an LLM_Config and negate HAS_LLM_CONFIG relationships."""
         if hard_delete:
@@ -1495,9 +1495,9 @@ class LLMConfigService:
         return success
 
     async def restore_llm_config(
-            self,
-            config_id: str,
-            acted_by: str = "system",
+        self,
+        config_id: str,
+        acted_by: str = "system",
     ) -> Optional[Dict[str, Any]]:
         """Restore a soft-deleted LLM_Config (whose deterministic id was NOT archived) and its group links."""
         if "__archived__" in config_id:

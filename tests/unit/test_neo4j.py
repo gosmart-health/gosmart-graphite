@@ -121,4 +121,3 @@ def test_multi_loop_async_driver_isolation() -> None:
     finally:
         loop_worker.close()
         loop_main.close()
-

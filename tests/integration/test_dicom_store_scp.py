@@ -196,9 +196,7 @@ def test_dicom_c_store_blackbox_preservation_on_downstream_failure(dicom_server)
     mock_audit.assert_called_once()
     details = mock_audit.call_args.kwargs["details"]
     assert "source_path" in details
-    assert Path(details["source_path"]).exists(), (
-        "Staged DICOM recording must be preserved when actor handoff fails"
-    )
+    assert Path(details["source_path"]).exists(), "Staged DICOM recording must be preserved when actor handoff fails"
 
 
 def test_dicom_c_store_association_deduplicates_fhir_pulls_by_study_and_series(dicom_server):

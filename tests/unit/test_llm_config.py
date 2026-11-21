@@ -29,7 +29,7 @@ from gosmart_graphite.core.security import (
 )
 from gosmart_graphite.db.neo4j import neo4j_client
 from gosmart_graphite.main import app
-from gosmart_graphite.model.llm import LLM_Config
+from gosmart_graphite.model.llm_config import LLM_Config
 from gosmart_graphite.service.llm_config_service import LLMConfigService, llm_config_service
 from gosmart_graphite.service.mcp_service import (
     MCPAuthMiddleware,
@@ -378,7 +378,7 @@ async def test_group_tag_uniqueness_enforced_on_assign_update_and_restore() -> N
             }
         ]
     )
-    from gosmart_graphite.model.llm import LLMConfigUpdateRequest
+    from gosmart_graphite.model.llm_config import LLMConfigUpdateRequest
 
     fake_tx = _FakeAsyncTx([_FakeAsyncResult({"conflict_id": "cfg_b"})])
     with pytest.raises(ValueError, match="already has an active LLM_Config with tag 'embedding'"):

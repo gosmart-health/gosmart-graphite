@@ -337,9 +337,7 @@ class DiagnosticReportService:
 
             report_texts.llm_config = resolved_llm
 
-        return Result[ReportTexts](status=STATUS_OK,
-                            message="Configuration ensured",
-                            value=report_texts)
+        return Result[ReportTexts](status=STATUS_OK, message="Configuration ensured", value=report_texts)
 
     def parse_diagnostic_report(
         self,

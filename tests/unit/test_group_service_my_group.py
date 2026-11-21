@@ -38,6 +38,7 @@ def test_group_alias_and_curated_upward_relation_types() -> None:
         "PERFORMED_AT",
         "SERVES",
         "SCOPED_TO",
+        "HAS_DICOM_CONFIGURATION",
         "HAS_LLM_CONFIG",
         "HAS_FHIR_CONFIG",
         "HAS_STUDY",
@@ -49,10 +50,9 @@ def test_group_alias_and_curated_upward_relation_types() -> None:
     for fhir_rel_cls in FHIR_RELATION_CLASSES:
         assert fhir_rel_cls.__type__ in UPWARD_GROUP_RELATION_TYPES
 
-    # Ensure no duplicates and no System-root or LostAndFound or deprecated SUB_GROUP_OF relation
+    # Ensure no duplicates and no LostAndFound or deprecated SUB_GROUP_OF relation
     assert len(UPWARD_GROUP_RELATION_TYPES) == len(set(UPWARD_GROUP_RELATION_TYPES))
     assert "SUB_GROUP_OF" not in UPWARD_GROUP_RELATION_TYPES
-    assert "HAS_DICOM_CONFIGURATION" not in UPWARD_GROUP_RELATION_TYPES
     assert "HAS_LOST_AND_FOUND" not in UPWARD_GROUP_RELATION_TYPES
 
 
@@ -273,17 +273,13 @@ async def test_group_or_lost_and_found_fallback_and_passthrough() -> None:
     assert svc.group_or_lost_and_found(clinic_grp) is clinic_grp
 
     # 3. Dict representation of a Group is converted to GroupNode
-    dict_grp = svc.group_or_lost_and_found(
-        {"name": "Palo Alto Clinic", "code": "PA_CLINIC", "group_type": "FACILITY"}
-    )
+    dict_grp = svc.group_or_lost_and_found({"name": "Palo Alto Clinic", "code": "PA_CLINIC", "group_type": "FACILITY"})
     assert isinstance(dict_grp, GroupNode)
     assert dict_grp.code == "PA_CLINIC"
 
     # 4. Composing my_group(orphan) -> None with group_or_lost_and_found returns LostAndFound
     mock_client.execute_query = AsyncMock(return_value=[])
-    resolved = svc.group_or_lost_and_found(
-        await svc.my_group("dangling_study_node", return_lost_and_found_group=False)
-    )
+    resolved = svc.group_or_lost_and_found(await svc.my_group("dangling_study_node", return_lost_and_found_group=False))
     assert resolved.code == "LOST_AND_FOUND"
     assert resolved.name == "LostAndFound"
 

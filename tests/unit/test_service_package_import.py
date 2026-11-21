@@ -45,7 +45,7 @@ def test_notebook_first_cell_import_order_succeeds() -> None:
     """Mirror the exact import order used by notebooks/vector_emdedding_demo.ipynb cell 1."""
     _import_in_fresh_interpreter(
         "from gosmart_graphite.core.config import Settings\n"
-        "from gosmart_graphite.model.llm import LLM_Config\n"
+        "from gosmart_graphite.model.llm_config import LLM_Config\n"
         "from gosmart_graphite.service.embedding_service import EmbeddingService, SimilarityMetric\n"
         "from gosmart_graphite.service.llm_config_service import llm_config_service\n"
     )

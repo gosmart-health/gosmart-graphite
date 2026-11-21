@@ -18,6 +18,7 @@ from pynetdicom import AE, ALL_TRANSFER_SYNTAXES, StoragePresentationContexts, V
 from pynetdicom.ae import ApplicationEntity
 from pynetdicom.association import Association
 from pynetdicom.presentation import PresentationContext, build_context
+
 # These are dynamically generated and will not exist
 # pyrefly: ignore[missing-module-attribute]
 from pynetdicom.sop_class import (
@@ -1201,7 +1202,9 @@ class PyNetDicomService:
 
         # HAZ-009 Loop Protection: Destination cannot be local SCP AE title
         acceptor = getattr(getattr(event, "assoc", None), "acceptor", None)
-        local_aet: str = getattr(acceptor, "ae_title", None) or getattr(self.settings, "DICOM_AE_TITLE", "GOSMART_GS_DICOM_AE_TITLE")
+        local_aet: str = getattr(acceptor, "ae_title", None) or getattr(
+            self.settings, "DICOM_AE_TITLE", "GOSMART_GS_DICOM_AE_TITLE"
+        )
         if dest_aet.strip() == local_aet.strip():
             logger.warning("c_move_loop_detected", dest_aet=dest_aet, local_aet=local_aet)
             yield None, None
