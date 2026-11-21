@@ -1060,3 +1060,113 @@ async def test_upsert_relevant_resources_merges_by_uid_with_conditional_update_p
     assert params["meta_last_updated"] == "2026-06-10T08:30:00Z"
     assert params["op_token"]
     assert res["nodes"][0]["action"] == "UNCHANGED"
+
+
+@pytest.mark.anyio
+async def test_link_encounter_to_group_creates_deterministic_belongs_to():
+    """Verify link_encounter_to_group creates deterministic (:Encounter)-[:BELONGS_TO]->(:Group) edge."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from gosmart_graphite.model.auth import BelongsToRelation
+
+    executed_calls: list[tuple[str, dict]] = []
+
+    async def _fake_execute_query(query: str, params: dict | None = None):
+        p = params or {}
+        executed_calls.append((query, p))
+        if "RETURN g.id AS id" in query:
+            return [{"id": p["group_id"], "action": "CREATE", "is_active": True}]
+        if "MERGE (e)-[r:BELONGS_TO" in query:
+            return [
+                {
+                    "id": p["id"],
+                    "type": "BELONGS_TO",
+                    "start_node_id": p["encounter_id"],
+                    "end_node_id": p["group_id"],
+                    "action": "CREATE",
+                }
+            ]
+        return []
+
+    fake_client = MagicMock()
+    fake_client.execute_query = AsyncMock(side_effect=_fake_execute_query)
+    svc = FhirService(client=fake_client)
+
+    result = await svc.link_encounter_to_group(
+        encounter_id="enc-node-1",
+        group_id="grp-clinic-1",
+        test_id="t_enc_grp",
+        acted_by="fhir_actor",
+    )
+
+    expected_rel = BelongsToRelation(start_node_id="enc-node-1", end_node_id="grp-clinic-1")
+    assert result["linked"] is True
+    assert result["status"] == "LINKED"
+    assert result["relationship"]["id"] == expected_rel.id
+    assert result["relationship"]["type"] == "BELONGS_TO"
+    assert result["relationship"]["start_node_id"] == "enc-node-1"
+    assert result["relationship"]["end_node_id"] == "grp-clinic-1"
+    assert result["relationship"]["action"] == "CREATE"
+
+    assert len(executed_calls) == 2
+    merge_query, merge_params = executed_calls[1]
+    assert "MERGE (e)-[r:BELONGS_TO {id: $id}]->(g)" in merge_query
+    assert merge_params["id"] == expected_rel.id
+    assert merge_params["test_id"] == "t_enc_grp"
+    assert merge_params["acted_by"] == "fhir_actor"
+
+
+@pytest.mark.anyio
+async def test_link_encounter_to_group_distinguishes_missing_vs_inactive_or_deleted_group():
+    """Verify link_encounter_to_group distinguishes GROUP_NOT_FOUND vs GROUP_INACTIVE_OR_DELETED."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    # 1. Group does not exist
+    client_missing = MagicMock()
+    client_missing.execute_query = AsyncMock(return_value=[])
+    svc_missing = FhirService(client=client_missing)
+
+    res_missing = await svc_missing.link_encounter_to_group(
+        encounter_id="enc-node-1",
+        group_id="grp-missing",
+        test_id="t_enc_grp_missing",
+    )
+    assert res_missing["linked"] is False
+    assert res_missing["status"] == "GROUP_NOT_FOUND"
+    assert res_missing["group_id"] == "grp-missing"
+    assert client_missing.execute_query.await_count == 1
+
+    # 2. Group is soft-deleted (Action == 'DELETE')
+    client_deleted = MagicMock()
+    client_deleted.execute_query = AsyncMock(
+        return_value=[{"id": "grp-deleted", "action": "DELETE", "is_active": True}]
+    )
+    svc_deleted = FhirService(client=client_deleted)
+
+    res_deleted = await svc_deleted.link_encounter_to_group(
+        encounter_id="enc-node-1",
+        group_id="grp-deleted",
+        test_id="t_enc_grp_deleted",
+    )
+    assert res_deleted["linked"] is False
+    assert res_deleted["status"] == "GROUP_INACTIVE_OR_DELETED"
+    assert res_deleted["group_action"] == "DELETE"
+    assert res_deleted["group_is_active"] is True
+    assert client_deleted.execute_query.await_count == 1
+
+    # 3. Group is inactive (is_active == False)
+    client_inactive = MagicMock()
+    client_inactive.execute_query = AsyncMock(
+        return_value=[{"id": "grp-inactive", "action": "CREATE", "is_active": False}]
+    )
+    svc_inactive = FhirService(client=client_inactive)
+
+    res_inactive = await svc_inactive.link_encounter_to_group(
+        encounter_id="enc-node-1",
+        group_id="grp-inactive",
+        test_id="t_enc_grp_inactive",
+    )
+    assert res_inactive["linked"] is False
+    assert res_inactive["status"] == "GROUP_INACTIVE_OR_DELETED"
+    assert res_inactive["group_is_active"] is False
+    assert client_inactive.execute_query.await_count == 1

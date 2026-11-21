@@ -86,6 +86,10 @@ graph TD
     ImagingStudy -->|":REFERENCES_SERIES (SeriesInstanceUID)"| Series
     ImagingStudy -->|":REFERENCES_INSTANCE (SOPInstanceUID)"| Instance
     ServiceRequest -->|":FULFILLED_BY (Accession Number)"| Study
+
+    %% Group Tenancy Relationship (FHIR -> AuthZ Group)
+    Group["Group"]
+    Encounter -->|":BELONGS_TO (group_id)"| Group
 ```
 
 ### Cross-Domain Correlation Keys (DICOM $\leftrightarrow$ FHIR)

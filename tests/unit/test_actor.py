@@ -195,7 +195,7 @@ def test_dicom_ingestion_actor_does_not_notify_fhir_on_ingest_file_failure():
 
 
 def test_dicom_ingestion_actor_deduplicates_fhir_by_association_study_series_and_clears_on_release():
-    """Within an association, FHIR pull runs once per unique (association_id, study_uid, series_uid) and resets on release."""
+    """Within an association, FHIR pull runs once per (association_id, study_uid, series_uid) and resets on release."""
 
     def _make_hierarchy(study_uid: str, series_uid: str, sop_uid: str) -> DicomHierarchy:
         return DicomHierarchy(
@@ -627,9 +627,7 @@ def test_handle_c_store_audits_source_path_and_returns_0xa700_on_actor_handoff_f
 
 
 def test_fhir_ingestion_message_and_actor_validation():
-    msg = FhirIngestionMessage.model_validate(
-        {"study_uid": "1.2.3", "accession_number": None, "acted_by": None}
-    )
+    msg = FhirIngestionMessage.model_validate({"study_uid": "1.2.3", "accession_number": None, "acted_by": None})
     assert msg.study_uid == "1.2.3"
     assert msg.accession_number == ""
     assert msg.acted_by == "fhir_actor"
@@ -731,3 +729,213 @@ def test_notify_fhir_sends_pydantic_message():
     assert sent_msg.test_id == "test_1"
     assert sent_msg.acted_by == "scp"
     assert sent_msg.group_id == "grp_42"
+
+
+def test_fhir_actor_links_created_encounter_to_group():
+    """Verify FhirActor.on_receive creates BELONGS_TO from created Encounter to Group."""
+    from fhir.resources.R4B.encounter import Encounter
+
+    enc = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-actor-1",
+            "status": "finished",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+        }
+    )
+    resources = EncRelevantResources(encounter=enc)
+    mock_fhir = MagicMock()
+    mock_fhir.fetcher = MagicMock()
+    mock_fhir.fetcher.close = AsyncMock()
+    mock_fhir.fetch_relevant_resources_of_study = AsyncMock(return_value=resources)
+    mock_fhir.upsert_relevant_resources = AsyncMock(
+        return_value={
+            "nodes": [{"id": "enc-det-id-1", "label": "Encounter", "uid": "fhir:enc-actor-1", "action": "CREATE"}],
+            "relationships": [],
+            "node_ids": ["enc-det-id-1"],
+            "relationship_ids": [],
+        }
+    )
+    mock_fhir.link_encounter_to_group = AsyncMock(
+        return_value={
+            "linked": True,
+            "status": "LINKED",
+            "group_id": "grp_clinic_a",
+            "encounter_id": "enc-det-id-1",
+            "relationship": {
+                "id": "rel-belongs-to-1",
+                "type": "BELONGS_TO",
+                "start_node_id": "enc-det-id-1",
+                "end_node_id": "grp_clinic_a",
+                "action": "CREATE",
+            },
+        }
+    )
+
+    actor = FhirActor.start(fhir_service=mock_fhir)
+    try:
+        res = actor.ask(
+            FhirIngestionMessage(
+                patient_id="PT-1",
+                study_uid="1.2.840.1000",
+                series_uid="1.2.840.1000.1",
+                group_id="grp_clinic_a",
+                test_id="t_actor_link",
+                acted_by="tester",
+            ),
+            timeout=3.0,
+        )
+
+        assert res["success"] is True
+        assert res["status"] == "SUCCESS"
+        mock_fhir.link_encounter_to_group.assert_awaited_once_with(
+            encounter_id="enc-det-id-1",
+            group_id="grp_clinic_a",
+            test_id="t_actor_link",
+            acted_by="tester",
+        )
+        assert res["upsert_result"]["relationship_ids"] == ["rel-belongs-to-1"]
+        assert res["upsert_result"]["relationships"][0]["type"] == "BELONGS_TO"
+        assert res["upsert_result"]["relationships"][0]["start_node_id"] == "enc-det-id-1"
+        assert res["upsert_result"]["relationships"][0]["end_node_id"] == "grp_clinic_a"
+    finally:
+        actor.stop()
+
+
+@pytest.mark.parametrize("empty_group_id", [None, "", "   "])
+def test_fhir_actor_logs_error_and_continues_when_group_id_empty(empty_group_id):
+    """Verify empty group_id logs an error with group_id and continues FHIR ingestion."""
+    from fhir.resources.R4B.encounter import Encounter
+
+    enc = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-empty-grp-1",
+            "status": "finished",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+        }
+    )
+    mock_fhir = MagicMock()
+    mock_fhir.fetcher = MagicMock()
+    mock_fhir.fetcher.close = AsyncMock()
+    mock_fhir.fetch_relevant_resources_of_study = AsyncMock(return_value=EncRelevantResources(encounter=enc))
+    mock_fhir.upsert_relevant_resources = AsyncMock(
+        return_value={
+            "nodes": [{"id": "enc-det-empty", "label": "Encounter", "uid": "fhir:enc-empty-grp-1", "action": "CREATE"}],
+            "relationships": [],
+            "node_ids": ["enc-det-empty"],
+            "relationship_ids": [],
+        }
+    )
+    mock_fhir.link_encounter_to_group = AsyncMock()
+
+    actor = FhirActor.start(fhir_service=mock_fhir)
+    try:
+        with patch("gosmart_graphite.actor.fhir_actor.logger") as mock_logger:
+            res = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-EMPTY",
+                    study_uid="1.2.840.2000",
+                    series_uid="1.2.840.2000.1",
+                    group_id=empty_group_id,
+                    test_id="t_actor_empty_grp",
+                ),
+                timeout=3.0,
+            )
+
+        assert res["success"] is True
+        assert res["status"] == "SUCCESS"
+        assert res["upsert_result"]["node_ids"] == ["enc-det-empty"]
+        mock_fhir.upsert_relevant_resources.assert_awaited_once()
+        mock_fhir.link_encounter_to_group.assert_not_called()
+
+        error_calls = [
+            call
+            for call in mock_logger.error.call_args_list
+            if call.args and call.args[0] == "fhir_encounter_group_link_failed"
+        ]
+        assert len(error_calls) == 1
+        assert error_calls[0].kwargs["status"] == "EMPTY_GROUP_ID"
+        assert error_calls[0].kwargs["group_id"] == empty_group_id
+    finally:
+        actor.stop()
+
+
+@pytest.mark.parametrize(
+    ("link_status", "extra_fields"),
+    [
+        ("GROUP_NOT_FOUND", {}),
+        ("GROUP_INACTIVE_OR_DELETED", {"group_action": "DELETE", "group_is_active": False}),
+    ],
+)
+def test_fhir_actor_logs_error_and_continues_when_group_missing_or_inactive(link_status, extra_fields):
+    """Verify non-existing or soft-deleted/inactive group_id logs clear error with group_id and continues ingestion."""
+    from fhir.resources.R4B.encounter import Encounter
+
+    enc = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-bad-grp-1",
+            "status": "finished",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+        }
+    )
+    missing_group_id = "grp_nonexistent_42"
+    mock_fhir = MagicMock()
+    mock_fhir.fetcher = MagicMock()
+    mock_fhir.fetcher.close = AsyncMock()
+    mock_fhir.fetch_relevant_resources_of_study = AsyncMock(return_value=EncRelevantResources(encounter=enc))
+    mock_fhir.upsert_relevant_resources = AsyncMock(
+        return_value={
+            "nodes": [{"id": "enc-det-bad", "label": "Encounter", "uid": "fhir:enc-bad-grp-1", "action": "CREATE"}],
+            "relationships": [],
+            "node_ids": ["enc-det-bad"],
+            "relationship_ids": [],
+        }
+    )
+    mock_fhir.link_encounter_to_group = AsyncMock(
+        return_value={
+            "linked": False,
+            "status": link_status,
+            "group_id": missing_group_id,
+            "encounter_id": "enc-det-bad",
+            **extra_fields,
+        }
+    )
+
+    actor = FhirActor.start(fhir_service=mock_fhir)
+    try:
+        with patch("gosmart_graphite.actor.fhir_actor.logger") as mock_logger:
+            res = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-BAD-GRP",
+                    study_uid="1.2.840.3000",
+                    series_uid="1.2.840.3000.1",
+                    group_id=missing_group_id,
+                    test_id="t_actor_bad_grp",
+                ),
+                timeout=3.0,
+            )
+
+        assert res["success"] is True
+        assert res["status"] == "SUCCESS"
+        assert res["upsert_result"]["node_ids"] == ["enc-det-bad"]
+        assert res["upsert_result"]["relationship_ids"] == []
+        mock_fhir.link_encounter_to_group.assert_awaited_once()
+
+        error_calls = [
+            call
+            for call in mock_logger.error.call_args_list
+            if call.args and call.args[0] == "fhir_encounter_group_link_failed"
+        ]
+        assert len(error_calls) == 1
+        assert error_calls[0].kwargs["status"] == link_status
+        assert error_calls[0].kwargs["group_id"] == missing_group_id
+        if link_status == "GROUP_INACTIVE_OR_DELETED":
+            assert error_calls[0].kwargs["group_action"] == "DELETE"
+            assert error_calls[0].kwargs["group_is_active"] is False
+            assert "soft-deleted or inactive" in error_calls[0].kwargs["reason"]
+        else:
+            assert "does not exist" in error_calls[0].kwargs["reason"]
+    finally:
+        actor.stop()

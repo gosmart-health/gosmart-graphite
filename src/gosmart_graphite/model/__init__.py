@@ -116,6 +116,13 @@ from gosmart_graphite.model.graph import (
 )
 from gosmart_graphite.model.health import HealthResponse, ServiceHealth
 from gosmart_graphite.model.media import MediaMetadata, ParsedStorageUri, StorageScheme
+from gosmart_graphite.model.result import (
+    STATUS_BAD_DATA,
+    STATUS_BAD_REQUEST,
+    STATUS_INTERNAL_ERROR,
+    STATUS_OK,
+    Result,
+)
 from gosmart_graphite.model.system import (
     DICOMConfigurationCreateRequest,
     DICOMConfigurationResponse,
@@ -170,6 +177,11 @@ __all__ = [
     "StorageScheme",
     "ParsedStorageUri",
     "MediaMetadata",
+    "STATUS_OK",
+    "STATUS_BAD_REQUEST",
+    "STATUS_BAD_DATA",
+    "STATUS_INTERNAL_ERROR",
+    "Result",
     "SystemResponse",
     "SystemUpdateRequest",
     "DICOMConfigurationResponse",

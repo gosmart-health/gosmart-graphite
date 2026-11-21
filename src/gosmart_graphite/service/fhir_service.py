@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
+from gosmart_graphite.model.auth import BelongsToRelation
 from gosmart_graphite.model.fhir import (
     BasedOnRelation,
     BasedOnStudyRelation,
@@ -1514,7 +1515,9 @@ class FhirService:
                                 separators=(",", ":"),
                             )
                     return existing_practitioner
-                practitioner_stub = reference_to_practitioner_node(res_id, display=display, test_id=test_id, acted_by=acted_by)
+                practitioner_stub = reference_to_practitioner_node(
+                    res_id, display=display, test_id=test_id, acted_by=acted_by
+                )
                 practitioner_map[key2] = practitioner_stub
                 stub_node_ids.add(practitioner_stub.id)
                 nodes.append(practitioner_stub)
@@ -2246,6 +2249,133 @@ class FhirService:
             "relationships": upserted_relations,
             "node_ids": [n["id"] for n in upserted_nodes],
             "relationship_ids": [r["id"] for r in upserted_relations],
+        }
+
+    async def link_encounter_to_group(
+        self,
+        encounter_id: str,
+        group_id: str,
+        test_id: Optional[str] = None,
+        acted_by: str = "fhir_actor",
+    ) -> dict[str, Any]:
+        """Create an idempotent (:Encounter)-[:BELONGS_TO]->(:Group) relationship in Neo4j.
+
+        Returns a structured status dictionary distinguishing:
+        - ``LINKED``: Active Encounter and active non-deleted Group matched and linked.
+        - ``GROUP_NOT_FOUND``: No ``:Group`` node exists with ``id == group_id``.
+        - ``GROUP_INACTIVE_OR_DELETED``: ``:Group`` node exists but is soft-deleted
+          (``Action == 'DELETE'``) or inactive (``is_active == False``).
+        - ``ENCOUNTER_NOT_FOUND``: Target ``:Encounter`` node was not found or Group
+          became unavailable before merge.
+        """
+        group_records = await self.client.execute_query(
+            """
+            MATCH (g:Group {id: $group_id})
+            RETURN g.id AS id,
+                   g.Action AS action,
+                   coalesce(g.is_active, true) AS is_active
+            LIMIT 1
+            """,
+            {"group_id": group_id},
+        )
+        if not group_records:
+            return {
+                "linked": False,
+                "status": "GROUP_NOT_FOUND",
+                "group_id": group_id,
+                "encounter_id": encounter_id,
+                "reason": "Group node does not exist",
+            }
+
+        grp = group_records[0]
+        group_action = grp.get("action")
+        group_is_active = grp.get("is_active")
+        if group_action == "DELETE" or group_is_active is False:
+            return {
+                "linked": False,
+                "status": "GROUP_INACTIVE_OR_DELETED",
+                "group_id": group_id,
+                "encounter_id": encounter_id,
+                "group_action": group_action,
+                "group_is_active": group_is_active,
+                "reason": "Group node is soft-deleted or inactive",
+            }
+
+        rel = BelongsToRelation(
+            start_node_id=encounter_id,
+            end_node_id=group_id,
+            test_id=test_id,
+            ActedBy=acted_by,
+        )
+        expires_at = rel.ExpiresAt.isoformat() if rel.ExpiresAt else None
+        op_token = uuid.uuid4().hex
+        rel_query = """
+        MATCH (e:Encounter {id: $encounter_id})
+        WHERE (e.Action IS NULL OR e.Action <> 'DELETE')
+        MATCH (g:Group {id: $group_id})
+        WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
+          AND coalesce(g.is_active, true) = true
+        MERGE (e)-[r:BELONGS_TO {id: $id}]->(g)
+        ON CREATE SET r.test_id = $test_id,
+                      r.Action = "CREATE",
+                      r.ActedAt = datetime({timezone: 'UTC'}),
+                      r.ActedBy = $acted_by,
+                      r.CreatedAt = datetime({timezone: 'UTC'}),
+                      r.ExpiresAt = CASE WHEN $expires_at IS NOT NULL THEN datetime($expires_at) ELSE null END,
+                      r._op_token = $op_token
+        WITH e, g, r, (coalesce(r._op_token, '') = $op_token) AS was_created
+        FOREACH (_ IN CASE WHEN was_created THEN [1] ELSE [] END |
+            REMOVE r._op_token
+        )
+        RETURN r.id AS id,
+               type(r) AS type,
+               e.id AS start_node_id,
+               g.id AS end_node_id,
+               CASE WHEN was_created THEN "CREATE" ELSE "UNCHANGED" END AS action
+        """
+        records = await self.client.execute_query(
+            rel_query,
+            {
+                "id": rel.id,
+                "encounter_id": encounter_id,
+                "group_id": group_id,
+                "test_id": rel.test_id,
+                "acted_by": acted_by,
+                "expires_at": expires_at,
+                "op_token": op_token,
+            },
+        )
+        if not records:
+            return {
+                "linked": False,
+                "status": "ENCOUNTER_NOT_FOUND",
+                "group_id": group_id,
+                "encounter_id": encounter_id,
+                "reason": "Encounter node not found or Group became unavailable",
+            }
+
+        rec = records[0]
+        rel_info = {
+            "id": rec["id"],
+            "type": rec["type"],
+            "start_node_id": rec["start_node_id"],
+            "end_node_id": rec["end_node_id"],
+            "action": rec["action"],
+        }
+        logger.info(
+            "fhir_relation_upserted",
+            relation_id=rel_info["id"],
+            type=rel_info["type"],
+            start_node_id=rel_info["start_node_id"],
+            end_node_id=rel_info["end_node_id"],
+            action=rel_info["action"],
+        )
+        return {
+            "linked": True,
+            "status": "LINKED",
+            "group_id": group_id,
+            "encounter_id": encounter_id,
+            "relationship": rel_info,
         }
 
     async def cleanup_upserted_resources(

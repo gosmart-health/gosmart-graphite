@@ -223,7 +223,8 @@ async def test_upsert_relevant_resources_with_cross_domain_and_cleanup_toggle():
         assert all(r["action"] == "UNCHANGED" for r in res3["relationships"])
 
         sr_rows = await neo4j_client.execute_query(
-            "MATCH (sr:ServiceRequest {uid: $uid}) RETURN sr.status AS status, sr.Action AS action, sr.UpdatedAt AS updated_at",
+            "MATCH (sr:ServiceRequest {uid: $uid}) "
+            "RETURN sr.status AS status, sr.Action AS action, sr.UpdatedAt AS updated_at",
             {"uid": f"fhir:{test_id}:sr-cross-1"},
         )
         assert len(sr_rows) == 1
@@ -392,3 +393,238 @@ async def test_upsert_stub_non_clobbering_and_upgrade():
                 relationship_ids=res1["relationship_ids"],
                 enabled=all_configs["cleanup_enable"],
             )
+
+
+@pytest.mark.anyio
+async def test_fhir_actor_encounter_belongs_to_group_integration():
+    """Verify FhirActor creates idempotent (:Encounter)-[:BELONGS_TO]->(:Group) and handles boundary cases."""
+    from unittest.mock import AsyncMock, patch
+
+    from gosmart_graphite.actor.fhir_actor import FhirActor
+    from gosmart_graphite.model.actor_message import FhirIngestionMessage
+    from gosmart_graphite.model.auth import BelongsToRelation, GroupNode
+
+    if not await neo4j_client.verify_connectivity():
+        pytest.skip(f"Neo4j database is not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
+
+    test_id = "test_fhir_actor_encounter_belongs_to_group"
+    svc = FhirService()
+
+    # Clean up prior test-generated data BEFORE the test (retain after test for inspection)
+    await svc.cleanup_upserted_resources(test_id=test_id)
+
+    active_group = GroupNode(
+        name="FHIR Actor Active Clinic",
+        code="FHIR_ACTOR_ACTIVE_GRP",
+        group_type="FACILITY",
+        is_active=True,
+        test_id=test_id,
+        ActedBy="pytest",
+    )
+    inactive_group = GroupNode(
+        name="FHIR Actor Soft-Deleted Clinic",
+        code="FHIR_ACTOR_INACTIVE_GRP",
+        group_type="FACILITY",
+        is_active=False,
+        Action="DELETE",
+        test_id=test_id,
+        ActedBy="pytest",
+    )
+
+    for grp in (active_group, inactive_group):
+        await neo4j_client.execute_query(
+            """
+            MERGE (g:Group {id: $id})
+            SET g.name = $name,
+                g.code = $code,
+                g.group_type = $group_type,
+                g.is_active = $is_active,
+                g.test_id = $test_id,
+                g.Action = $action,
+                g.ActedAt = datetime({timezone: 'UTC'}),
+                g.ActedBy = 'pytest',
+                g.CreatedAt = datetime({timezone: 'UTC'})
+            """,
+            {
+                "id": grp.id,
+                "name": grp.name,
+                "code": grp.code,
+                "group_type": grp.group_type,
+                "is_active": grp.is_active,
+                "test_id": test_id,
+                "action": grp.Action,
+            },
+        )
+
+    def _make_resources(enc_res_id: str) -> EncRelevantResources:
+        return EncRelevantResources(
+            encounter=Encounter.model_validate(
+                {
+                    "resourceType": "Encounter",
+                    "id": enc_res_id,
+                    "status": "finished",
+                    "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+                }
+            )
+        )
+
+    actor_svc = FhirService()
+    actor = FhirActor.start(fhir_service=actor_svc)
+    try:
+        # 1. Active group -> creates BELONGS_TO, second pass is idempotent (UNCHANGED)
+        with patch.object(
+            actor_svc,
+            "fetch_relevant_resources_of_study",
+            new=AsyncMock(return_value=_make_resources("enc-grp-active-1")),
+        ):
+            res_first = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-GRP-1",
+                    study_uid="1.2.840.9999.101",
+                    series_uid="1.2.840.9999.101.1",
+                    group_id=active_group.id,
+                    test_id=test_id,
+                    acted_by="pytest",
+                ),
+                timeout=10.0,
+            )
+            res_second = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-GRP-1",
+                    study_uid="1.2.840.9999.101",
+                    series_uid="1.2.840.9999.101.1",
+                    group_id=active_group.id,
+                    test_id=test_id,
+                    acted_by="pytest",
+                ),
+                timeout=10.0,
+            )
+
+        assert res_first["success"] is True
+        assert res_second["success"] is True
+        enc_node_id = res_first["upsert_result"]["nodes"][0]["id"]
+        expected_rel_id = BelongsToRelation(start_node_id=enc_node_id, end_node_id=active_group.id).id
+        assert expected_rel_id in res_first["upsert_result"]["relationship_ids"]
+        assert res_first["upsert_result"]["relationships"][-1]["action"] == "CREATE"
+        assert res_second["upsert_result"]["relationships"][-1]["action"] == "UNCHANGED"
+
+        edge_rows = await neo4j_client.execute_query(
+            """
+            MATCH (e:Encounter {id: $enc_id})-[r:BELONGS_TO]->(g:Group {id: $grp_id})
+            RETURN r.id AS id, r.test_id AS test_id, r.Action AS action, r.ActedBy AS acted_by
+            """,
+            {"enc_id": enc_node_id, "grp_id": active_group.id},
+        )
+        assert len(edge_rows) == 1
+        assert edge_rows[0]["id"] == expected_rel_id
+        assert edge_rows[0]["test_id"] == test_id
+        assert edge_rows[0]["action"] == "CREATE"
+        assert edge_rows[0]["acted_by"] == "pytest"
+
+        # 2. Soft-deleted / inactive group -> logs error clearly, continues ingestion without BELONGS_TO
+        with (
+            patch.object(
+                actor_svc,
+                "fetch_relevant_resources_of_study",
+                new=AsyncMock(return_value=_make_resources("enc-grp-inactive-1")),
+            ),
+            patch("gosmart_graphite.actor.fhir_actor.logger") as mock_logger,
+        ):
+            res_inactive = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-GRP-2",
+                    study_uid="1.2.840.9999.102",
+                    series_uid="1.2.840.9999.102.1",
+                    group_id=inactive_group.id,
+                    test_id=test_id,
+                    acted_by="pytest",
+                ),
+                timeout=10.0,
+            )
+
+        assert res_inactive["success"] is True
+        inactive_enc_id = res_inactive["upsert_result"]["nodes"][0]["id"]
+        err_calls = [
+            c for c in mock_logger.error.call_args_list if c.args and c.args[0] == "fhir_encounter_group_link_failed"
+        ]
+        assert len(err_calls) == 1
+        assert err_calls[0].kwargs["status"] == "GROUP_INACTIVE_OR_DELETED"
+        assert err_calls[0].kwargs["group_id"] == inactive_group.id
+        inactive_edges = await neo4j_client.execute_query(
+            "MATCH (e:Encounter {id: $enc_id})-[r:BELONGS_TO]->(:Group) RETURN r.id AS id",
+            {"enc_id": inactive_enc_id},
+        )
+        assert inactive_edges == []
+
+        # 3. Non-existing group -> logs error clearly, continues ingestion without BELONGS_TO
+        missing_grp_id = "grp-does-not-exist-9999"
+        with (
+            patch.object(
+                actor_svc,
+                "fetch_relevant_resources_of_study",
+                new=AsyncMock(return_value=_make_resources("enc-grp-missing-1")),
+            ),
+            patch("gosmart_graphite.actor.fhir_actor.logger") as mock_logger,
+        ):
+            res_missing = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-GRP-3",
+                    study_uid="1.2.840.9999.103",
+                    series_uid="1.2.840.9999.103.1",
+                    group_id=missing_grp_id,
+                    test_id=test_id,
+                    acted_by="pytest",
+                ),
+                timeout=10.0,
+            )
+
+        assert res_missing["success"] is True
+        missing_enc_id = res_missing["upsert_result"]["nodes"][0]["id"]
+        err_calls = [
+            c for c in mock_logger.error.call_args_list if c.args and c.args[0] == "fhir_encounter_group_link_failed"
+        ]
+        assert len(err_calls) == 1
+        assert err_calls[0].kwargs["status"] == "GROUP_NOT_FOUND"
+        assert err_calls[0].kwargs["group_id"] == missing_grp_id
+        missing_edges = await neo4j_client.execute_query(
+            "MATCH (e:Encounter {id: $enc_id})-[r:BELONGS_TO]->(:Group) RETURN r.id AS id",
+            {"enc_id": missing_enc_id},
+        )
+        assert missing_edges == []
+
+        # 4. Empty group_id -> logs error clearly, continues ingestion without BELONGS_TO
+        with (
+            patch.object(
+                actor_svc,
+                "fetch_relevant_resources_of_study",
+                new=AsyncMock(return_value=_make_resources("enc-grp-empty-1")),
+            ),
+            patch("gosmart_graphite.actor.fhir_actor.logger") as mock_logger,
+        ):
+            res_empty = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-GRP-4",
+                    study_uid="1.2.840.9999.104",
+                    series_uid="1.2.840.9999.104.1",
+                    group_id="",
+                    test_id=test_id,
+                    acted_by="pytest",
+                ),
+                timeout=10.0,
+            )
+
+        assert res_empty["success"] is True
+        empty_enc_id = res_empty["upsert_result"]["nodes"][0]["id"]
+        err_calls = [
+            c for c in mock_logger.error.call_args_list if c.args and c.args[0] == "fhir_encounter_group_link_failed"
+        ]
+        assert len(err_calls) == 1
+        assert err_calls[0].kwargs["status"] == "EMPTY_GROUP_ID"
+        assert err_calls[0].kwargs["group_id"] == ""
+        empty_edges = await neo4j_client.execute_query(
+            "MATCH (e:Encounter {id: $enc_id})-[r:BELONGS_TO]->(:Group) RETURN r.id AS id",
+            {"enc_id": empty_enc_id},
+        )
+        assert empty_edges == []
+    finally:
+        actor.stop()

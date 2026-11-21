@@ -168,7 +168,7 @@ class MemberOfRelation(AuditableRelation):
 
 
 class BelongsToRelation(AuditableRelation):
-    """Relationship connecting Patient -> Group, Child Group -> Parent Group, or Root Group -> System."""
+    """Relationship connecting Patient/Encounter -> Group, Child Group -> Parent Group, or Root Group -> System."""
 
     __type__: ClassVar[str] = "BELONGS_TO"
 

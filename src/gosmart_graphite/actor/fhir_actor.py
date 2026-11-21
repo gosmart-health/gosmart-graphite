@@ -17,8 +17,9 @@ class FhirActor(pykka.ThreadingActor):
     Receives a FhirIngestionMessage (or compatible dict) with patient_id,
     accession_number, study_uid, series_uid, and group_id, resolves the
     group-scoped FHIRConfiguration (falling back to global settings), fetches
-    the associated FHIR encounter resource bundle, and registers nodes and
-    cross-domain DICOM relationships (including :Patient -[:SAME_AS]-> :FHIR_Patient)
+    the associated FHIR encounter resource bundle, registers nodes and
+    cross-domain DICOM relationships (including :Patient -[:SAME_AS]-> :FHIR_Patient),
+    and links created :Encounter nodes to their target :Group via :BELONGS_TO
     into Neo4j.
     """
 
@@ -121,6 +122,124 @@ class FhirActor(pykka.ThreadingActor):
             or resources.practitioners
         )
 
+    def _link_encounters_to_group(
+        self,
+        upsert_result: Dict[str, Any],
+        fhir: FhirService,
+        group_id: Optional[str],
+        study_uid: str,
+        series_uid: str,
+        test_id: Optional[str],
+        acted_by: str,
+    ) -> None:
+        """Link upserted Encounter node(s) to the target Group via BELONGS_TO.
+
+        Logs an error and allows ingestion to continue if group_id is empty,
+        references a non-existing Group node, or references a soft-deleted/inactive Group.
+        """
+        encounter_ids = [
+            node["id"]
+            for node in upsert_result.get("nodes", [])
+            if isinstance(node, dict) and node.get("label") == "Encounter" and node.get("id")
+        ]
+        normalized_group_id = group_id.strip() if isinstance(group_id, str) else ""
+
+        if not normalized_group_id:
+            logger.error(
+                "fhir_encounter_group_link_failed",
+                status="EMPTY_GROUP_ID",
+                reason="group_id is empty; skipping Encounter BELONGS_TO Group relationship and continuing ingestion",
+                group_id=group_id,
+                encounter_ids=encounter_ids,
+                study_uid=study_uid,
+                series_uid=series_uid,
+            )
+            return
+
+        if not encounter_ids or not self._loop:
+            return
+
+        for encounter_id in encounter_ids:
+            try:
+                link_result = self._loop.run_until_complete(
+                    fhir.link_encounter_to_group(
+                        encounter_id=encounter_id,
+                        group_id=normalized_group_id,
+                        test_id=test_id,
+                        acted_by=acted_by,
+                    )
+                )
+            except Exception as link_err:
+                logger.error(
+                    "fhir_encounter_group_link_failed",
+                    status="LINK_ERROR",
+                    reason="Unexpected error linking Encounter to Group via BELONGS_TO; continuing ingestion",
+                    group_id=normalized_group_id,
+                    encounter_id=encounter_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                    error=str(link_err),
+                    exc_info=True,
+                )
+                continue
+
+            if link_result.get("linked") and link_result.get("relationship"):
+                rel_info = link_result["relationship"]
+                upsert_result.setdefault("relationships", []).append(rel_info)
+                rel_ids = upsert_result.setdefault("relationship_ids", [])
+                if rel_info["id"] not in rel_ids:
+                    rel_ids.append(rel_info["id"])
+                logger.info(
+                    "fhir_encounter_linked_to_group",
+                    encounter_id=encounter_id,
+                    group_id=normalized_group_id,
+                    relation_id=rel_info["id"],
+                    action=rel_info["action"],
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                )
+            elif link_result.get("status") == "GROUP_INACTIVE_OR_DELETED":
+                logger.error(
+                    "fhir_encounter_group_link_failed",
+                    status="GROUP_INACTIVE_OR_DELETED",
+                    reason=(
+                        "Group node is soft-deleted or inactive (possible misconfiguration or inadvertent removal); "
+                        "skipping Encounter BELONGS_TO Group relationship and continuing ingestion"
+                    ),
+                    group_id=normalized_group_id,
+                    group_action=link_result.get("group_action"),
+                    group_is_active=link_result.get("group_is_active"),
+                    encounter_id=encounter_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                )
+            elif link_result.get("status") == "GROUP_NOT_FOUND":
+                logger.error(
+                    "fhir_encounter_group_link_failed",
+                    status="GROUP_NOT_FOUND",
+                    reason=(
+                        "Group node does not exist for group_id; "
+                        "skipping Encounter BELONGS_TO Group relationship and continuing ingestion"
+                    ),
+                    group_id=normalized_group_id,
+                    encounter_id=encounter_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                )
+            else:
+                logger.error(
+                    "fhir_encounter_group_link_failed",
+                    status=link_result.get("status", "UNKNOWN"),
+                    reason=link_result.get(
+                        "reason",
+                        "Failed to link Encounter to Group via BELONGS_TO; continuing ingestion",
+                    ),
+                    group_id=normalized_group_id,
+                    encounter_id=encounter_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                )
+
     def on_receive(self, message: Any) -> Any:
         """Handle incoming FhirIngestionMessage (or control/dict payload)."""
         if isinstance(message, FhirIngestionMessage):
@@ -192,6 +311,15 @@ class FhirActor(pykka.ThreadingActor):
                         )
                     )
                     if upsert_result:
+                        self._link_encounters_to_group(
+                            upsert_result=upsert_result,
+                            fhir=fhir,
+                            group_id=group_id,
+                            study_uid=study_uid,
+                            series_uid=series_uid,
+                            test_id=test_id,
+                            acted_by=acted_by,
+                        )
                         logger.info(
                             "fhir_graph_registered",
                             study_uid=study_uid,

@@ -105,6 +105,7 @@ graph TD
 * `(:Group)-[:BELONGS_TO]->(:Group)` *(and root catch-all `(:Group {name: 'GoSmart Health'})-[:BELONGS_TO]->(:System)`)*
 * `(:Study)-[:PERFORMED_AT]->(:Group)`
 * `(:Patient)-[:BELONGS_TO]->(:Group)`
+* `(:Encounter)-[:BELONGS_TO]->(:Group)` *(created by `FhirActor` during FHIR ingestion when `group_id` resolves to an active, non-deleted `Group`; empty, missing, or soft-deleted/inactive groups log an error while continuing ingestion)*
 * `(:DICOMConfiguration)-[:SCOPED_TO]->(:Group)`
 * `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` *(upward traversal via `BELONGS_TO*0..` over `:Group` nodes resolves active group LLM settings with `'GoSmart Health'` fallback; negated as `NOT_HAS_LLM_CONFIG`)*
 
