@@ -60,7 +60,7 @@ def test_dicom_ingestion_message_validation():
         {"file_path": Path("/tmp/test.dcm"), "acted_by": None, "association_id": "   "}
     )
     assert msg.type == "INGEST_FILE"
-    assert msg.file_path == "/tmp/test.dcm"
+    assert Path(msg.file_path).as_posix() == "/tmp/test.dcm"
     assert msg.acted_by == "actor"
     assert msg.group_id is None
     assert msg.storage_root_uri is None
