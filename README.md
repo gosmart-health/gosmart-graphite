@@ -125,7 +125,8 @@ gosmart-graphite/
 ├── .env.example                      # Environment variable template
 ├── .github/workflows/ci.yml          # CI pipeline (lint, audit, SBOM, tests, Docker build)
 ├── pyproject.toml                    # Project metadata, scripts, and dependencies
-├── start.sh                          # Local development launch script
+├── start.ps1                         # Local development launch script (PowerShell)
+├── start.sh                          # Local development launch script (POSIX)
 └── uv.lock                           # Locked dependency versions
 ```
 
@@ -277,9 +278,15 @@ You can register initial DICOM, FHIR, and LLM configurations in Neo4j before sta
 
 Ensure `.env` is configured and Neo4j is running, then launch GRAPHITE:
 
-```bash
-./start.sh
-```
+- On Linux/macOS:
+  ```bash
+  ./start.sh
+  ```
+
+- On Windows (PowerShell):
+  ```powershell
+  .\start.ps1
+  ```
 
 Interactive API documentation will be available at:
 
