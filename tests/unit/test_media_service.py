@@ -136,7 +136,7 @@ def test_cloud_credentials_resolution(monkeypatch):
 async def test_local_read_all_10_mr_files(mr_files: list[Path]):
     """Test reading all 10 MR DICOM files using async media_service.read."""
     for file_path in mr_files:
-        uri = f"file://{file_path.resolve()}"
+        uri = f"file://{file_path.resolve().as_posix()}"
         data = await media_service.read(uri)
         assert len(data) == file_path.stat().st_size
         assert data.startswith(b"\x00" * 128 + b"DICM") or b"DICM" in data[:132]
@@ -149,7 +149,7 @@ async def test_local_read_dicom_all_10_mr_files(mr_files: list[Path]):
     sop_uids = set()
 
     for file_path in mr_files:
-        uri = f"file://{file_path.resolve()}"
+        uri = f"file://{file_path.resolve().as_posix()}"
         ds = await media_service.read_dicom(uri)
 
         # Validate DICOM header attributes
@@ -218,7 +218,7 @@ async def test_local_write_stat_list_delete_cycle(mr_files: list[Path]):
 async def test_local_write_dicom_dataset(mr_files: list[Path]):
     """Test serializing and writing a pydicom Dataset directly via media_service.write_dicom."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        src_uri = f"file://{mr_files[0].resolve()}"
+        src_uri = f"file://{mr_files[0].resolve().as_posix()}"
         ds = await media_service.read_dicom(src_uri)
 
         # Modify an attribute
@@ -285,7 +285,7 @@ async def test_gcs_operations_with_all_10_mr_files(mr_files: list[Path]):
 
     # 6. Cross-storage copy: GCS -> Local
     with tempfile.TemporaryDirectory() as tmpdir:
-        local_dst = f"file://{(Path(tmpdir) / 'downloaded.dcm').resolve()}"
+        local_dst = f"file://{(Path(tmpdir) / 'downloaded.dcm').resolve().as_posix()}"
         await svc.copy(first_gcs, local_dst)
         assert await svc.exists(local_dst)
         ds_local = await svc.read_dicom(local_dst)
@@ -421,7 +421,7 @@ def test_async_method_called_from_separate_thread_with_run_sync(mr_files: list[P
 
     def worker_job():
         # This runs in a new OS thread without an asyncio event loop, exactly like a Pykka ThreadingActor
-        uri = f"file://{mr_files[0].resolve()}"
+        uri = f"file://{mr_files[0].resolve().as_posix()}"
         # Test calling run_sync directly
         data = media_service.run_sync(media_service.read(uri))
         assert len(data) == mr_files[0].stat().st_size
