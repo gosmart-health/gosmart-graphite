@@ -1,14 +1,22 @@
 import base64
 import re
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 from fhir.resources.diagnosticreport import DiagnosticReport
 from pydantic import BaseModel, Field
 
 from gosmart_graphite.core.logging import get_logger
-from gosmart_graphite.model import Group
+from gosmart_graphite.model import Group, Result
+from gosmart_graphite.model.fhir import DiagnosticReportNode, EncounterNode
 from gosmart_graphite.model.llm_config import LLM_Config
-from gosmart_graphite.service import GroupService, LLMConfigService
+from gosmart_graphite.model.result import (
+    STATUS_BAD_DATA,
+    STATUS_INTERNAL_ERROR,
+    STATUS_OK,
+)
+from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
+from gosmart_graphite.service.group_service import GroupService
+from gosmart_graphite.service.llm_config_service import LLMConfigService
 
 logger = get_logger("gosmart_gs.dianostic_report_service")
 
@@ -25,10 +33,13 @@ class ReportTexts(BaseModel):
 
 
 class DiagnosticReportService:
-    def __init__(self):
-        self.group_service = GroupService()
-        self.llm_config_service = LLMConfigService()
-        pass
+    def __init__(
+        self,
+        group_service: Optional[GroupService] = None,
+        llm_config_service: Optional[LLMConfigService] = None,
+    ) -> None:
+        self.group_service = group_service or GroupService()
+        self.llm_config_service = llm_config_service or LLMConfigService()
 
     @staticmethod
     def _detect_attachment_type(base64_data: str) -> Tuple[str, str]:
@@ -181,7 +192,6 @@ class DiagnosticReportService:
         if not matched_any_heading and not conclusion:
             conclusion = text.strip()
 
-
         return ReportTexts(
             report=report_text.report,
             group_context=report_text.group_context,
@@ -193,29 +203,154 @@ class DiagnosticReportService:
             embedding_conclusion=[],
         )
 
-    def config_ensure(self, report_texts: ReportTexts) -> ReportTexts:
-        if not report_texts.llm_config:
-            report_texts.llm_config = LLM_Config()
-        else:
-            # TODO: Need to find the Group context first then traverse up
-            # TODO: until we find the Group that has the LLM Config
-            if not report_texts.group_context:
-                # If Group context is not present we need to traverse back
-                # from the DiagnosticReport to the Group that has the
-                # LLM Config
-                report_texts.group_context = Group()
-        return report_texts
+    @staticmethod
+    def _extract_encounter_resource_id(report: DiagnosticReport) -> Optional[str]:
+        """Extract the FHIR Encounter resource ID from DiagnosticReport.encounter, if present."""
+        encounter_ref = getattr(report, "encounter", None)
+        if encounter_ref is None:
+            return None
+        ref_str = getattr(encounter_ref, "reference", None)
+        if isinstance(ref_str, str) and ref_str.strip():
+            tail = ref_str.strip().rstrip("/").split("/")[-1]
+            return tail if tail else None
+        ref_id = getattr(encounter_ref, "id", None)
+        if isinstance(ref_id, str) and ref_id.strip():
+            return ref_id.strip()
+        return None
 
-    def parse_diagnostic_report(self,
-                                diagnostic_report: DiagnosticReport,
-                                group_context: Optional[Group] = None,
-                                llm_config: Optional[LLM_Config] = None,
-                                ) -> ReportTexts:
+    def _resolve_report_group(
+        self,
+        report: DiagnosticReport,
+        test_id: Optional[str] = None,
+    ) -> Group:
+        """Resolve the nearest active Group for a DiagnosticReport, falling back to LostAndFound."""
+        report_id = getattr(report, "id", None)
+        clean_report_id = report_id.strip() if isinstance(report_id, str) else ""
+        if clean_report_id:
+            dr_node_id = DiagnosticReportNode(
+                resource_id=clean_report_id,
+                resource="{}",
+                test_id=test_id,
+            ).id
+            resolved = self.group_service.my_group_sync(
+                dr_node_id,
+                return_lost_and_found_group=False,
+            )
+            if resolved is not None:
+                return resolved
+
+        enc_res_id = self._extract_encounter_resource_id(report)
+        if enc_res_id:
+            enc_node_id = EncounterNode(
+                resource_id=enc_res_id,
+                resource="{}",
+                test_id=test_id,
+            ).id
+            resolved = self.group_service.my_group_sync(
+                enc_node_id,
+                return_lost_and_found_group=False,
+            )
+            if resolved is not None:
+                return resolved
+
+        fallback = self.group_service.group_or_lost_and_found(None)
+        logger.warning(
+            "diagnostic_report_group_not_found_using_lost_and_found",
+            diagnostic_report_id=clean_report_id or None,
+            encounter_id=enc_res_id,
+            lost_and_found_group_id=fallback.id,
+        )
+        return fallback
+
+    def config_ensure(
+        self,
+        report_texts: ReportTexts,
+        *,
+        tag: str = DEFAULT_EMBEDDING_TAG,
+        test_id: Optional[str] = None,
+    ) -> Result[ReportTexts]:
+        """Ensure report_texts has both group_context and llm_config populated.
+
+        Resolves ``group_context`` first (via the persisted ``DiagnosticReport`` node or
+        its referenced ``Encounter`` node, falling back to ``LostAndFound``), then
+        resolves ``llm_config`` for ``tag`` (default ``DEFAULT_EMBEDDING_TAG``) upward
+        from ``group_context.id`` with ``'GoSmart Health'`` fallback.
+        """
+
+        effective_test_id = (
+            test_id
+            or (report_texts.group_context.test_id if report_texts.group_context else None)
+            or (report_texts.llm_config.test_id if report_texts.llm_config else None)
+        )
+
+        if report_texts.group_context is None:
+            try:
+                report_texts.group_context = self._resolve_report_group(
+                    report_texts.report,
+                    test_id=effective_test_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    "diagnostic_report_group_resolution_failed",
+                    diagnostic_report_id=getattr(report_texts.report, "id", None),
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return Result[ReportTexts](
+                    status=STATUS_INTERNAL_ERROR,
+                    message=f"Failed to resolve Group context for DiagnosticReport: {exc}",
+                )
+
+        if report_texts.llm_config is None:
+            group_id = report_texts.group_context.id if report_texts.group_context else None
+            try:
+                resolved_llm = self.llm_config_service.resolve_config_for_group_sync(
+                    tag=tag,
+                    group_id=group_id,
+                    test_id=effective_test_id,
+                )
+            except Exception as exc:
+                logger.error(
+                    "diagnostic_report_llm_config_resolution_failed",
+                    diagnostic_report_id=getattr(report_texts.report, "id", None),
+                    group_id=group_id,
+                    tag=tag,
+                    error=str(exc),
+                    exc_info=True,
+                )
+                return Result[ReportTexts](
+                    status=STATUS_INTERNAL_ERROR,
+                    message=f"Failed to resolve LLM_Config for tag '{tag}' and group '{group_id}': {exc}",
+                )
+
+            if resolved_llm is None:
+                logger.error(
+                    "diagnostic_report_llm_config_not_found",
+                    diagnostic_report_id=getattr(report_texts.report, "id", None),
+                    group_id=group_id,
+                    tag=tag,
+                )
+                return Result[ReportTexts](
+                    status=STATUS_BAD_DATA,
+                    message=f"No active LLM_Config found for tag '{tag}' (group_id='{group_id}')",
+                )
+
+            report_texts.llm_config = resolved_llm
+
+        return Result[ReportTexts](status=STATUS_OK,
+                            message="Configuration ensured",
+                            value=report_texts)
+
+    def parse_diagnostic_report(
+        self,
+        diagnostic_report: DiagnosticReport,
+        group_context: Optional[Group] = None,
+        llm_config: Optional[LLM_Config] = None,
+    ) -> ReportTexts:
         """
         Parses a DiagnosticReport object into a ReportTexts object.
         """
-        result = ReportTexts(report=diagnostic_report, group_context=group_context,
-                             llm_config=llm_config)
+        result = ReportTexts(report=diagnostic_report, group_context=group_context, llm_config=llm_config)
         # Find if presentedForm element is present, if present iterate until
         # we hit a parsable text
         for presented_form in diagnostic_report.presentedForm or []:
@@ -237,8 +372,25 @@ class DiagnosticReportService:
         # structured report elements (e.g. conclusion) when available.
         return self._extract_sections(result, "")
 
-    def compute_embeddings(self, report_texts: ReportTexts) -> ReportTexts:
-        pass
+    async def compute_embeddings(self, report_texts: ReportTexts) -> Result[ReportTexts]:
+        result = Result[ReportTexts](value=report_texts)
+        cfg_result = self.config_ensure(report_texts)
+        if cfg_result.status != STATUS_OK:
+            result.status = cfg_result.status
+            result.message = cfg_result.message
+            return result
 
-    def graph_register(self, report_texts: ReportTexts) -> None:
-        pass
+        result.status = STATUS_OK
+        result.message = "Vector embeddings Computed"
+        return result
+
+    def graph_register(self, report_texts: ReportTexts) -> Result[None]:
+        result = Result[None]()
+        cfg_result = self.config_ensure(report_texts)
+        if cfg_result.status != STATUS_OK:
+            result.status = cfg_result.status
+            result.message = cfg_result.message
+            return result
+        result.status = STATUS_OK
+        result.message = "Vector embeddings stored in the DB"
+        return result

@@ -366,3 +366,229 @@ def test_parse_diagnostic_report_passes_group_context_and_llm_config_through(
     assert result.group_context is group_context
     assert result.llm_config is llm_config
     assert result.conclusion == CONCLUSION_TEXT
+
+
+# ---------------------------------------------------------------------------
+# config_ensure
+# ---------------------------------------------------------------------------
+
+
+def test_config_ensure_preserves_existing_group_and_llm_config() -> None:
+    from unittest.mock import MagicMock
+
+    from gosmart_graphite.model.result import STATUS_OK
+
+    mock_group_svc = MagicMock()
+    mock_llm_svc = MagicMock()
+    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+
+    existing_group = Group(name="Existing Clinic", code="EXIST_01", test_id="t_cfg_existing")
+    existing_llm = LLM_Config(
+        tag="embedding-v1",
+        provider="ollama",
+        model="nomic-embed-text:latest",
+        test_id="t_cfg_existing",
+    )
+    report_texts = ReportTexts(
+        report=_diagnostic_report(report_id="dr-existing"),
+        group_context=existing_group,
+        llm_config=existing_llm,
+    )
+
+    res = svc.config_ensure(report_texts)
+    assert res.status == STATUS_OK
+    assert report_texts.group_context is existing_group
+    assert report_texts.llm_config is existing_llm
+    mock_group_svc.my_group_sync.assert_not_called()
+    mock_llm_svc.resolve_config_for_group_sync.assert_not_called()
+
+
+def test_config_ensure_resolves_group_from_diagnostic_report_then_llm_config() -> None:
+    from unittest.mock import MagicMock
+
+    from gosmart_graphite.model.fhir import DiagnosticReportNode
+    from gosmart_graphite.model.result import STATUS_OK
+    from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
+
+    resolved_group = Group(name="Half Moon Bay Clinic", code="HMB_01", test_id="t_cfg_dr")
+    resolved_llm = LLM_Config(
+        tag=DEFAULT_EMBEDDING_TAG,
+        provider="ollama",
+        model="nomic-embed-text:latest",
+        url="http://localhost:11434",
+        test_id="t_cfg_dr",
+    )
+
+    mock_group_svc = MagicMock()
+    mock_group_svc.my_group_sync.return_value = resolved_group
+    mock_llm_svc = MagicMock()
+    mock_llm_svc.resolve_config_for_group_sync.return_value = resolved_llm
+    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+
+    report = _diagnostic_report(report_id="dr-1001")
+    report_texts = ReportTexts(report=report)
+
+    res = svc.config_ensure(report_texts, test_id="t_cfg_dr")
+    assert res.status == STATUS_OK
+    assert report_texts.group_context == resolved_group
+    assert report_texts.llm_config == resolved_llm
+
+    expected_dr_node_id = DiagnosticReportNode(resource_id="dr-1001", resource="{}", test_id="t_cfg_dr").id
+    mock_group_svc.my_group_sync.assert_called_once_with(
+        expected_dr_node_id,
+        return_lost_and_found_group=False,
+    )
+    mock_llm_svc.resolve_config_for_group_sync.assert_called_once_with(
+        tag=DEFAULT_EMBEDDING_TAG,
+        group_id=resolved_group.id,
+        test_id="t_cfg_dr",
+    )
+
+
+def test_config_ensure_falls_back_to_encounter_reference_for_group() -> None:
+    from unittest.mock import MagicMock
+
+    from gosmart_graphite.model.fhir import DiagnosticReportNode, EncounterNode
+    from gosmart_graphite.model.result import STATUS_OK
+    from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
+
+    resolved_group = Group(name="Encounter Clinic", code="ENC_CLINIC", test_id="t_cfg_enc")
+    resolved_llm = LLM_Config(
+        tag=DEFAULT_EMBEDDING_TAG,
+        provider="ollama",
+        model="nomic-embed-text:latest",
+        test_id="t_cfg_enc",
+    )
+
+    expected_dr_node_id = DiagnosticReportNode(resource_id="dr-enc-1", resource="{}", test_id="t_cfg_enc").id
+    expected_enc_node_id = EncounterNode(resource_id="enc-999", resource="{}", test_id="t_cfg_enc").id
+
+    def _fake_my_group(node_id: str, return_lost_and_found_group: bool = True):
+        assert return_lost_and_found_group is False
+        if node_id == expected_enc_node_id:
+            return resolved_group
+        return None
+
+    mock_group_svc = MagicMock()
+    mock_group_svc.my_group_sync.side_effect = _fake_my_group
+    mock_llm_svc = MagicMock()
+    mock_llm_svc.resolve_config_for_group_sync.return_value = resolved_llm
+    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+
+    report = DiagnosticReport(
+        id="dr-enc-1",
+        status="final",
+        code=CT_ABDOMEN_CODE,
+        encounter={"reference": "Encounter/enc-999"},
+    )
+    report_texts = ReportTexts(report=report)
+
+    res = svc.config_ensure(report_texts, test_id="t_cfg_enc")
+    assert res.status == STATUS_OK
+    assert report_texts.group_context == resolved_group
+    assert report_texts.llm_config == resolved_llm
+    assert [c.args[0] for c in mock_group_svc.my_group_sync.call_args_list] == [
+        expected_dr_node_id,
+        expected_enc_node_id,
+    ]
+
+
+def test_config_ensure_falls_back_to_lost_and_found_when_group_unresolved() -> None:
+    from unittest.mock import MagicMock, patch
+
+    from gosmart_graphite.model.result import STATUS_OK
+    from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
+
+    lost_and_found = Group(name="LostAndFound", code="LOST_AND_FOUND", group_type="SYSTEM")
+    default_llm = LLM_Config(
+        tag=DEFAULT_EMBEDDING_TAG,
+        provider="ollama",
+        model="nomic-embed-text:latest",
+    )
+
+    mock_group_svc = MagicMock()
+    mock_group_svc.my_group_sync.return_value = None
+    mock_group_svc.group_or_lost_and_found.return_value = lost_and_found
+    mock_llm_svc = MagicMock()
+    mock_llm_svc.resolve_config_for_group_sync.return_value = default_llm
+    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+
+    report_texts = ReportTexts(report=_diagnostic_report(report_id="dr-orphan"))
+    with patch("gosmart_graphite.service.diagnostic_report_service.logger") as mock_logger:
+        res = svc.config_ensure(report_texts)
+
+    assert res.status == STATUS_OK
+    assert report_texts.group_context == lost_and_found
+    assert report_texts.llm_config == default_llm
+    mock_group_svc.group_or_lost_and_found.assert_called_once_with(None)
+    mock_llm_svc.resolve_config_for_group_sync.assert_called_once_with(
+        tag=DEFAULT_EMBEDDING_TAG,
+        group_id=lost_and_found.id,
+        test_id=None,
+    )
+    mock_logger.warning.assert_called_once()
+    assert mock_logger.warning.call_args.args[0] == "diagnostic_report_group_not_found_using_lost_and_found"
+
+
+def test_config_ensure_returns_bad_data_when_llm_config_not_found() -> None:
+    from unittest.mock import MagicMock
+
+    from gosmart_graphite.model.result import STATUS_BAD_DATA
+
+    resolved_group = Group(name="No LLM Clinic", code="NO_LLM_01")
+    mock_group_svc = MagicMock()
+    mock_group_svc.my_group_sync.return_value = resolved_group
+    mock_llm_svc = MagicMock()
+    mock_llm_svc.resolve_config_for_group_sync.return_value = None
+    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+
+    report_texts = ReportTexts(report=_diagnostic_report(report_id="dr-no-llm"))
+    res = svc.config_ensure(report_texts)
+
+    assert res.status == STATUS_BAD_DATA
+    assert "No active LLM_Config found" in res.message
+    assert report_texts.group_context == resolved_group
+    assert report_texts.llm_config is None
+
+
+def test_config_ensure_returns_internal_error_on_llm_config_exception() -> None:
+    from unittest.mock import MagicMock
+
+    from gosmart_graphite.model.result import STATUS_INTERNAL_ERROR
+
+    resolved_group = Group(name="Ambiguous Clinic", code="AMB_01")
+    mock_group_svc = MagicMock()
+    mock_group_svc.my_group_sync.return_value = resolved_group
+    mock_llm_svc = MagicMock()
+    mock_llm_svc.resolve_config_for_group_sync.side_effect = RuntimeError("Ambiguous LLM_Config")
+    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+
+    report_texts = ReportTexts(report=_diagnostic_report(report_id="dr-amb-llm"))
+    res = svc.config_ensure(report_texts)
+
+    assert res.status == STATUS_INTERNAL_ERROR
+    assert "Ambiguous LLM_Config" in res.message
+
+
+@pytest.mark.anyio
+async def test_compute_embeddings_and_graph_register_propagate_config_ensure_failure() -> None:
+    from unittest.mock import MagicMock
+
+    from gosmart_graphite.model.result import STATUS_BAD_DATA
+
+    resolved_group = Group(name="Propagation Clinic", code="PROP_01")
+    mock_group_svc = MagicMock()
+    mock_group_svc.my_group_sync.return_value = resolved_group
+    mock_llm_svc = MagicMock()
+    mock_llm_svc.resolve_config_for_group_sync.return_value = None
+    svc = DiagnosticReportService(group_service=mock_group_svc, llm_config_service=mock_llm_svc)
+
+    rt_embed = ReportTexts(report=_diagnostic_report(report_id="dr-prop-1"))
+    embed_res = await svc.compute_embeddings(rt_embed)
+    assert embed_res.status == STATUS_BAD_DATA
+    assert "No active LLM_Config found" in embed_res.message
+
+    rt_reg = ReportTexts(report=_diagnostic_report(report_id="dr-prop-2"))
+    reg_res = svc.graph_register(rt_reg)
+    assert reg_res.status == STATUS_BAD_DATA
+    assert "No active LLM_Config found" in reg_res.message
