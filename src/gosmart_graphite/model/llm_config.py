@@ -35,7 +35,7 @@ class LLM_Config(AuditableNode):
 
     tag: str = Field(
         ...,
-        description="Purpose tag/key unique within an associated Group (e.g. 'embedding', 'router', 'rag')",
+        description="Purpose tag/key unique within an associated Group (e.g. 'embedding-v1', 'router', 'rag')",
     )
     provider: str = Field(
         ...,
@@ -212,7 +212,7 @@ class LLMConfigCreateRequest(BaseModel):
 
     tag: str = Field(
         ...,
-        description="Purpose tag unique within an associated Group (e.g. 'embedding', 'router', 'rag')",
+        description="Purpose tag unique within an associated Group (e.g. 'embedding-v1', 'router', 'rag')",
     )
     provider: str = Field(..., description="LLM provider ('ollama', 'vertexai', 'googleai', etc.)")
     model: str = Field(..., description="Canonical model name")

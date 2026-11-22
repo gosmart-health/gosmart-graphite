@@ -360,7 +360,7 @@ def test_parse_diagnostic_report_passes_group_context_and_llm_config_through(
 ) -> None:
     group_context = Group(name="Test Clinic", code="TST-01", test_id="test_parse_pass_through")
     llm_config = LLM_Config(
-        tag="embedding",
+        tag=DEFAULT_EMBEDDING_TAG,
         provider="ollama",
         model="nomic-embed-text:latest",
         test_id="test_parse_pass_through",
@@ -384,7 +384,7 @@ def test_config_ensure_preserves_existing_group_and_llm_config() -> None:
 
     existing_group = Group(name="Existing Clinic", code="EXIST_01", test_id="t_cfg_existing")
     existing_llm = LLM_Config(
-        tag="embedding-v1",
+        tag=DEFAULT_EMBEDDING_TAG,
         provider="ollama",
         model="nomic-embed-text:latest",
         test_id="t_cfg_existing",

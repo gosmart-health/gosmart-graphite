@@ -127,7 +127,7 @@ local/network **Ollama** server or **Google Vertex AI / Gemini API**.
 
 Runtime parameters are **not** read from static `VECTOR_*` / `VERTEX_*`
 environment variables. Instead, `EmbeddingService` dynamically resolves the
-active `(:LLM_Config {tag: "embedding"})` node in Neo4j for the active
+active `(:LLM_Config {tag: "embedding-v1"})` node in Neo4j for the active
 `(:Group)` (traversing upward via `(:Group)-[:BELONGS_TO*0..]->(:Group)` with
 `'GoSmart Health'` fallback), caches Genkit clients per configuration
 fingerprint, applies optional Matryoshka truncation
@@ -140,7 +140,7 @@ Create a local JSON file (for example starting from
 
 ```json
 {
-  "tag": "embedding",
+  "tag": "embedding-v1",
   "provider": "ollama",
   "model": "nomic-embed-text:latest",
   "url": "http://localhost:11434",
@@ -177,7 +177,7 @@ print(f"Dimension: {len(normalized_vector)}")
 # normalized_vector = await embedding_service.embed_text_async(
 #     clinical_note,
 #     group_id="<group-id>",
-#     tag="embedding",
+#     tag="embedding-v1",
 # )
 ```
 

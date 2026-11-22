@@ -120,7 +120,7 @@ graph TD
   - `upsert_llm_config()`: Overwrite clones prior canonical state to `<id>__archived__<hex>` (`Action='DELETE'`) with `[:NOT_HAS_LLM_CONFIG]` links on previously linked groups while preserving active `[:HAS_LLM_CONFIG]` links across all sponsoring groups.
   - `resolve_config_for_group()` / `resolve_config_for_group_sync()`: Upward `(:Group)-[:BELONGS_TO*0..]->(:Group)` shortest-path resolution with `'GoSmart Health'` fallback; raises on same-depth ambiguity.
 * **`embedding_service.py`**:
-  - `EmbeddingService` (aliased as `VectorService`) dynamically resolves active `LLM_Config` (default `tag='embedding'`) for the active `Group` (`ContextVar` or explicit `group_id`).
+  - `EmbeddingService` (aliased as `VectorService`) dynamically resolves active `LLM_Config` (default `tag='embedding-v1'`) for the active `Group` (`ContextVar` or explicit `group_id`).
   - Maintains a thread-safe Genkit client cache keyed by resolved config fingerprint (`provider`, `url`, resolved `api_key`, `location`, `project_id`).
   - Supports `dimensions` (e.g., `output_dimensionality`) and Matryoshka `dimensions_truncated` post-truncation with L2 vector normalization and similarity scoring.
 * **`media_service.py`**:

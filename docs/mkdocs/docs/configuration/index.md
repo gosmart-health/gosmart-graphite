@@ -31,8 +31,8 @@ flowchart TD
     n2((":Group<br>GoSmart Health")) --> n1(("System"))
     n3((":DICOMConfiguration<br>GOSMART_GRAPHITE<br>SCP")) -- CONFIGURES --> n2
     n4((":FHIRConfiguration")) --> n2
-    n5((":LLM_Config<br>embedding_v1")) --> n2
-    n6((":LLM_Config<br>inference_v1")) --> n2
+    n5((":LLM_Config<br>embedding-v1")) --> n2
+    n6((":LLM_Config<br>inference-v1")) --> n2
     n7((":Group<br>Lost and Found")) --> n1
 ```
 
