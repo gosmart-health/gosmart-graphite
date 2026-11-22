@@ -168,6 +168,13 @@ graph TD
   - `DicomIngestionActor`: Subclasses `pykka.ThreadingActor` to process ingestion tasks asynchronously in a background worker thread.
   - Handles messages: `PING`, `INGEST_FILE`, `INGEST_MOCK`.
   - Maintains processed counters and execution status.
+* **`fhir_actor.py`**:
+  - `FhirActor`: Subclasses `pykka.ThreadingActor` with a dedicated event loop to fetch FHIR R4B encounter bundles, register graph nodes/relationships, link `:Encounter` nodes to their target `:Group`, and dispatch fire-and-forget embedding tasks for persisted `DiagnosticReport` resources via `notify_embedding()`.
+* **`embedding_actor.py`**:
+  - `EmbeddingActor`: Subclasses `pykka.ThreadingActor` with a dedicated event loop to compute and register decoupled `:Embedding` nodes and `:EMBEDS` relationships in Neo4j asynchronously.
+  - Handles `PING`, `STATUS`, and `EmbeddingMessage` (`type="EMBED_RESOURCE"`) dispatched by `EmbeddingMethod` (initially `DIAGNOSTIC_REPORT`, invoking `DiagnosticReportService.parse_diagnostic_report()`, `compute_embeddings()`, and `graph_register()`).
+  - Accepts the full FHIR R4B `DiagnosticReport` resource, optional `group_context` / `group_id`, `tag`, and optional `test_id`, and exposes singleton helpers `get_embedding_actor()`, `stop_embedding_actor()`, and `notify_embedding()`.
+  - Stopped cleanly during FastAPI lifespan shutdown after `FhirActor` and before `AuditActor` / Neo4j driver close.
 
 ### 3.6 API Subsystem (`api/`) & CLI (`cli.py`)
 * **`main.py`**:
