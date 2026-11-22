@@ -11,6 +11,7 @@ from gosmart_graphite.model.actor_message import (
     DicomAssociationReleasedMessage,
     DicomIngestionMessage,
     DicomMockIngestionMessage,
+    EmbeddingMethod,
     FhirIngestionMessage,
 )
 from gosmart_graphite.model.audit import AuditAction
@@ -937,5 +938,185 @@ def test_fhir_actor_logs_error_and_continues_when_group_missing_or_inactive(link
             assert "soft-deleted or inactive" in error_calls[0].kwargs["reason"]
         else:
             assert "does not exist" in error_calls[0].kwargs["reason"]
+    finally:
+        actor.stop()
+
+
+def test_fhir_actor_notifies_embedding_actor_after_registration_and_group_link():
+    """Verify FhirActor dispatches DiagnosticReports to EmbeddingActor as the final step."""
+    from fhir.resources.R4B.diagnosticreport import DiagnosticReport
+    from fhir.resources.R4B.encounter import Encounter
+
+    enc = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-emb-order-1",
+            "status": "finished",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+        }
+    )
+    dr1 = DiagnosticReport.model_validate(
+        {
+            "resourceType": "DiagnosticReport",
+            "id": "dr-order-1",
+            "status": "final",
+            "code": {"text": "CT CHEST"},
+            "conclusion": "Clear lungs.",
+        }
+    )
+    dr2 = DiagnosticReport.model_validate(
+        {
+            "resourceType": "DiagnosticReport",
+            "id": "dr-order-2",
+            "status": "final",
+            "code": {"text": "CXR"},
+            "conclusion": "Normal heart size.",
+        }
+    )
+    events: list[str] = []
+
+    async def _upsert(*args, **kwargs):
+        events.append("upsert")
+        return {
+            "nodes": [
+                {"id": "enc-det-order", "label": "Encounter", "uid": "fhir:enc-emb-order-1", "action": "CREATE"},
+                {"id": "dr-det-1", "label": "DiagnosticReport", "uid": "fhir:dr-order-1", "action": "CREATE"},
+                {"id": "dr-det-2", "label": "DiagnosticReport", "uid": "fhir:dr-order-2", "action": "CREATE"},
+            ],
+            "relationships": [],
+            "node_ids": ["enc-det-order", "dr-det-1", "dr-det-2"],
+            "relationship_ids": [],
+        }
+
+    async def _link_group(*args, **kwargs):
+        events.append("link_group")
+        return {
+            "linked": True,
+            "status": "LINKED",
+            "group_id": "grp_emb_1",
+            "encounter_id": "enc-det-order",
+            "relationship": {
+                "id": "rel-bt-1",
+                "type": "BELONGS_TO",
+                "start_node_id": "enc-det-order",
+                "end_node_id": "grp_emb_1",
+                "action": "CREATE",
+            },
+        }
+
+    def _fake_notify(resource, **kwargs):
+        events.append(f"embed:{resource.id}")
+
+    mock_fhir = MagicMock()
+    mock_fhir.fetcher = MagicMock()
+    mock_fhir.fetcher.close = AsyncMock()
+    mock_fhir.fetch_relevant_resources_of_study = AsyncMock(
+        return_value=EncRelevantResources(encounter=enc, diagnostic_reports=[dr1, dr2])
+    )
+    mock_fhir.upsert_relevant_resources = AsyncMock(side_effect=_upsert)
+    mock_fhir.link_encounter_to_group = AsyncMock(side_effect=_link_group)
+
+    actor = FhirActor.start(fhir_service=mock_fhir)
+    try:
+        with patch(
+            "gosmart_graphite.actor.fhir_actor.notify_embedding",
+            side_effect=_fake_notify,
+        ) as mock_notify:
+            res = actor.ask(
+                FhirIngestionMessage(
+                    patient_id="PT-EMB-1",
+                    study_uid="1.2.840.4000",
+                    series_uid="1.2.840.4000.1",
+                    group_id="grp_emb_1",
+                    test_id="t_fhir_emb_order",
+                    acted_by="tester",
+                ),
+                timeout=3.0,
+            )
+
+        assert res["success"] is True
+        assert res["status"] == "SUCCESS"
+        assert events == ["upsert", "link_group", "embed:dr-order-1", "embed:dr-order-2"]
+        assert mock_notify.call_count == 2
+        first_call = mock_notify.call_args_list[0]
+        assert first_call.args[0] is dr1
+        assert first_call.kwargs == {
+            "group_id": "grp_emb_1",
+            "test_id": "t_fhir_emb_order",
+            "method": EmbeddingMethod.DIAGNOSTIC_REPORT,
+            "acted_by": "tester",
+        }
+        second_call = mock_notify.call_args_list[1]
+        assert second_call.args[0] is dr2
+    finally:
+        actor.stop()
+
+
+def test_fhir_actor_skips_embedding_when_no_diagnostic_reports_and_survives_notify_error():
+    """Verify FhirActor does not notify when no reports exist and succeeds even if notify_embedding raises."""
+    from fhir.resources.R4B.diagnosticreport import DiagnosticReport
+    from fhir.resources.R4B.encounter import Encounter
+
+    enc = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-no-dr-1",
+            "status": "finished",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+        }
+    )
+    dr = DiagnosticReport.model_validate(
+        {
+            "resourceType": "DiagnosticReport",
+            "id": "dr-err-1",
+            "status": "final",
+            "code": {"text": "CT HEAD"},
+        }
+    )
+    mock_fhir = MagicMock()
+    mock_fhir.fetcher = MagicMock()
+    mock_fhir.fetcher.close = AsyncMock()
+    mock_fhir.upsert_relevant_resources = AsyncMock(
+        return_value={
+            "nodes": [{"id": "enc-det-no-dr", "label": "Encounter", "uid": "fhir:enc-no-dr-1", "action": "CREATE"}],
+            "relationships": [],
+            "node_ids": ["enc-det-no-dr"],
+            "relationship_ids": [],
+        }
+    )
+    mock_fhir.link_encounter_to_group = AsyncMock(return_value={"linked": False, "status": "GROUP_NOT_FOUND"})
+
+    actor = FhirActor.start(fhir_service=mock_fhir)
+    try:
+        # 1. No diagnostic reports -> notify_embedding not invoked
+        mock_fhir.fetch_relevant_resources_of_study = AsyncMock(
+            return_value=EncRelevantResources(encounter=enc, diagnostic_reports=[])
+        )
+        with patch("gosmart_graphite.actor.fhir_actor.notify_embedding") as mock_notify:
+            res_empty = actor.ask(
+                FhirIngestionMessage(patient_id="PT-1", study_uid="1.2.840.5000", group_id="grp_1"),
+                timeout=3.0,
+            )
+        assert res_empty["success"] is True
+        mock_notify.assert_not_called()
+
+        # 2. notify_embedding raises -> FhirActor logs error and still completes with SUCCESS
+        mock_fhir.fetch_relevant_resources_of_study = AsyncMock(
+            return_value=EncRelevantResources(encounter=enc, diagnostic_reports=[dr])
+        )
+        with (
+            patch("gosmart_graphite.actor.fhir_actor.notify_embedding", side_effect=RuntimeError("embed queue error")),
+            patch("gosmart_graphite.actor.fhir_actor.logger") as mock_logger,
+        ):
+            res_err = actor.ask(
+                FhirIngestionMessage(patient_id="PT-1", study_uid="1.2.840.5001", group_id="grp_1"),
+                timeout=3.0,
+            )
+        assert res_err["success"] is True
+        assert res_err["status"] == "SUCCESS"
+        assert any(
+            call.args and call.args[0] == "fhir_actor_embedding_notify_failed"
+            for call in mock_logger.error.call_args_list
+        )
     finally:
         actor.stop()
