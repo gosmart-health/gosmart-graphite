@@ -52,6 +52,14 @@ from gosmart_graphite.model.dicom_config import (
     DICOMConfigurationUpdateRequest,
     HasDicomConfigurationRelation,
 )
+from gosmart_graphite.model.embedding import (
+    DEFAULT_EMBEDDING_VECTOR_DIMENSIONS,
+    EMBEDDING_VECTOR_INDEX_NAME,
+    DiagnosticReportFieldTag,
+    Embedding,
+    EmbeddingNode,
+    EmbedsRelation,
+)
 from gosmart_graphite.model.fhir import (
     FHIR_ALL_SCHEMA_DDL,
     FHIR_NODE_CLASSES,
@@ -170,6 +178,12 @@ __all__ = [
     "HasSeriesRelation",
     "HasInstanceRelation",
     "HasDicomConfigurationRelation",
+    "DEFAULT_EMBEDDING_VECTOR_DIMENSIONS",
+    "EMBEDDING_VECTOR_INDEX_NAME",
+    "DiagnosticReportFieldTag",
+    "Embedding",
+    "EmbeddingNode",
+    "EmbedsRelation",
     "generate_deterministic_id",
     "to_negated_relation_type",
     "to_positive_relation_type",

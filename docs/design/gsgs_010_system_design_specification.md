@@ -78,7 +78,7 @@ graph TD
     - `config_schema.cypher`: `DICOMConfiguration`, `FHIRConfiguration`, and `LLM_Config` constraints/indexes (`llm_config_tag_idx`) plus configuration association relationship indexes (`HAS_LLM_CONFIG`, `HAS_FHIR_CONFIG`, `HAS_DICOM_CONFIGURATION`, `SERVES`, and `NOT_*` counterparts).
     - `dicom_schema.cypher`: Deterministic `id` and DICOM UID uniqueness constraints for `Patient`, `Study`, `Series`, and `Instance`.
     - `fhir_schema.cypher`: FHIR R4B resource uniqueness constraints, property indexes, and cross-domain `Study.accession_number` index.
-    - `embedding_schema.cypher`: Placeholder script reserved for vector embedding node constraints and vector indexes.
+    - `embedding_schema.cypher`: `:Embedding` uniqueness constraint (`id`), property indexes (`test_id`, `modelTag`, `targetFieldTag`), relationship indexes (`EMBEDS`, `NOT_EMBEDS`), and 768-dimension cosine `CREATE VECTOR INDEX` (`embedding_vector_idx` on `(:Embedding).vector`).
   - **Fail-fast & Triage Semantics**: Missing manifest scripts, lexical/parse errors, or Cypher execution errors raise a non-negotiable `SchemaInitializationError` logging the exact script filename, 1-based line number(s) (including Neo4j column offsets when available), failing statement, and underlying database error, aborting startup.
   - **Startup Connectivity Policy (`GOSMART_GS_DEV_MODE`)**: In production (`DEV_MODE=false`), `GraphService.init_schema_constraints()` automatically retries Neo4j connectivity with capped exponential backoff (`GOSMART_GS_DB_CONNECT_RETRY_TIMEOUT_SEC`, default `600s`; `0` = indefinite) to ride out transient cloud outages or upgrades before raising `SchemaInitializationError`. Setting `GOSMART_GS_DEV_MODE=true` relaxes offline Neo4j connectivity during local development.
 
@@ -103,6 +103,10 @@ graph TD
   - `LLM_Config` (`LLMConfigNode`, `__label__ = "LLM_Config"`): Auditable node capturing `tag` (globally unique purpose key), normalized `provider`, `model`, `url`, `dimensions`, `dimensions_truncated` (validated `<= dimensions`), `api_key`, `location`, `project_id`, `extra_config`, and `description`.
   - `HasLlmConfigRelation` (`__type__ = "HAS_LLM_CONFIG"`): Links sponsoring `(:Group)` to `(:LLM_Config)`.
   - API/CLI DTOs: `LLMConfigCreateRequest`, `LLMConfigUpdateRequest`, `LLMConfigAssignRequest`, `LLMConfigGroupSummary`, `LLMConfigResponse` (always masks `api_key` and exposes `has_api_key` and `api_key_source`).
+* **`embedding.py`**: Decoupled vector embedding graph models:
+  - `Embedding` (`EmbeddingNode`, `__label__ = "Embedding"`): Auditable node storing `modelTag` (e.g., `LLM_Config.tag`), `size` (auto-validated vector length), `vector` (L2-normalized float array indexed by `embedding_vector_idx`), and `targetFieldTag` (e.g., `FINDINGS`, `CONCLUSION`) with target-scoped deterministic UUIDv5 `id` generation.
+  - `EmbedsRelation` (`__type__ = "EMBEDS"`): Auditable relationship linking `(:Embedding)-[:EMBEDS {aspect}]->(target domain node)`.
+  - `DiagnosticReportFieldTag` (`StrEnum`): Canonical field/aspect tags (`FINDINGS`, `CONCLUSION`) for `DiagnosticReport` embeddings.
 * **`dicom.py`**: Pydantic models for domain entities:
   - `PatientModel`: `patient_id`, `patient_name`, `patient_birth_date`, `patient_sex`
   - `StudyModel`: `study_instance_uid`, `study_date`, `study_time`, `study_description`, `accession_number`

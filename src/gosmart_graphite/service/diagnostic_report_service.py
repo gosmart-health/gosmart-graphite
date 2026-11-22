@@ -1,13 +1,20 @@
 import asyncio
 import base64
 import re
-from typing import Optional, Tuple
+from typing import Any, LiteralString, Optional, Tuple
 
 from fhir.resources.diagnosticreport import DiagnosticReport
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from gosmart_graphite.core.logging import get_logger
+from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model import Group, Result
+from gosmart_graphite.model.embedding import (
+    DEFAULT_EMBEDDING_VECTOR_DIMENSIONS,
+    DiagnosticReportFieldTag,
+    Embedding,
+    EmbedsRelation,
+)
 from gosmart_graphite.model.fhir import DiagnosticReportNode, EncounterNode
 from gosmart_graphite.model.llm_config import LLM_Config
 from gosmart_graphite.model.result import (
@@ -20,6 +27,54 @@ from gosmart_graphite.service.group_service import GroupService
 from gosmart_graphite.service.llm_config_service import LLMConfigService
 
 logger = get_logger("gosmart_gs.dianostic_report_service")
+
+_UPSERT_REPORT_EMBEDDINGS_CYPHER: LiteralString = """
+MATCH (dr:DiagnosticReport {id: $target_id})
+WHERE dr.Action IS NULL OR dr.Action <> 'DELETE'
+WITH dr
+UNWIND $items AS item
+MERGE (e:Embedding {id: item.emb.id})
+ON CREATE SET
+    e.modelTag = item.emb.modelTag,
+    e.size = item.emb.size,
+    e.vector = item.emb.vector,
+    e.targetFieldTag = item.emb.targetFieldTag,
+    e.test_id = item.emb.test_id,
+    e.Action = 'CREATE',
+    e.ActedAt = datetime({timezone: 'UTC'}),
+    e.ActedBy = $acted_by,
+    e.CreatedAt = datetime({timezone: 'UTC'}),
+    e.ExpiresAt = CASE WHEN item.emb.ExpiresAt IS NOT NULL THEN datetime(item.emb.ExpiresAt) ELSE null END
+ON MATCH SET
+    e.modelTag = item.emb.modelTag,
+    e.size = item.emb.size,
+    e.vector = item.emb.vector,
+    e.targetFieldTag = item.emb.targetFieldTag,
+    e.test_id = coalesce(item.emb.test_id, e.test_id),
+    e.Action = 'UPDATE',
+    e.ActedAt = datetime({timezone: 'UTC'}),
+    e.ActedBy = $acted_by,
+    e.UpdatedAt = datetime({timezone: 'UTC'}),
+    e.ExpiresAt = CASE WHEN item.emb.ExpiresAt IS NOT NULL THEN datetime(item.emb.ExpiresAt) ELSE e.ExpiresAt END
+MERGE (e)-[r:EMBEDS {id: item.rel.id}]->(dr)
+ON CREATE SET
+    r.aspect = item.rel.aspect,
+    r.test_id = item.rel.test_id,
+    r.Action = 'CREATE',
+    r.ActedAt = datetime({timezone: 'UTC'}),
+    r.ActedBy = $acted_by,
+    r.CreatedAt = datetime({timezone: 'UTC'}),
+    r.ExpiresAt = CASE WHEN item.rel.ExpiresAt IS NOT NULL THEN datetime(item.rel.ExpiresAt) ELSE null END
+ON MATCH SET
+    r.aspect = item.rel.aspect,
+    r.test_id = coalesce(item.rel.test_id, r.test_id),
+    r.Action = 'UPDATE',
+    r.ActedAt = datetime({timezone: 'UTC'}),
+    r.ActedBy = $acted_by,
+    r.UpdatedAt = datetime({timezone: 'UTC'}),
+    r.ExpiresAt = CASE WHEN item.rel.ExpiresAt IS NOT NULL THEN datetime(item.rel.ExpiresAt) ELSE r.ExpiresAt END
+RETURN e.id AS embedding_id, r.id AS relation_id, e.Action AS action
+"""
 
 
 class ReportTexts(BaseModel):
@@ -39,9 +94,11 @@ class DiagnosticReportService:
         group_service: Optional[GroupService] = None,
         llm_config_service: Optional[LLMConfigService] = None,
         embedding_service: Optional[EmbeddingService] = None,
+        client: Optional[Neo4jClient] = None,
     ) -> None:
-        self.group_service = group_service or GroupService()
-        self.llm_config_service = llm_config_service or LLMConfigService()
+        self.client = client or neo4j_client
+        self.group_service = group_service or GroupService(client=self.client)
+        self.llm_config_service = llm_config_service or LLMConfigService(client=self.client)
         self.embedding_service = embedding_service or EmbeddingService(llm_config_service=self.llm_config_service)
 
     @staticmethod
@@ -468,13 +525,163 @@ class DiagnosticReportService:
         result.message = "Vector embeddings Computed"
         return result
 
-    def graph_register(self, report_texts: ReportTexts) -> Result[None]:
-        result = Result[None]()
-        cfg_result = self.config_ensure(report_texts)
+    def graph_register(
+        self,
+        report_texts: ReportTexts,
+        *,
+        tag: str = DEFAULT_EMBEDDING_TAG,
+        test_id: Optional[str] = None,
+        acted_by: str = "diagnostic_report_service",
+    ) -> Result[list[Embedding]]:
+        """Idempotently register computed vector embeddings for a DiagnosticReport in Neo4j.
+
+        Ensures ``group_context`` and ``llm_config`` via :meth:`config_ensure`,
+        validates the target persisted ``:DiagnosticReport`` node exists and is active,
+        and atomically upserts each non-empty ``:Embedding`` node along with its
+        ``(:Embedding)-[:EMBEDS {aspect}]->(:DiagnosticReport)`` relationship.
+        """
+        result = Result[list[Embedding]]()
+        cfg_result = self.config_ensure(report_texts, tag=tag, test_id=test_id)
         if cfg_result.status != STATUS_OK:
             result.status = cfg_result.status
             result.message = cfg_result.message
             return result
+
+        raw_test_id = (
+            test_id
+            or (report_texts.group_context.test_id if report_texts.group_context else None)
+            or (report_texts.llm_config.test_id if report_texts.llm_config else None)
+        )
+        effective_test_id = raw_test_id.strip() if isinstance(raw_test_id, str) and raw_test_id.strip() else None
+        effective_acted_by = acted_by.strip() if isinstance(acted_by, str) and acted_by.strip() else "system"
+
+        report_id = getattr(report_texts.report, "id", None)
+        clean_report_id = report_id.strip() if isinstance(report_id, str) else ""
+        if not clean_report_id:
+            result.status = STATUS_BAD_DATA
+            result.message = "DiagnosticReport.id is required to register vector embeddings in Neo4j"
+            return result
+
+        target_node_id = DiagnosticReportNode(
+            resource_id=clean_report_id,
+            resource="{}",
+            test_id=effective_test_id,
+        ).id
+
+        model_tag = report_texts.llm_config.tag if report_texts.llm_config else tag
+
+        section_vectors: list[tuple[DiagnosticReportFieldTag, list[float]]] = []
+        if report_texts.embedding_findings:
+            section_vectors.append((DiagnosticReportFieldTag.FINDINGS, report_texts.embedding_findings))
+        if report_texts.embedding_conclusion:
+            section_vectors.append((DiagnosticReportFieldTag.CONCLUSION, report_texts.embedding_conclusion))
+
+        if not section_vectors:
+            has_text = bool((report_texts.findings or "").strip() or (report_texts.conclusion or "").strip())
+            if has_text:
+                result.status = STATUS_BAD_DATA
+                result.message = "No computed vector embeddings available to register; run compute_embeddings first"
+                return result
+            result.status = STATUS_OK
+            result.message = "No vector embeddings to register"
+            result.value = []
+            return result
+
+        embeddings: list[Embedding] = []
+        tx_items: list[dict[str, Any]] = []
+        try:
+            for field_tag, vec in section_vectors:
+                emb = Embedding(
+                    target_node_id=target_node_id,
+                    modelTag=model_tag,
+                    size=len(vec),
+                    vector=vec,
+                    targetFieldTag=str(field_tag),
+                    test_id=effective_test_id,
+                    ActedBy=effective_acted_by,
+                )
+                if emb.size != DEFAULT_EMBEDDING_VECTOR_DIMENSIONS:
+                    logger.warning(
+                        "diagnostic_report_embedding_dimension_mismatch",
+                        diagnostic_report_id=clean_report_id,
+                        target_node_id=target_node_id,
+                        field_tag=str(field_tag),
+                        model_tag=model_tag,
+                        vector_size=emb.size,
+                        index_dimensions=DEFAULT_EMBEDDING_VECTOR_DIMENSIONS,
+                    )
+                rel = EmbedsRelation(
+                    start_node_id=emb.id,
+                    end_node_id=target_node_id,
+                    aspect=str(field_tag),
+                    test_id=effective_test_id,
+                    ActedBy=effective_acted_by,
+                )
+                emb_props = emb.to_neo4j_properties()
+                rel_props = rel.model_dump()
+                if rel.ExpiresAt is not None:
+                    rel_props["ExpiresAt"] = rel.ExpiresAt.isoformat()
+                embeddings.append(emb)
+                tx_items.append({"emb": emb_props, "rel": rel_props})
+        except (ValidationError, ValueError) as exc:
+            logger.error(
+                "diagnostic_report_embedding_model_validation_failed",
+                diagnostic_report_id=clean_report_id,
+                target_node_id=target_node_id,
+                model_tag=model_tag,
+                error=str(exc),
+            )
+            result.status = STATUS_BAD_DATA
+            result.message = f"Invalid embedding data for registration: {exc}"
+            return result
+
+        def _tx(tx: Any) -> list[dict[str, Any]]:
+            res = tx.run(
+                _UPSERT_REPORT_EMBEDDINGS_CYPHER,
+                target_id=target_node_id,
+                items=tx_items,
+                acted_by=effective_acted_by,
+            )
+            return [record.data() for record in res]
+
+        try:
+            records = self.client.execute_write_tx_sync(_tx)
+        except Exception as exc:
+            logger.error(
+                "diagnostic_report_embedding_register_failed",
+                diagnostic_report_id=clean_report_id,
+                target_node_id=target_node_id,
+                model_tag=model_tag,
+                error=str(exc),
+                exc_info=True,
+            )
+            result.status = STATUS_INTERNAL_ERROR
+            result.message = f"Failed to register vector embeddings in Neo4j: {exc}"
+            return result
+
+        if not records:
+            logger.warning(
+                "diagnostic_report_target_node_not_found",
+                diagnostic_report_id=clean_report_id,
+                target_node_id=target_node_id,
+                test_id=effective_test_id,
+            )
+            result.status = STATUS_BAD_DATA
+            result.message = (
+                f"Active DiagnosticReport node not found in Neo4j for report_id '{clean_report_id}' "
+                f"(node_id='{target_node_id}')"
+            )
+            return result
+
+        logger.info(
+            "diagnostic_report_embeddings_registered",
+            diagnostic_report_id=clean_report_id,
+            target_node_id=target_node_id,
+            model_tag=model_tag,
+            registered_count=len(records),
+            embedding_ids=[rec.get("embedding_id") for rec in records],
+        )
         result.status = STATUS_OK
         result.message = "Vector embeddings stored in the DB"
+        result.value = embeddings
         return result

@@ -36,8 +36,8 @@ def test_schema_manifest_matches_committed_cypher_files() -> None:
     for filename in SCHEMA_SCRIPT_FILES:
         assert (_DB_DIR / filename).is_file()
 
-    # embedding_schema.cypher is intentionally empty for now
-    assert (_DB_DIR / "embedding_schema.cypher").read_text(encoding="utf-8") == ""
+    # embedding_schema.cypher defines Embedding constraints, indexes, and 768-dim cosine vector index
+    assert (_DB_DIR / "embedding_schema.cypher").read_text(encoding="utf-8").strip() != ""
 
 
 def test_load_schema_statements_complete_coverage_and_ordering() -> None:
@@ -51,7 +51,7 @@ def test_load_schema_statements_complete_coverage_and_ordering() -> None:
     assert len(by_file["config_schema.cypher"]) == 12
     assert len(by_file["dicom_schema.cypher"]) == 8
     assert by_file["fhir_schema.cypher"] == list(FHIR_ALL_SCHEMA_DDL)
-    assert by_file["embedding_schema.cypher"] == []
+    assert len(by_file["embedding_schema.cypher"]) == 7
 
     # Spot-check domain placement
     assert any("FOR (g:Group) REQUIRE g.code IS UNIQUE" in s for s in by_file["system_schema.cypher"])
@@ -60,6 +60,20 @@ def test_load_schema_statements_complete_coverage_and_ordering() -> None:
     assert any("FOR ()-[r:NOT_SERVES]-() ON (r.id)" in s for s in by_file["config_schema.cypher"])
     assert any("FOR (l:LLM_Config) REQUIRE l.id IS UNIQUE" in s for s in by_file["config_schema.cypher"])
     assert any("FOR (i:Instance) REQUIRE i.sop_instance_uid IS UNIQUE" in s for s in by_file["dicom_schema.cypher"])
+    assert any("FOR (e:Embedding) REQUIRE e.id IS UNIQUE" in s for s in by_file["embedding_schema.cypher"])
+    assert any("FOR (e:Embedding) ON (e.test_id)" in s for s in by_file["embedding_schema.cypher"])
+    assert any("FOR (e:Embedding) ON (e.modelTag)" in s for s in by_file["embedding_schema.cypher"])
+    assert any("FOR (e:Embedding) ON (e.targetFieldTag)" in s for s in by_file["embedding_schema.cypher"])
+    assert any("FOR ()-[r:EMBEDS]-() ON (r.id)" in s for s in by_file["embedding_schema.cypher"])
+    assert any("FOR ()-[r:NOT_EMBEDS]-() ON (r.id)" in s for s in by_file["embedding_schema.cypher"])
+    assert any(
+        "CREATE VECTOR INDEX embedding_vector_idx IF NOT EXISTS" in s
+        and "FOR (e:Embedding)" in s
+        and "ON (e.vector)" in s
+        and "`vector.dimensions`: 768" in s
+        and "`vector.similarity_function`: 'cosine'" in s
+        for s in by_file["embedding_schema.cypher"]
+    )
 
 
 def test_parse_cypher_script_handles_multiline_comments_quotes_and_backticks() -> None:

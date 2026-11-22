@@ -1,7 +1,7 @@
 """Unit tests for DiagnosticReportService.
 
 Covers ``_detect_attachment_type``, ``_extract_sections``,
-``parse_diagnostic_report``, ``config_ensure``, and ``compute_embeddings``.
+``parse_diagnostic_report``, ``config_ensure``, ``compute_embeddings``, and ``graph_register``.
 Self-contained tests suitable for CI without external services.
 """
 
@@ -14,6 +14,12 @@ import pytest
 from fhir.resources.diagnosticreport import DiagnosticReport
 
 from gosmart_graphite.model import Group
+from gosmart_graphite.model.embedding import (
+    DEFAULT_EMBEDDING_VECTOR_DIMENSIONS,
+    DiagnosticReportFieldTag,
+    Embedding,
+    EmbedsRelation,
+)
 from gosmart_graphite.model.llm_config import LLM_Config
 from gosmart_graphite.model.result import STATUS_BAD_DATA, STATUS_INTERNAL_ERROR, STATUS_OK
 from gosmart_graphite.service.diagnostic_report_service import (
@@ -820,3 +826,279 @@ async def test_compute_embeddings_runtime_error_returns_internal_error_and_reset
     assert rt.embedding_conclusion == []
     mock_logger.error.assert_called_once()
     assert mock_logger.error.call_args.args[0] == "diagnostic_report_embedding_failed"
+
+
+# ---------------------------------------------------------------------------
+# graph_register
+# ---------------------------------------------------------------------------
+
+
+class _FakeNeo4jRecord:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def data(self) -> dict[str, object]:
+        return dict(self._payload)
+
+
+def _mock_write_client(records: list[dict[str, object]]) -> tuple[MagicMock, dict[str, object]]:
+    """Build a mock Neo4jClient executing execute_write_tx_sync and capturing Cypher parameters."""
+    captured: dict[str, object] = {}
+    mock_tx = MagicMock()
+
+    def _fake_run(query: str, **kwargs: object) -> list[_FakeNeo4jRecord]:
+        captured["query"] = query
+        captured["params"] = kwargs
+        return [_FakeNeo4jRecord(r) for r in records]
+
+    mock_tx.run.side_effect = _fake_run
+    mock_client = MagicMock()
+    mock_client.execute_write_tx_sync.side_effect = lambda fn: fn(mock_tx)
+    return mock_client, captured
+
+
+def test_graph_register_upserts_findings_and_conclusion_atomically() -> None:
+    from gosmart_graphite.model.fhir import DiagnosticReportNode
+
+    group, llm_cfg = _sample_group_and_llm("t_reg_both")
+    target_dr_id = DiagnosticReportNode(resource_id="dr-reg-1", resource="{}", test_id="t_reg_both").id
+    vec_f = [1.0] + [0.0] * (DEFAULT_EMBEDDING_VECTOR_DIMENSIONS - 1)
+    vec_c = [0.0, 1.0] + [0.0] * (DEFAULT_EMBEDDING_VECTOR_DIMENSIONS - 2)
+
+    expected_emb_f = Embedding(
+        target_node_id=target_dr_id,
+        modelTag=llm_cfg.tag,
+        vector=vec_f,
+        targetFieldTag=DiagnosticReportFieldTag.FINDINGS,
+        test_id="t_reg_both",
+        ActedBy="pytest",
+    )
+    expected_emb_c = Embedding(
+        target_node_id=target_dr_id,
+        modelTag=llm_cfg.tag,
+        vector=vec_c,
+        targetFieldTag=DiagnosticReportFieldTag.CONCLUSION,
+        test_id="t_reg_both",
+        ActedBy="pytest",
+    )
+    expected_rel_f = EmbedsRelation(
+        start_node_id=expected_emb_f.id,
+        end_node_id=target_dr_id,
+        aspect=DiagnosticReportFieldTag.FINDINGS,
+        test_id="t_reg_both",
+        ActedBy="pytest",
+    )
+    expected_rel_c = EmbedsRelation(
+        start_node_id=expected_emb_c.id,
+        end_node_id=target_dr_id,
+        aspect=DiagnosticReportFieldTag.CONCLUSION,
+        test_id="t_reg_both",
+        ActedBy="pytest",
+    )
+
+    mock_client, captured = _mock_write_client(
+        [
+            {"embedding_id": expected_emb_f.id, "relation_id": expected_rel_f.id, "action": "CREATE"},
+            {"embedding_id": expected_emb_c.id, "relation_id": expected_rel_c.id, "action": "CREATE"},
+        ]
+    )
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-reg-1"),
+        group_context=group,
+        llm_config=llm_cfg,
+        hasText=True,
+        findings="Lungs are clear.",
+        conclusion="Normal chest.",
+        embedding_findings=vec_f,
+        embedding_conclusion=vec_c,
+    )
+
+    res = svc.graph_register(rt, test_id="t_reg_both", acted_by="pytest")
+    assert res.status == STATUS_OK
+    assert res.message == "Vector embeddings stored in the DB"
+    assert res.value is not None
+    assert len(res.value) == 2
+    assert [e.id for e in res.value] == [expected_emb_f.id, expected_emb_c.id]
+    assert [e.targetFieldTag for e in res.value] == ["FINDINGS", "CONCLUSION"]
+    assert all(e.modelTag == DEFAULT_EMBEDDING_TAG for e in res.value)
+    assert all(e.size == DEFAULT_EMBEDDING_VECTOR_DIMENSIONS for e in res.value)
+
+    mock_client.execute_write_tx_sync.assert_called_once()
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["target_id"] == target_dr_id
+    assert params["acted_by"] == "pytest"
+    items = params["items"]
+    assert isinstance(items, list) and len(items) == 2
+    assert items[0]["emb"]["id"] == expected_emb_f.id
+    assert items[0]["emb"]["modelTag"] == DEFAULT_EMBEDDING_TAG
+    assert items[0]["emb"]["targetFieldTag"] == "FINDINGS"
+    assert "target_node_id" not in items[0]["emb"]
+    assert items[0]["rel"]["id"] == expected_rel_f.id
+    assert items[0]["rel"]["aspect"] == "FINDINGS"
+    assert items[1]["emb"]["id"] == expected_emb_c.id
+    assert items[1]["rel"]["id"] == expected_rel_c.id
+    assert items[1]["rel"]["aspect"] == "CONCLUSION"
+
+
+def test_graph_register_single_section_conclusion_only() -> None:
+    from gosmart_graphite.model.fhir import DiagnosticReportNode
+
+    group, llm_cfg = _sample_group_and_llm("t_reg_conc")
+    target_dr_id = DiagnosticReportNode(resource_id="dr-reg-conc", resource="{}", test_id="t_reg_conc").id
+    mock_client, captured = _mock_write_client([{"embedding_id": "e1", "relation_id": "r1", "action": "CREATE"}])
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-reg-conc"),
+        group_context=group,
+        llm_config=llm_cfg,
+        hasText=True,
+        findings="",
+        conclusion="Normal chest.",
+        embedding_findings=[],
+        embedding_conclusion=[0.6, 0.8, 0.0],
+    )
+
+    res = svc.graph_register(rt)
+    assert res.status == STATUS_OK
+    assert res.value is not None and len(res.value) == 1
+    assert res.value[0].targetFieldTag == "CONCLUSION"
+    assert res.value[0].size == 3
+    params = captured["params"]
+    assert isinstance(params, dict)
+    assert params["target_id"] == target_dr_id
+    assert len(params["items"]) == 1
+
+
+def test_graph_register_empty_report_no_text_is_noop() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_reg_empty")
+    mock_client = MagicMock()
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-reg-empty"),
+        group_context=group,
+        llm_config=llm_cfg,
+        findings="",
+        conclusion="   ",
+        embedding_findings=[],
+        embedding_conclusion=[],
+    )
+
+    res = svc.graph_register(rt)
+    assert res.status == STATUS_OK
+    assert res.value == []
+    mock_client.execute_write_tx_sync.assert_not_called()
+
+
+def test_graph_register_text_without_computed_embeddings_returns_bad_data() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_reg_uncomputed")
+    mock_client = MagicMock()
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-reg-uncomp"),
+        group_context=group,
+        llm_config=llm_cfg,
+        findings="Normal liver.",
+        conclusion="",
+        embedding_findings=[],
+        embedding_conclusion=[],
+    )
+
+    res = svc.graph_register(rt)
+    assert res.status == STATUS_BAD_DATA
+    assert "compute_embeddings" in res.message
+    mock_client.execute_write_tx_sync.assert_not_called()
+
+
+def test_graph_register_missing_report_id_returns_bad_data() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_reg_noid")
+    mock_client = MagicMock()
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    report_no_id = DiagnosticReport.model_validate({"status": "final", "code": CT_ABDOMEN_CODE})
+    rt = ReportTexts(
+        report=report_no_id,
+        group_context=group,
+        llm_config=llm_cfg,
+        conclusion="Normal.",
+        embedding_conclusion=[0.6, 0.8, 0.0],
+    )
+
+    res = svc.graph_register(rt)
+    assert res.status == STATUS_BAD_DATA
+    assert "DiagnosticReport.id" in res.message
+    mock_client.execute_write_tx_sync.assert_not_called()
+
+
+def test_graph_register_missing_target_node_returns_bad_data() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_reg_missing")
+    mock_client, _ = _mock_write_client([])
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-not-in-db"),
+        group_context=group,
+        llm_config=llm_cfg,
+        conclusion="Normal.",
+        embedding_conclusion=[0.6, 0.8, 0.0],
+    )
+
+    res = svc.graph_register(rt)
+    assert res.status == STATUS_BAD_DATA
+    assert "Active DiagnosticReport node not found" in res.message
+
+
+def test_graph_register_db_exception_returns_internal_error() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_reg_err")
+    mock_client = MagicMock()
+    mock_client.execute_write_tx_sync.side_effect = RuntimeError("Neo4j unavailable")
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-db-err"),
+        group_context=group,
+        llm_config=llm_cfg,
+        conclusion="Normal.",
+        embedding_conclusion=[0.6, 0.8, 0.0],
+    )
+
+    with patch("gosmart_graphite.service.diagnostic_report_service.logger") as mock_logger:
+        res = svc.graph_register(rt)
+
+    assert res.status == STATUS_INTERNAL_ERROR
+    assert "Neo4j unavailable" in res.message
+    mock_logger.error.assert_called_once()
+    assert mock_logger.error.call_args.args[0] == "diagnostic_report_embedding_register_failed"

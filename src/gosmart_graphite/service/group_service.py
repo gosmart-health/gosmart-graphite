@@ -19,6 +19,7 @@ from gosmart_graphite.model.auth import (
     UsesAuthenticatorRelation,
 )
 from gosmart_graphite.model.dicom_config import HasDicomConfigurationRelation
+from gosmart_graphite.model.embedding import EmbedsRelation
 from gosmart_graphite.model.fhir.relations import FHIR_RELATION_CLASSES
 from gosmart_graphite.model.fhir_config import HasFhirConfigRelation
 from gosmart_graphite.model.graph import (
@@ -66,6 +67,8 @@ UPWARD_GROUP_RELATION_TYPES: Tuple[str, ...] = tuple(
             HasInstanceRelation.__type__,
             # Cross-domain & clinical FHIR relationships
             *(rel_cls.__type__ for rel_cls in FHIR_RELATION_CLASSES),
+            # Decoupled vector embeddings
+            EmbedsRelation.__type__,
         )
     )
 )
