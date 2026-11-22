@@ -4,12 +4,13 @@ import base64
 
 import numpy as np
 import pytest
-from fhir.resources.diagnosticreport import DiagnosticReport
-from fhir.resources.R4B.diagnosticreport import DiagnosticReport as DiagnosticReportR4B
+from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from fhir.resources.R4B.encounter import Encounter
 
+from gosmart_graphite.actor.embedding_actor import EmbeddingActor
 from gosmart_graphite.db.neo4j import neo4j_client
-from gosmart_graphite.model.auth import GroupNode
+from gosmart_graphite.model.actor_message import EmbeddingMessage, EmbeddingMethod
+from gosmart_graphite.model.auth import Group, GroupNode
 from gosmart_graphite.model.embedding import (
     DEFAULT_EMBEDDING_VECTOR_DIMENSIONS,
     EMBEDDING_VECTOR_INDEX_NAME,
@@ -89,7 +90,7 @@ async def test_config_ensure_resolves_group_and_llm_config_from_neo4j():
             "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
         }
     )
-    dr_r4b = DiagnosticReportR4B.model_validate(
+    dr_r4b = DiagnosticReport.model_validate(
         {
             "resourceType": "DiagnosticReport",
             "id": "dr-cfg-1",
@@ -238,7 +239,7 @@ async def test_compute_embeddings_against_neo4j_and_embedder():
             "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
         }
     )
-    dr_r4b = DiagnosticReportR4B.model_validate(
+    dr_r4b = DiagnosticReport.model_validate(
         {
             "resourceType": "DiagnosticReport",
             "id": "dr-emb-1",
@@ -397,7 +398,7 @@ async def test_embedding_schema_and_graph_register_idempotency_and_vector_query(
             "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
         }
     )
-    dr_r4b = DiagnosticReportR4B.model_validate(
+    dr_r4b = DiagnosticReport.model_validate(
         {
             "resourceType": "DiagnosticReport",
             "id": "dr-reg-1",
@@ -518,3 +519,173 @@ async def test_embedding_schema_and_graph_register_idempotency_and_vector_query(
     assert vec_hits[0]["aspect"] == DiagnosticReportFieldTag.FINDINGS
     assert vec_hits[0]["dr_id"] == dr_node_id
     assert vec_hits[0]["score"] >= 0.99
+
+
+@pytest.mark.anyio
+async def test_embedding_actor_end_to_end_diagnostic_report_pipeline():
+    """Verify EmbeddingActor computes embeddings and registers :Embedding -[:EMBEDS]-> :DiagnosticReport in Neo4j."""
+    if not await neo4j_client.verify_connectivity():
+        pytest.skip(f"Neo4j database is not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
+
+    llm_svc = LLMConfigService()
+    emb_svc = EmbeddingService()
+    active_llm_cfg = await llm_svc.resolve_config_for_group(tag=DEFAULT_EMBEDDING_TAG)
+    if active_llm_cfg is None or not emb_svc.is_configured(llm_config=active_llm_cfg):
+        pytest.skip(f"No active usable '{DEFAULT_EMBEDDING_TAG}' LLM_Config configured in Neo4j; skipping live test.")
+
+    try:
+        await emb_svc.embed_text_async("Health check.", llm_config=active_llm_cfg)
+    except Exception as exc:
+        pytest.skip(f"Configured embedding provider is not reachable: {exc}")
+
+    graph_svc = GraphService()
+    await graph_svc.init_schema_constraints(force=True)
+
+    test_id = "test_embedding_actor_e2e"
+    fhir_svc = FhirService()
+
+    # Clean up prior test-generated data BEFORE the test (retain after test for inspection)
+    await fhir_svc.cleanup_upserted_resources(test_id=test_id)
+
+    grp = GroupNode(
+        name="Embedding Actor Clinic",
+        code="EMB_ACTOR_CLINIC",
+        group_type="FACILITY",
+        is_active=True,
+        test_id=test_id,
+        ActedBy="pytest",
+    )
+    await neo4j_client.execute_query(
+        """
+        MERGE (g:Group {id: $id})
+        SET g.name = $name,
+            g.code = $code,
+            g.group_type = $group_type,
+            g.is_active = true,
+            g.test_id = $test_id,
+            g.Action = 'CREATE',
+            g.ActedAt = datetime({timezone: 'UTC'}),
+            g.ActedBy = 'pytest',
+            g.CreatedAt = datetime({timezone: 'UTC'})
+        """,
+        {
+            "id": grp.id,
+            "name": grp.name,
+            "code": grp.code,
+            "group_type": grp.group_type,
+            "test_id": test_id,
+        },
+    )
+
+    await llm_svc.upsert_llm_config(
+        LLMConfigCreateRequest(
+            tag=DEFAULT_EMBEDDING_TAG,
+            provider=active_llm_cfg.provider,
+            model=active_llm_cfg.model,
+            url=active_llm_cfg.url,
+            api_key=active_llm_cfg.api_key,
+            dimensions=active_llm_cfg.dimensions,
+            dimensions_truncated=active_llm_cfg.dimensions_truncated,
+            project_id=active_llm_cfg.project_id,
+            location=active_llm_cfg.location,
+            extra_config=active_llm_cfg.extra_config,
+            assign_group=grp.id,
+            test_id=test_id,
+        ),
+        acted_by="pytest",
+    )
+
+    report_text = "Findings: Mild cardiomegaly without acute pulmonary edema.\nImpression: Mild cardiomegaly."
+    enc_r4b = Encounter.model_validate(
+        {
+            "resourceType": "Encounter",
+            "id": "enc-emb-actor-1",
+            "status": "finished",
+            "class": {"system": "http://terminology.hl7.org/CodeSystem/v3-ActCode", "code": "AMB"},
+        }
+    )
+    dr_r4b = DiagnosticReport.model_validate(
+        {
+            "resourceType": "DiagnosticReport",
+            "id": "dr-emb-actor-1",
+            "status": "final",
+            "code": {"text": "CXR PA/LAT"},
+            "encounter": {"reference": "Encounter/enc-emb-actor-1"},
+            "presentedForm": [
+                {
+                    "contentType": "text/plain",
+                    "data": base64.b64encode(report_text.encode("utf-8")).decode("ascii"),
+                }
+            ],
+        }
+    )
+    upsert_res = await fhir_svc.upsert_relevant_resources(
+        EncRelevantResources(encounter=enc_r4b, diagnostic_reports=[dr_r4b]),
+        test_id=test_id,
+        acted_by="pytest",
+    )
+    enc_node_id = next(n["id"] for n in upsert_res["nodes"] if n["label"] == "Encounter")
+    dr_node_id = next(n["id"] for n in upsert_res["nodes"] if n["label"] == "DiagnosticReport")
+    link_res = await fhir_svc.link_encounter_to_group(
+        encounter_id=enc_node_id,
+        group_id=grp.id,
+        test_id=test_id,
+        acted_by="pytest",
+    )
+    assert link_res["linked"] is True
+
+    actor = EmbeddingActor.start()
+    try:
+        group_ctx = Group(id=grp.id, name=grp.name, code=grp.code, group_type=grp.group_type, is_active=True)
+        res1 = actor.ask(
+            EmbeddingMessage(
+                method=EmbeddingMethod.DIAGNOSTIC_REPORT,
+                resource=dr_r4b,
+                group_context=group_ctx,
+                test_id=test_id,
+                acted_by="pytest",
+            ),
+            timeout=30.0,
+        )
+        assert res1["success"] is True
+        assert res1["method"] == str(EmbeddingMethod.DIAGNOSTIC_REPORT)
+        assert res1["report_id"] == "dr-emb-actor-1"
+        assert res1["registered_count"] == 2
+        assert len(res1["embedding_ids"]) == 2
+
+        # Re-run via group_id fallback (without explicit group_context) to verify idempotency
+        res2 = actor.ask(
+            EmbeddingMessage(
+                method=EmbeddingMethod.DIAGNOSTIC_REPORT,
+                resource=dr_r4b,
+                group_id=grp.id,
+                test_id=test_id,
+                acted_by="pytest",
+            ),
+            timeout=30.0,
+        )
+        assert res2["success"] is True
+        assert set(res2["embedding_ids"]) == set(res1["embedding_ids"])
+    finally:
+        actor.stop()
+
+    rows = await neo4j_client.execute_query(
+        """
+        MATCH (e:Embedding {test_id: $test_id})-[r:EMBEDS]->(dr:DiagnosticReport {id: $dr_id})
+        RETURN e.id AS emb_id, e.targetFieldTag AS field_tag, e.modelTag AS model_tag,
+               e.size AS size, size(e.vector) AS vec_len, r.aspect AS aspect
+        ORDER BY e.targetFieldTag
+        """,
+        {"test_id": test_id, "dr_id": dr_node_id},
+    )
+    assert len(rows) == 2
+    assert [r["field_tag"] for r in rows] == [
+        DiagnosticReportFieldTag.CONCLUSION,
+        DiagnosticReportFieldTag.FINDINGS,
+    ]
+    assert [r["aspect"] for r in rows] == [
+        DiagnosticReportFieldTag.CONCLUSION,
+        DiagnosticReportFieldTag.FINDINGS,
+    ]
+    assert all(r["model_tag"] == DEFAULT_EMBEDDING_TAG for r in rows)
+    assert all(r["size"] == r["vec_len"] and r["size"] > 0 for r in rows)

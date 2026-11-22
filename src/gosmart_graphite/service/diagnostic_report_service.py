@@ -3,7 +3,7 @@ import base64
 import re
 from typing import Any, LiteralString, Optional, Tuple
 
-from fhir.resources.diagnosticreport import DiagnosticReport
+from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 from pydantic import BaseModel, Field, ValidationError
 
 from gosmart_graphite.core.logging import get_logger

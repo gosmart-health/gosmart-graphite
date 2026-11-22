@@ -11,7 +11,7 @@ from typing import Final, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fhir.resources.diagnosticreport import DiagnosticReport
+from fhir.resources.R4B.diagnosticreport import DiagnosticReport
 
 from gosmart_graphite.model import Group
 from gosmart_graphite.model.embedding import (
