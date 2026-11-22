@@ -52,9 +52,9 @@ graph TD
 
 ### 3.1 Core Subsystem (`core/`)
 * **`config.py`**: Pydantic Settings implementation enforcing the `GOSMART_GS_` environment variable prefix:
-  - `DB_CONNECTION_URI`, `DB_USER`, `DB_PASSWORD`, `DB_DATABASE`
+  - `DB_CONNECTION_URI`, `DB_USER`, `DB_PASSWORD`, `DB_DATABASE`, `DB_CONNECT_RETRY_TIMEOUT_SEC`, `DB_CONNECT_RETRY_INITIAL_DELAY_SEC`, `DB_CONNECT_RETRY_MAX_DELAY_SEC`
   - `STORAGE_ROOT_URI`
-  - `HOST`, `PORT`, `RELOAD`
+  - `DEV_MODE`, `HOST`, `PORT`, `RELOAD`
   - `LOG_LEVEL`, `LOG_FORMAT`, `LOG_DIR`, `LOG_FILE`, `LOG_ROTATION_DAYS`, `LOG_BACKUP_COUNT`, `LOG_TO_FILE`
   - `DICOM_AE_TITLE`, `DICOM_SCP_PORT`, `DICOM_MAX_PDU`
   - `LLM_CONFIG_ENCRYPTION_KEY`: Optional Fernet key or passphrase for encrypting stored `LLM_Config` `api_key` values at rest in Neo4j
@@ -72,10 +72,15 @@ graph TD
   - Synchronous driver (`GraphDatabase.driver`) for Pykka threading actors.
   - Managed explicit write transactions (`execute_write_tx`, `execute_write_tx_sync`) guaranteeing atomic relationship swaps and retries.
   - Connection pooling and verification (`verify_connectivity`).
-  - Schema constraint initialization:
-    - Deterministic ID uniqueness: `Patient.id`, `Study.id`, `Series.id`, `Instance.id IS UNIQUE`
-    - DICOM natural key uniqueness: `Patient.patient_id`, `Study.study_instance_uid`, `Series.series_instance_uid`, `Instance.sop_instance_uid IS UNIQUE`
-    - LLM configuration constraints & indexes: `LLM_Config.id IS UNIQUE` (`llm_config_sys_id_unique`), index on `LLM_Config.tag` (`llm_config_tag_idx`)
+* **`schema_loader.py` & Consolidated `.cypher` Schema Scripts**:
+  - Schema DDL is consolidated into five focused `.cypher` files loaded in deterministic order from an explicit, immutable allowlist (`SCHEMA_SCRIPT_FILES`) rather than directory scanning to prevent arbitrary Cypher script injection:
+    - `system_schema.cypher`: `System`, `User`, `Identity`, `Authenticator`, `Group`, and `AuditLog` uniqueness constraints plus `BELONGS_TO` / `NOT_BELONGS_TO` relationship indexes.
+    - `config_schema.cypher`: `DICOMConfiguration`, `FHIRConfiguration`, and `LLM_Config` constraints/indexes (`llm_config_tag_idx`) plus configuration association relationship indexes (`HAS_LLM_CONFIG`, `HAS_FHIR_CONFIG`, `HAS_DICOM_CONFIGURATION`, `SERVES`, and `NOT_*` counterparts).
+    - `dicom_schema.cypher`: Deterministic `id` and DICOM UID uniqueness constraints for `Patient`, `Study`, `Series`, and `Instance`.
+    - `fhir_schema.cypher`: FHIR R4B resource uniqueness constraints, property indexes, and cross-domain `Study.accession_number` index.
+    - `embedding_schema.cypher`: Placeholder script reserved for vector embedding node constraints and vector indexes.
+  - **Fail-fast & Triage Semantics**: Missing manifest scripts, lexical/parse errors, or Cypher execution errors raise a non-negotiable `SchemaInitializationError` logging the exact script filename, 1-based line number(s) (including Neo4j column offsets when available), failing statement, and underlying database error, aborting startup.
+  - **Startup Connectivity Policy (`GOSMART_GS_DEV_MODE`)**: In production (`DEV_MODE=false`), `GraphService.init_schema_constraints()` automatically retries Neo4j connectivity with capped exponential backoff (`GOSMART_GS_DB_CONNECT_RETRY_TIMEOUT_SEC`, default `600s`; `0` = indefinite) to ride out transient cloud outages or upgrades before raising `SchemaInitializationError`. Setting `GOSMART_GS_DEV_MODE=true` relaxes offline Neo4j connectivity during local development.
 
 ### 3.3 Data Models Subsystem (`model/`)
 * **`graph.py`**: Graph domain, auditable base entities, and query models:

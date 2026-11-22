@@ -1,12 +1,20 @@
+import asyncio
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence
 
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
+from gosmart_graphite.db.schema_loader import (
+    SCHEMA_SCRIPT_FILES,
+    SchemaInitializationError,
+    extract_error_location,
+    load_schema_statements,
+)
 from gosmart_graphite.model.audit import AuditNode
 from gosmart_graphite.model.auth import BelongsToRelation, PerformedAtRelation
 from gosmart_graphite.model.dicom import DicomHierarchy
-from gosmart_graphite.model.fhir import FHIR_ALL_SCHEMA_DDL
 from gosmart_graphite.model.graph import (
     TransferStatusNode,
     generate_deterministic_id,
@@ -245,8 +253,17 @@ def _prepare_hierarchy_params(hierarchy: DicomHierarchy) -> Dict[str, Any]:
 class GraphService:
     """Service for managing DICOM graph nodes and relationships in Neo4j."""
 
-    def __init__(self, client: Optional[Neo4jClient] = None) -> None:
+    SCHEMA_SCRIPTS: tuple[str, ...] = SCHEMA_SCRIPT_FILES
+
+    def __init__(
+        self,
+        client: Optional[Neo4jClient] = None,
+        schema_dir: Optional[Path] = None,
+        schema_scripts: Optional[Sequence[str]] = None,
+    ) -> None:
         self.client = client or neo4j_client
+        self._schema_dir: Optional[Path] = schema_dir
+        self._schema_scripts: Optional[tuple[str, ...]] = tuple(schema_scripts) if schema_scripts is not None else None
         self._constraints_initialized: bool = False
 
     @staticmethod
@@ -589,72 +606,145 @@ class GraphService:
             logger.warning("graph_study_storage_uris_failed", study_uid=study_uid, error=str(e))
         return []
 
+    def _get_bool_setting(self, name: str, default: bool) -> bool:
+        """Safely read a boolean setting from client.settings, falling back to default for mocks."""
+        settings = getattr(self.client, "settings", None)
+        value = getattr(settings, name, default)
+        return value if isinstance(value, bool) else default
+
+    def _get_float_setting(self, name: str, default: float) -> float:
+        """Safely read a numeric setting from client.settings, falling back to default for mocks."""
+        settings = getattr(self.client, "settings", None)
+        value = getattr(settings, name, default)
+        if isinstance(value, bool):
+            return default
+        return float(value) if isinstance(value, (int, float)) else default
+
+    async def _ensure_neo4j_reachable_for_schema_init(self) -> bool:
+        """Verify Neo4j connectivity according to DEV_MODE vs production retry policy.
+
+        - When ``GOSMART_GS_DEV_MODE=true``: check connectivity once; if Neo4j is offline,
+          log a warning and return ``False`` so local development can proceed.
+        - When ``GOSMART_GS_DEV_MODE=false`` (production): retry connectivity with capped
+          exponential backoff up to ``DB_CONNECT_RETRY_TIMEOUT_SEC`` (``0`` = retry
+          indefinitely) to ride out transient cloud outages or database upgrades, raising
+          ``SchemaInitializationError`` if the retry window is exhausted.
+        """
+        uri = getattr(getattr(self.client, "settings", None), "DB_CONNECTION_URI", "<unknown>")
+        dev_mode = self._get_bool_setting("DEV_MODE", False)
+
+        if dev_mode:
+            if await self.client.verify_connectivity():
+                return True
+            logger.warning(
+                "schema_init_skipped_neo4j_offline_dev_mode",
+                uri=str(uri),
+                dev_mode=True,
+            )
+            return False
+
+        timeout_sec = max(self._get_float_setting("DB_CONNECT_RETRY_TIMEOUT_SEC", 600.0), 0.0)
+        initial_delay = max(self._get_float_setting("DB_CONNECT_RETRY_INITIAL_DELAY_SEC", 2.0), 0.001)
+        max_delay = max(self._get_float_setting("DB_CONNECT_RETRY_MAX_DELAY_SEC", 30.0), initial_delay)
+
+        start_time = time.monotonic()
+        attempt = 0
+        delay = initial_delay
+
+        while True:
+            attempt += 1
+            if await self.client.verify_connectivity():
+                if attempt > 1:
+                    logger.info(
+                        "neo4j_connectivity_restored",
+                        attempts=attempt,
+                        elapsed_sec=round(time.monotonic() - start_time, 2),
+                        uri=str(uri),
+                    )
+                return True
+
+            elapsed = time.monotonic() - start_time
+            if timeout_sec > 0 and elapsed >= timeout_sec:
+                msg = (
+                    f"Neo4j at '{uri}' remained unreachable after {attempt} attempt(s) "
+                    f"over {elapsed:.1f}s (timeout={timeout_sec:.1f}s) while initializing schema constraints"
+                )
+                logger.error(
+                    "schema_init_neo4j_unreachable_timeout",
+                    uri=str(uri),
+                    attempts=attempt,
+                    elapsed_sec=round(elapsed, 2),
+                    timeout_sec=timeout_sec,
+                )
+                raise SchemaInitializationError(msg)
+
+            sleep_sec = min(delay, timeout_sec - elapsed) if timeout_sec > 0 else delay
+            logger.warning(
+                "neo4j_connectivity_retry",
+                uri=str(uri),
+                attempt=attempt,
+                elapsed_sec=round(elapsed, 2),
+                next_retry_sec=round(sleep_sec, 2),
+                timeout_sec=timeout_sec,
+            )
+            await asyncio.sleep(sleep_sec)
+            delay = min(delay * 2.0, max_delay)
+
     async def init_schema_constraints(self, force: bool = False) -> None:
-        """Create standard DICOM graph schema constraints & indexes in Neo4j."""
+        """Load allowlisted Cypher schema scripts from `db/` and apply constraints & indexes in Neo4j."""
         if self._constraints_initialized and not force:
             return
 
-        constraints = [
-            "CREATE CONSTRAINT patient_sys_id_unique IF NOT EXISTS FOR (p:Patient) REQUIRE p.id IS UNIQUE",
-            "CREATE CONSTRAINT patient_pid_unique IF NOT EXISTS FOR (p:Patient) REQUIRE p.patient_id IS UNIQUE",
-            "CREATE CONSTRAINT study_sys_id_unique IF NOT EXISTS FOR (s:Study) REQUIRE s.id IS UNIQUE",
-            "CREATE CONSTRAINT study_uid_unique IF NOT EXISTS FOR (s:Study) REQUIRE s.study_instance_uid IS UNIQUE",
-            "CREATE CONSTRAINT series_sys_id_unique IF NOT EXISTS FOR (se:Series) REQUIRE se.id IS UNIQUE",
-            (
-                "CREATE CONSTRAINT series_uid_unique IF NOT EXISTS "
-                "FOR (se:Series) REQUIRE se.series_instance_uid IS UNIQUE"
-            ),
-            "CREATE CONSTRAINT instance_sys_id_unique IF NOT EXISTS FOR (i:Instance) REQUIRE i.id IS UNIQUE",
-            (
-                "CREATE CONSTRAINT instance_uid_unique IF NOT EXISTS "
-                "FOR (i:Instance) REQUIRE i.sop_instance_uid IS UNIQUE"
-            ),
-            "CREATE CONSTRAINT system_sys_id_unique IF NOT EXISTS FOR (sys:System) REQUIRE sys.id IS UNIQUE",
-            (
-                "CREATE CONSTRAINT dicom_config_sys_id_unique IF NOT EXISTS "
-                "FOR (c:DICOMConfiguration) REQUIRE c.id IS UNIQUE"
-            ),
-            (
-                "CREATE CONSTRAINT fhir_config_sys_id_unique IF NOT EXISTS "
-                "FOR (f:FHIRConfiguration) REQUIRE f.id IS UNIQUE"
-            ),
-            "CREATE CONSTRAINT user_sys_id_unique IF NOT EXISTS FOR (u:User) REQUIRE u.id IS UNIQUE",
-            "CREATE CONSTRAINT user_email_unique IF NOT EXISTS FOR (u:User) REQUIRE u.primary_email IS UNIQUE",
-            "CREATE CONSTRAINT identity_sys_id_unique IF NOT EXISTS FOR (i:Identity) REQUIRE i.id IS UNIQUE",
-            "CREATE CONSTRAINT authenticator_sys_id_unique IF NOT EXISTS FOR (a:Authenticator) REQUIRE a.id IS UNIQUE",
-            "CREATE CONSTRAINT group_sys_id_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.id IS UNIQUE",
-            "CREATE CONSTRAINT group_code_unique IF NOT EXISTS FOR (g:Group) REQUIRE g.code IS UNIQUE",
-            "CREATE CONSTRAINT audit_log_sys_id_unique IF NOT EXISTS FOR (a:AuditLog) REQUIRE a.id IS UNIQUE",
-            "CREATE CONSTRAINT llm_config_sys_id_unique IF NOT EXISTS FOR (l:LLM_Config) REQUIRE l.id IS UNIQUE",
-            "CREATE INDEX llm_config_tag_idx IF NOT EXISTS FOR (l:LLM_Config) ON (l.tag)",
-            "CREATE INDEX has_llm_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_LLM_CONFIG]-() ON (r.id)",
-            "CREATE INDEX not_has_llm_config_id_idx IF NOT EXISTS FOR ()-[r:NOT_HAS_LLM_CONFIG]-() ON (r.id)",
-            "CREATE INDEX has_fhir_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_FHIR_CONFIG]-() ON (r.id)",
-            "CREATE INDEX not_has_fhir_config_id_idx IF NOT EXISTS FOR ()-[r:NOT_HAS_FHIR_CONFIG]-() ON (r.id)",
-            "CREATE INDEX has_dicom_config_id_idx IF NOT EXISTS FOR ()-[r:HAS_DICOM_CONFIGURATION]-() ON (r.id)",
-            (
-                "CREATE INDEX not_has_dicom_config_id_idx IF NOT EXISTS "
-                "FOR ()-[r:NOT_HAS_DICOM_CONFIGURATION]-() ON (r.id)"
-            ),
-            "CREATE INDEX serves_id_idx IF NOT EXISTS FOR ()-[r:SERVES]-() ON (r.id)",
-            "CREATE INDEX not_serves_id_idx IF NOT EXISTS FOR ()-[r:NOT_SERVES]-() ON (r.id)",
-            "CREATE INDEX belongs_to_id_idx IF NOT EXISTS FOR ()-[r:BELONGS_TO]-() ON (r.id)",
-            "CREATE INDEX not_belongs_to_id_idx IF NOT EXISTS FOR ()-[r:NOT_BELONGS_TO]-() ON (r.id)",
-            *FHIR_ALL_SCHEMA_DDL,
-        ]
-        if not await self.client.verify_connectivity():
-            logger.warning(
-                "Skipping schema constraint creation: Neo4j not reachable at %s",
-                self.client.settings.DB_CONNECTION_URI,
-            )
+        script_files = self._schema_scripts if self._schema_scripts is not None else self.SCHEMA_SCRIPTS
+        statements = load_schema_statements(script_files=script_files, schema_dir=self._schema_dir)
+
+        if not await self._ensure_neo4j_reachable_for_schema_init():
             return
 
-        for constraint in constraints:
+        for stmt in statements:
             try:
-                await self.client.execute_query(constraint)
-                logger.debug("Applied constraint: %s", constraint)
-            except Exception as e:
-                logger.warning("Failed to apply constraint '%s': %s", constraint, e)
+                await self.client.execute_query(stmt.statement)
+                logger.debug(
+                    "schema_statement_applied",
+                    script_file=stmt.source_file,
+                    line=stmt.start_line,
+                    statement_index=stmt.statement_index,
+                )
+            except Exception as exc:
+                error_line, error_col = extract_error_location(stmt, exc)
+                col_suffix = f", column {error_col}" if error_col is not None else ""
+                if stmt.start_line != stmt.end_line or error_col is not None:
+                    location_detail = f"line {error_line}{col_suffix} (statement at {stmt.line_range_label})"
+                else:
+                    location_detail = f"line {error_line}"
+                msg = (
+                    f"Failed to execute Cypher schema script '{stmt.source_file}' at {location_detail} "
+                    f"(statement #{stmt.statement_index}): {stmt.statement} | "
+                    f"Cause: {type(exc).__name__}: {exc}"
+                )
+                logger.error(
+                    "schema_statement_execution_failed",
+                    script_file=stmt.source_file,
+                    start_line=stmt.start_line,
+                    end_line=stmt.end_line,
+                    error_line=error_line,
+                    error_column=error_col,
+                    statement_index=stmt.statement_index,
+                    statement=stmt.statement,
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+                raise SchemaInitializationError(
+                    msg,
+                    script_file=stmt.source_file,
+                    start_line=stmt.start_line,
+                    end_line=stmt.end_line,
+                    error_line=error_line,
+                    error_column=error_col,
+                    statement_index=stmt.statement_index,
+                    statement=stmt.statement,
+                    cause=exc,
+                ) from exc
 
         try:
             from gosmart_graphite.service.group_service import GroupService, group_service
@@ -665,7 +755,11 @@ class GraphService:
             logger.warning("Failed to initialize LostAndFound group during schema init: %s", e)
 
         self._constraints_initialized = True
-        logger.info("schema_constraints_verified", total_statements=len(constraints))
+        logger.info(
+            "schema_constraints_verified",
+            total_scripts=len(script_files),
+            total_statements=len(statements),
+        )
 
     async def list_patients(
         self,

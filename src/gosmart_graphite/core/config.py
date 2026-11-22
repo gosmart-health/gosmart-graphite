@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     APP_NAME: str = Field(default="Gosmart.Health GRAPHITE", description="Application Name")
     APP_VERSION: str = Field(default="0.1.0", description="API Version")
     DEBUG: bool = Field(default=False, description="Debug mode flag")
+    DEV_MODE: bool = Field(
+        default=False,
+        description="Enable development mode (relaxes Neo4j offline connectivity failures during startup)",
+    )
     HOST: str = Field(default="0.0.0.0", description="FastAPI host binding")
     PORT: int = Field(default=8086, description="FastAPI HTTP port")
     RELOAD: bool = Field(default=True, description="Uvicorn auto-reload")
@@ -87,6 +91,24 @@ class Settings(BaseSettings):
     )
     DB_MAX_CONNECTION_LIFETIME: int = Field(default=3600, description="Max connection lifetime in seconds")
     DB_MAX_CONNECTION_POOL_SIZE: int = Field(default=50, description="Max connection pool size")
+    DB_CONNECT_RETRY_TIMEOUT_SEC: int = Field(
+        default=600,
+        ge=0,
+        description=(
+            "Maximum total seconds to retry Neo4j connectivity in production mode "
+            "(when DEV_MODE is False) before failing startup; 0 retries indefinitely"
+        ),
+    )
+    DB_CONNECT_RETRY_INITIAL_DELAY_SEC: float = Field(
+        default=2.0,
+        gt=0.0,
+        description="Initial backoff delay in seconds between Neo4j connectivity retries",
+    )
+    DB_CONNECT_RETRY_MAX_DELAY_SEC: float = Field(
+        default=30.0,
+        gt=0.0,
+        description="Maximum backoff delay in seconds between Neo4j connectivity retries",
+    )
     DB_AURA_INSTANCE_ID: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices(
