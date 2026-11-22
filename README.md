@@ -72,9 +72,14 @@ gosmart-graphite/
 │       │   ├── config.py             # Pydantic Settings (`GOSMART_GS_*` prefix)
 │       │   ├── logging.py            # Structured logging (structlog) with rotation
 │       │   └── security.py           # JWT signing, Argon2 hashing, API key utilities
-│       ├── db/                       # Database connectivity & schema
+│       ├── db/                       # Database connectivity & consolidated Cypher schema scripts
+│       │   ├── config_schema.cypher  # DICOM, FHIR, & LLM configuration constraints & indexes
+│       │   ├── dicom_schema.cypher   # DICOM Patient/Study/Series/Instance constraints
+│       │   ├── embedding_schema.cypher # Vector embedding node constraints & indexes (placeholder)
 │       │   ├── fhir_schema.cypher    # FHIR R4B Neo4j schema constraints & indexes
-│       │   └── neo4j.py              # Neo4j async client, pooling, schema constraints
+│       │   ├── neo4j.py              # Neo4j async/sync client & connection pooling
+│       │   ├── schema_loader.py      # Explicit-manifest Cypher schema loader & line-accurate parser
+│       │   └── system_schema.cypher  # System, Auth, Group, AuditLog constraints & BELONGS_TO indexes
 │       ├── model/                    # Pydantic domain models
 │       │   ├── actor_message.py      # Pykka actor message schemas
 │       │   ├── audit.py              # Audit log and audit trail models
@@ -173,6 +178,9 @@ Settings are loaded from environment variables and `.env` via [`Settings`](src/g
 | `GOSMART_GS_DB_DATABASE` | `neo4j` | Neo4j database name (also accepts `NEO4J_DATABASE`) |
 | `GOSMART_GS_DB_MAX_CONNECTION_POOL_SIZE` | `50` | Neo4j maximum connection pool size |
 | `GOSMART_GS_DB_MAX_CONNECTION_LIFETIME` | `3600` | Neo4j maximum connection lifetime (seconds) |
+| `GOSMART_GS_DB_CONNECT_RETRY_TIMEOUT_SEC` | `600` | Production mode (`GOSMART_GS_DEV_MODE=false`) max total seconds to keep retrying Neo4j connectivity during startup (`0` = retry indefinitely) |
+| `GOSMART_GS_DB_CONNECT_RETRY_INITIAL_DELAY_SEC` | `2.0` | Initial exponential backoff delay (seconds) between Neo4j connectivity retries |
+| `GOSMART_GS_DB_CONNECT_RETRY_MAX_DELAY_SEC` | `30.0` | Maximum exponential backoff delay (seconds) between Neo4j connectivity retries |
 | **FHIR** | | |
 | `GOSMART_GS_FHIR_BASE_URL` | *(empty)* | FHIR server root URL; empty string disables FHIR polling |
 | `GOSMART_GS_FHIR_POLL_SEC` | `120` | FHIR polling interval (seconds) for `DiagnosticReport` resources |
@@ -183,6 +191,7 @@ Settings are loaded from environment variables and `.env` via [`Settings`](src/g
 | **Storage** | | |
 | `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI (`file://`, `gs://`, `s3://`, `az://`, `\\unc\share`) |
 | **Server** | | |
+| `GOSMART_GS_DEV_MODE` | `false` | Enable development mode (`true` relaxes offline Neo4j startup checks; `false` enforces production connectivity retries before failing hard) |
 | `GOSMART_GS_HOST` | `0.0.0.0` | FastAPI host binding |
 | `GOSMART_GS_PORT` | `8086` | FastAPI HTTP port |
 | `GOSMART_GS_RELOAD` | `true` | Uvicorn auto-reload toggle |
@@ -928,6 +937,21 @@ sequenceDiagram
 ---
 
 ## Additional Documentation
+
+The user-facing product documentation site lives under [`docs/mkdocs/`](./docs/mkdocs/)
+(MkDocs + Material for MkDocs). Build and preview it with:
+
+```bash
+uv sync --group docs
+cd docs/mkdocs
+uv run --group docs mkdocs serve                    # live preview at http://127.0.0.1:8000
+uv run --group docs mkdocs build --strict --clean   # static site into docs/mkdocs/site/
+```
+
+It covers the project introduction, getting started, configuration, and MCP
+usage (including natural-language utterance examples) for the public website.
+
+In-repo reference documents:
 
 - [Getting Started Guide](./docs/user_facing/1_getting_started.md)
 - [Cypher Query Guide](./docs/user_facing/cypher_query_guide.md)
