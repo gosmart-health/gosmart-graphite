@@ -4,8 +4,9 @@ from typing import Any, Dict, Optional
 import pykka
 from pydantic import ValidationError
 
+from gosmart_graphite.actor.embedding_actor import notify_embedding
 from gosmart_graphite.core.logging import get_logger
-from gosmart_graphite.model.actor_message import FhirIngestionMessage
+from gosmart_graphite.model.actor_message import EmbeddingMethod, FhirIngestionMessage
 from gosmart_graphite.service.fhir_service import EncRelevantResources, FHIRBatchFetcher, FhirService
 
 logger = get_logger("gosmart_gs.fhir_actor")
@@ -240,6 +241,48 @@ class FhirActor(pykka.ThreadingActor):
                     series_uid=series_uid,
                 )
 
+    def _notify_diagnostic_report_embeddings(
+        self,
+        *,
+        resources: EncRelevantResources,
+        group_id: Optional[str],
+        study_uid: str,
+        series_uid: str,
+        test_id: Optional[str],
+        acted_by: str,
+    ) -> None:
+        """Dispatch fire-and-forget embedding tasks for persisted DiagnosticReport resources."""
+        if not resources.diagnostic_reports:
+            return
+
+        for report in resources.diagnostic_reports:
+            report_id = getattr(report, "id", None)
+            try:
+                notify_embedding(
+                    report,
+                    group_id=group_id,
+                    test_id=test_id,
+                    method=EmbeddingMethod.DIAGNOSTIC_REPORT,
+                    acted_by=acted_by,
+                )
+                logger.debug(
+                    "fhir_actor_embedding_notified",
+                    diagnostic_report_id=report_id,
+                    group_id=group_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                )
+            except Exception as exc:
+                logger.error(
+                    "fhir_actor_embedding_notify_failed",
+                    diagnostic_report_id=report_id,
+                    group_id=group_id,
+                    study_uid=study_uid,
+                    series_uid=series_uid,
+                    error=str(exc),
+                    exc_info=True,
+                )
+
     def on_receive(self, message: Any) -> Any:
         """Handle incoming FhirIngestionMessage (or control/dict payload)."""
         if isinstance(message, FhirIngestionMessage):
@@ -326,6 +369,14 @@ class FhirActor(pykka.ThreadingActor):
                             series_uid=series_uid,
                             nodes_count=len(upsert_result.get("node_ids", [])),
                             relationships_count=len(upsert_result.get("relationship_ids", [])),
+                        )
+                        self._notify_diagnostic_report_embeddings(
+                            resources=resources,
+                            group_id=group_id,
+                            study_uid=study_uid,
+                            series_uid=series_uid,
+                            test_id=test_id,
+                            acted_by=acted_by,
                         )
                     else:
                         logger.error(

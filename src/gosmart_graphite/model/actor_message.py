@@ -1,9 +1,14 @@
 """Pydantic message models for Pykka actor communication."""
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from gosmart_graphite.model.auth import Group
+
+DEFAULT_EMBEDDING_TAG = "embedding-v1"
 
 
 class DicomIngestionMessage(BaseModel):
@@ -230,3 +235,89 @@ class FhirIngestionMessage(BaseModel):
         if v is None or (isinstance(v, str) and not v.strip()):
             return "fhir_actor"
         return v
+
+
+class EmbeddingMethod(StrEnum):
+    """Supported vector embedding generation strategies dispatched by EmbeddingActor."""
+
+    DIAGNOSTIC_REPORT = "diagnostic_report"
+
+
+class EmbeddingMessage(BaseModel):
+    """Validated message payload for EmbeddingActor vector computation and Neo4j registration."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    type: Literal["EMBED_RESOURCE"] = Field(
+        default="EMBED_RESOURCE",
+        description="Actor message type discriminator",
+    )
+    method: EmbeddingMethod = Field(
+        default=EmbeddingMethod.DIAGNOSTIC_REPORT,
+        description="Embedding generation method/strategy to invoke (e.g. 'diagnostic_report')",
+    )
+    resource: Any = Field(
+        ...,
+        description="Full FHIR R4B resource model (e.g. DiagnosticReport) or serialized resource dict",
+    )
+    group_context: Optional[Group] = Field(
+        default=None,
+        description="Optional resolved Group context for tenant-scoped LLM_Config lookup",
+    )
+    group_id: Optional[str] = Field(
+        default=None,
+        description="Optional Group deterministic ID used to resolve group_context when not supplied directly",
+    )
+    tag: str = Field(
+        default=DEFAULT_EMBEDDING_TAG,
+        description="LLM_Config purpose tag for embedding computation (default: 'embedding-v1')",
+    )
+    test_id: Optional[str] = Field(
+        default=None,
+        description="Optional test identifier to mark derived graph entities as ephemeral test data",
+    )
+    acted_by: str = Field(
+        default="embedding_actor",
+        description="Identifier of the user or agent initiating the embedding operation",
+    )
+
+    @field_validator("resource", mode="before")
+    @classmethod
+    def validate_resource_not_none(cls, v: Any) -> Any:
+        if v is None:
+            raise ValueError("resource must not be None")
+        return v
+
+    @field_validator("tag", mode="before")
+    @classmethod
+    def normalize_tag(cls, v: Any) -> str:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return DEFAULT_EMBEDDING_TAG
+        if isinstance(v, str):
+            return v.strip()
+        raise ValueError("tag must be a string")
+
+    @field_validator("group_id", "test_id", mode="before")
+    @classmethod
+    def normalize_optional_str(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            stripped = v.strip()
+            return stripped if stripped else None
+        return v
+
+    @field_validator("acted_by", mode="before")
+    @classmethod
+    def normalize_acted_by(cls, v: Any) -> str:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return "embedding_actor"
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+    @model_validator(mode="after")
+    def sync_group_id_from_context(self) -> "EmbeddingMessage":
+        if self.group_id is None and self.group_context is not None and self.group_context.id:
+            self.group_id = self.group_context.id
+        return self
