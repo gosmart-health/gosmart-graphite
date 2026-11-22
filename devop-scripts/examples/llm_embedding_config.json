@@ -2,7 +2,7 @@
   "tag": "embedding-v1",
   "provider": "ollama",
   "model": "embeddinggemma-2:270m",
-  "url": "http://localhost:11434",
+  "url": "http://m5.local.:11434",
   "dimensions": 768,
   "dimensions_truncated": null,
   "api_key": "",
