@@ -10,6 +10,16 @@ from gosmart_graphite.model.audit import (
     AuditSeverity,
     AuditSeverityEnum,
 )
+from gosmart_graphite.model.auditable import (
+    ActionType,
+    Auditable,
+    AuditableNode,
+    AuditableRelation,
+    generate_deterministic_id,
+    is_negated_relation_type,
+    to_negated_relation_type,
+    to_positive_relation_type,
+)
 from gosmart_graphite.model.auth import (
     AuthenticatorNode,
     BelongsToRelation,
@@ -33,6 +43,14 @@ from gosmart_graphite.model.dicom import (
     PatientModel,
     SeriesModel,
     StudyModel,
+)
+from gosmart_graphite.model.dicom_config import (
+    DICOMConfigurationCreateRequest,
+    DICOMConfigurationGroupSummary,
+    DICOMConfigurationNode,
+    DICOMConfigurationResponse,
+    DICOMConfigurationUpdateRequest,
+    HasDicomConfigurationRelation,
 )
 from gosmart_graphite.model.fhir import (
     FHIR_ALL_SCHEMA_DDL,
@@ -89,17 +107,11 @@ from gosmart_graphite.model.fhir_config import (
     HasFhirConfigRelation,
 )
 from gosmart_graphite.model.graph import (
-    ActionType,
-    Auditable,
-    AuditableNode,
-    AuditableRelation,
     CypherQueryRequest,
-    DICOMConfigurationNode,
     FHIRConfigurationNode,
     GraphNode,
     GraphQueryResult,
     GraphRelationship,
-    HasDicomConfigurationRelation,
     HasInstanceRelation,
     HasSeriesRelation,
     HasStudyRelation,
@@ -109,10 +121,6 @@ from gosmart_graphite.model.graph import (
     StudyNode,
     SystemNode,
     TransferStatusNode,
-    generate_deterministic_id,
-    is_negated_relation_type,
-    to_negated_relation_type,
-    to_positive_relation_type,
 )
 from gosmart_graphite.model.health import HealthResponse, ServiceHealth
 from gosmart_graphite.model.media import MediaMetadata, ParsedStorageUri, StorageScheme
@@ -124,9 +132,6 @@ from gosmart_graphite.model.result import (
     Result,
 )
 from gosmart_graphite.model.system import (
-    DICOMConfigurationCreateRequest,
-    DICOMConfigurationResponse,
-    DICOMConfigurationUpdateRequest,
     SystemBootstrapResponse,
     SystemResponse,
     SystemUpdateRequest,
@@ -154,6 +159,7 @@ __all__ = [
     "InstanceNode",
     "SystemNode",
     "DICOMConfigurationNode",
+    "DICOMConfigurationGroupSummary",
     "FHIRConfigurationNode",
     "FHIRConfigurationCreateRequest",
     "FHIRConfigurationGroupSummary",

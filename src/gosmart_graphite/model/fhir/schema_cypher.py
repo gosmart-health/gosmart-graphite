@@ -1,10 +1,10 @@
 import re
 from typing import List, Tuple, Type
 
+from gosmart_graphite.model.auditable import Auditable
 from gosmart_graphite.model.fhir.nodes import FHIR_NODE_CLASSES, FHIRDomainResourceNode
-from gosmart_graphite.model.graph import Auditable
 
-# Base Auditable fields inherited from model.graph.Auditable
+# Base Auditable fields inherited from model.auditable.Auditable
 _AUDITABLE_INTERNAL_FIELDS: frozenset[str] = frozenset(Auditable.model_fields.keys()) - {"test_id"}
 
 

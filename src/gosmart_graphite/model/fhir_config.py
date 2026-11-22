@@ -7,7 +7,7 @@ from typing import Any, ClassVar, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from gosmart_graphite.model.graph import AuditableRelation
+from gosmart_graphite.model.auditable import AuditableRelation
 
 
 class HasFhirConfigRelation(AuditableRelation):

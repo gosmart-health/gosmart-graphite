@@ -3,7 +3,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple, Type
 
 from pydantic import AliasChoices, Field, model_validator
 
-from gosmart_graphite.model.graph import AuditableNode
+from gosmart_graphite.model.auditable import AuditableNode
 
 
 class FHIRDomainResourceNode(AuditableNode):

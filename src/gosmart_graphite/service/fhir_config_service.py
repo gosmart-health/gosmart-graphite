@@ -9,14 +9,12 @@ from gosmart_graphite.core.auth_dependency import get_active_group_id
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.audit import AuditAction
+from gosmart_graphite.model.auditable import to_negated_relation_type
 from gosmart_graphite.model.fhir_config import (
     FHIRConfigurationCreateRequest,
     HasFhirConfigRelation,
 )
-from gosmart_graphite.model.graph import (
-    FHIRConfigurationNode,
-    to_negated_relation_type,
-)
+from gosmart_graphite.model.graph import FHIRConfigurationNode
 from gosmart_graphite.service.system_service import clean_neo4j_value, normalize_test_id
 
 logger = get_logger("gosmart_gs.fhir_config")

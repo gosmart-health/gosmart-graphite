@@ -13,14 +13,14 @@ from gosmart_graphite.db.schema_loader import (
     load_schema_statements,
 )
 from gosmart_graphite.model.audit import AuditNode
-from gosmart_graphite.model.auth import BelongsToRelation, PerformedAtRelation
-from gosmart_graphite.model.dicom import DicomHierarchy
-from gosmart_graphite.model.graph import (
-    TransferStatusNode,
+from gosmart_graphite.model.auditable import (
     generate_deterministic_id,
     to_negated_relation_type,
     to_positive_relation_type,
 )
+from gosmart_graphite.model.auth import BelongsToRelation, PerformedAtRelation
+from gosmart_graphite.model.dicom import DicomHierarchy
+from gosmart_graphite.model.graph import TransferStatusNode
 
 logger = get_logger("gosmart_gs.graph")
 

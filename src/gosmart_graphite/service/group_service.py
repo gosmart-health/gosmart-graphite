@@ -4,6 +4,7 @@ from gosmart_graphite.actor.audit_actor import record_audit
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.audit import AuditAction
+from gosmart_graphite.model.auditable import generate_deterministic_id, to_negated_relation_type
 from gosmart_graphite.model.auth import (
     BelongsToRelation,
     Group,
@@ -17,16 +18,14 @@ from gosmart_graphite.model.auth import (
     ServesRelation,
     UsesAuthenticatorRelation,
 )
+from gosmart_graphite.model.dicom_config import HasDicomConfigurationRelation
 from gosmart_graphite.model.fhir.relations import FHIR_RELATION_CLASSES
 from gosmart_graphite.model.fhir_config import HasFhirConfigRelation
 from gosmart_graphite.model.graph import (
-    HasDicomConfigurationRelation,
     HasInstanceRelation,
     HasSeriesRelation,
     HasStudyRelation,
     SystemNode,
-    generate_deterministic_id,
-    to_negated_relation_type,
 )
 from gosmart_graphite.model.llm_config import HasLlmConfigRelation
 

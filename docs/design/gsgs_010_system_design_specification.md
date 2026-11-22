@@ -83,18 +83,22 @@ graph TD
   - **Startup Connectivity Policy (`GOSMART_GS_DEV_MODE`)**: In production (`DEV_MODE=false`), `GraphService.init_schema_constraints()` automatically retries Neo4j connectivity with capped exponential backoff (`GOSMART_GS_DB_CONNECT_RETRY_TIMEOUT_SEC`, default `600s`; `0` = indefinite) to ride out transient cloud outages or upgrades before raising `SchemaInitializationError`. Setting `GOSMART_GS_DEV_MODE=true` relaxes offline Neo4j connectivity during local development.
 
 ### 3.3 Data Models Subsystem (`model/`)
-* **`graph.py`**: Graph domain, auditable base entities, and query models:
+* **`auditable.py`**: Auditable base entities, deterministic ID derivation, and relation negation helpers:
   - `generate_deterministic_id()`: Computes deterministic UUIDv5 from canonical JSON-serialized identity subsets.
   - `Auditable`: Base model providing `id`, `test_id`, `Action` (`CREATE`, `UPDATE`, `DELETE`, `RESTORE`), `ActedAt`, `ActedBy`, `CreatedAt`, `UpdatedAt`, and `ExpiresAt` (all timestamps Cypher `datetime({timezone: 'UTC'})`).
   - `AuditableNode`: Base node with single static class label enforcement (`__label__`).
   - `AuditableRelation`: Base relationship with single static class type enforcement (`__type__`) and reserved `NOT_` negation semantics.
-  - Concrete Nodes: `PatientNode` (`:Patient`), `StudyNode` (`:Study`), `SeriesNode` (`:Series`), `InstanceNode` (`:Instance`), `SystemNode` (`:System`), `DICOMConfigurationNode` (`:DICOMConfiguration`).
-  - Concrete Relationships: `HasStudyRelation` (`HAS_STUDY`), `HasSeriesRelation` (`HAS_SERIES`), `HasInstanceRelation` (`HAS_INSTANCE`), `HasDicomConfigurationRelation` (`HAS_DICOM_CONFIGURATION`).
+  - Relation negation helpers: `to_negated_relation_type()`, `to_positive_relation_type()`, `is_negated_relation_type()`.
+* **`dicom_config.py`**: DICOM protocol configuration graph models and API DTOs:
+  - `DICOMConfigurationNode` (`:DICOMConfiguration`) and `HasDicomConfigurationRelation` (`HAS_DICOM_CONFIGURATION`): DIMSE/DICOMweb parameters, TLS security settings, services, transfer syntaxes, default `storage_root_uri`, and promiscuous mode support.
+  - `DICOMConfigurationGroupSummary`, `DICOMConfigurationResponse`, `DICOMConfigurationCreateRequest`, `DICOMConfigurationUpdateRequest`: Request/response DTOs for DICOM configuration CRUD.
+* **`graph.py`**: Concrete graph domain models and generic query models:
+  - Concrete Nodes: `PatientNode` (`:Patient`), `StudyNode` (`:Study`), `SeriesNode` (`:Series`), `InstanceNode` (`:Instance`), `SystemNode` (`:System`), `FHIRConfigurationNode` (`:FHIRConfiguration`), `TransferStatusNode` (`:TransferStatus`).
+  - Concrete Relationships: `HasStudyRelation` (`HAS_STUDY`), `HasSeriesRelation` (`HAS_SERIES`), `HasInstanceRelation` (`HAS_INSTANCE`).
   - Generic query models: `CypherQueryRequest`, `GraphNode`, `GraphRelationship`, `GraphQueryResult`.
-* **`system.py`**: Pydantic DTO models for system and protocol configurations:
+* **`system.py`**: Pydantic DTO models for system metadata and lifecycle operations:
   - `SystemResponse`, `SystemUpdateRequest`: Root environment metadata with owner contact information and serial numbers.
-  - `DICOMConfigurationResponse`, `DICOMConfigurationCreateRequest`, `DICOMConfigurationUpdateRequest`: DIMSE/DICOMweb parameters, TLS security settings, services, transfer syntaxes, and promiscuous mode support.
-  - `SystemBootstrapResponse`: Idempotent environment initialization status.
+  - `SystemBootstrapResponse`, `TestCleanupResponse`: Idempotent environment initialization and test cleanup status.
 * **`llm.py`**: Dynamic, group-scoped LLM configuration models:
   - `LLM_Config` (`LLMConfigNode`, `__label__ = "LLM_Config"`): Auditable node capturing `tag` (globally unique purpose key), normalized `provider`, `model`, `url`, `dimensions`, `dimensions_truncated` (validated `<= dimensions`), `api_key`, `location`, `project_id`, `extra_config`, and `description`.
   - `HasLlmConfigRelation` (`__type__ = "HAS_LLM_CONFIG"`): Links sponsoring `(:Group)` to `(:LLM_Config)`.

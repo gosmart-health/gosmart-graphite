@@ -6,12 +6,12 @@ from datetime import datetime, timezone
 import pytest
 
 from gosmart_graphite.db.neo4j import neo4j_client
-from gosmart_graphite.model.graph import DICOMConfigurationNode
-from gosmart_graphite.model.system import (
+from gosmart_graphite.model.dicom_config import (
     DICOMConfigurationCreateRequest,
+    DICOMConfigurationNode,
     DICOMConfigurationUpdateRequest,
-    SystemUpdateRequest,
 )
+from gosmart_graphite.model.system import SystemUpdateRequest
 from gosmart_graphite.service.system_service import system_service
 
 

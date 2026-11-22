@@ -1,11 +1,13 @@
 from datetime import datetime
 
-from gosmart_graphite.model.graph import (
+from gosmart_graphite.model.auditable import generate_deterministic_id
+from gosmart_graphite.model.dicom_config import (
     DICOMConfigurationNode,
-    FHIRConfigurationNode,
     HasDicomConfigurationRelation,
+)
+from gosmart_graphite.model.graph import (
+    FHIRConfigurationNode,
     SystemNode,
-    generate_deterministic_id,
 )
 
 

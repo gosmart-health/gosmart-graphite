@@ -83,15 +83,17 @@ gosmart-graphite/
 │       ├── model/                    # Pydantic domain models
 │       │   ├── actor_message.py      # Pykka actor message schemas
 │       │   ├── audit.py              # Audit log and audit trail models
+│       │   ├── auditable.py          # Auditable, AuditableNode, AuditableRelation, ID & negation helpers
 │       │   ├── auth.py               # JWT token, API key, OAuth models
 │       │   ├── dicom.py              # Patient, Study, Series, Instance models
+│       │   ├── dicom_config.py       # DICOMConfiguration node, relation, and API DTOs
 │       │   ├── fhir/                 # FHIR R4B graph node & relationship models
 │       │   ├── fhir_config.py        # FHIRConfiguration models
 │       │   ├── graph.py              # Cypher and graph schema models
 │       │   ├── health.py             # Health response models
 │       │   ├── llm_config.py         # LLM_Config, HasLlmConfigRelation, and LLM API DTOs
 │       │   ├── media.py              # StorageScheme, ParsedStorageUri, MediaMetadata
-│       │   └── system.py             # System, DICOMConfiguration, User, Group models
+│       │   └── system.py             # System bootstrap, response, update, and test cleanup DTOs
 │       ├── service/                  # Business logic services
 │       │   ├── dicom_service.py      # pydicom parsing, mock generation, storage save
 │       │   ├── dicomweb_service.py   # DICOMweb STOW-RS, WADO-RS, QIDO-RS logic

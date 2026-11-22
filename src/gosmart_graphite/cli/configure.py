@@ -14,9 +14,9 @@ from rich.table import Table
 
 from gosmart_graphite.core.logging import setup_logging
 from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.dicom_config import DICOMConfigurationCreateRequest
 from gosmart_graphite.model.fhir_config import FHIRConfigurationCreateRequest
 from gosmart_graphite.model.llm_config import LLMConfigCreateRequest
-from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
 from gosmart_graphite.service.fhir_config_service import fhir_config_service
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.group_service import DEFAULT_GROUP_NAME, group_service

@@ -4,19 +4,19 @@ from typing import Any, Dict, List, Optional
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
-from gosmart_graphite.model.graph import (
-    DICOMConfigurationNode,
-    HasDicomConfigurationRelation,
-    SystemNode,
+from gosmart_graphite.model.auditable import (
     generate_deterministic_id,
     to_negated_relation_type,
     to_positive_relation_type,
 )
-from gosmart_graphite.model.system import (
+from gosmart_graphite.model.dicom_config import (
     DICOMConfigurationCreateRequest,
+    DICOMConfigurationNode,
     DICOMConfigurationUpdateRequest,
-    SystemUpdateRequest,
+    HasDicomConfigurationRelation,
 )
+from gosmart_graphite.model.graph import SystemNode
+from gosmart_graphite.model.system import SystemUpdateRequest
 from gosmart_graphite.service.group_service import group_service
 
 logger = get_logger("gosmart_gs.system")

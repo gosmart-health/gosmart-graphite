@@ -3,7 +3,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 
 from pydantic import Field, field_validator
 
-from gosmart_graphite.model.graph import AuditableNode, AuditableRelation
+from gosmart_graphite.model.auditable import AuditableNode, AuditableRelation
 
 
 class UserNode(AuditableNode):

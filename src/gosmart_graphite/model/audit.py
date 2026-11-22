@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Dict, Literal, Optional
 from pydantic import Field, field_validator, model_validator
 
 from gosmart_graphite.core.config import get_settings
-from gosmart_graphite.model.graph import AuditableNode
+from gosmart_graphite.model.auditable import AuditableNode
 
 AuditSeverity = Literal["INFO", "WARNING", "ERROR", "CRITICAL"]
 

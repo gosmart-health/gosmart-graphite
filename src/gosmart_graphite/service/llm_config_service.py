@@ -16,7 +16,7 @@ from gosmart_graphite.core.security import (
 )
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.audit import AuditAction
-from gosmart_graphite.model.graph import (
+from gosmart_graphite.model.auditable import (
     generate_deterministic_id,
     to_negated_relation_type,
     to_positive_relation_type,

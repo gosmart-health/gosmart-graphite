@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
+from gosmart_graphite.model.auditable import AuditableRelation, generate_deterministic_id
 from gosmart_graphite.model.auth import BelongsToRelation
 from gosmart_graphite.model.fhir import (
     BasedOnRelation,
@@ -63,7 +64,6 @@ from gosmart_graphite.model.fhir import (
     format_coding_macro,
     format_reference_macro,
 )
-from gosmart_graphite.model.graph import AuditableRelation, generate_deterministic_id
 from gosmart_graphite.service.graph_service import GraphService, graph_service
 
 logger = get_logger("gosmart_gs.fhir_service")

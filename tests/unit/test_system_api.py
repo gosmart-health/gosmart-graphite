@@ -311,7 +311,7 @@ async def test_fhir_config_service_group_resolution_and_hierarchy():
 @pytest.mark.anyio
 async def test_system_service_create_configuration_attaches_to_group():
     """Verify SystemService.create_configuration resolves the target group and attaches to (:Group), not (:System)."""
-    from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
+    from gosmart_graphite.model.dicom_config import DICOMConfigurationCreateRequest
     from gosmart_graphite.service.group_service import group_service
     from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
 

@@ -1,6 +1,6 @@
 from typing import ClassVar, Tuple, Type
 
-from gosmart_graphite.model.graph import AuditableRelation
+from gosmart_graphite.model.auditable import AuditableRelation
 
 
 class SubjectRelation(AuditableRelation):

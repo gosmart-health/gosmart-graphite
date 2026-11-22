@@ -12,12 +12,12 @@ from typer.testing import CliRunner
 
 from gosmart_graphite.cli import cli_app
 from gosmart_graphite.db.neo4j import Neo4jClient
+from gosmart_graphite.model.dicom_config import DICOMConfigurationCreateRequest, DICOMConfigurationNode
 from gosmart_graphite.model.fhir_config import (
     FHIRConfigurationCreateRequest,
     HasFhirConfigRelation,
 )
-from gosmart_graphite.model.graph import DICOMConfigurationNode, FHIRConfigurationNode
-from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
+from gosmart_graphite.model.graph import FHIRConfigurationNode
 from gosmart_graphite.service.fhir_config_service import FHIRConfigService
 from gosmart_graphite.service.system_service import SystemService
 

@@ -1,3 +1,9 @@
+from gosmart_graphite.model.auditable import (
+    generate_deterministic_id,
+    is_negated_relation_type,
+    to_negated_relation_type,
+    to_positive_relation_type,
+)
 from gosmart_graphite.model.graph import (
     HasInstanceRelation,
     HasSeriesRelation,
@@ -6,10 +12,6 @@ from gosmart_graphite.model.graph import (
     PatientNode,
     SeriesNode,
     StudyNode,
-    generate_deterministic_id,
-    is_negated_relation_type,
-    to_negated_relation_type,
-    to_positive_relation_type,
 )
 from gosmart_graphite.service.dicom_service import dicom_service
 

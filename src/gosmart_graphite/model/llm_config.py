@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from gosmart_graphite.core.security import resolve_llm_api_key
-from gosmart_graphite.model.graph import AuditableNode, AuditableRelation, generate_deterministic_id
+from gosmart_graphite.model.auditable import AuditableNode, AuditableRelation, generate_deterministic_id
 
 
 def _parse_extra_config(v: Any) -> Optional[Dict[str, Any]]:

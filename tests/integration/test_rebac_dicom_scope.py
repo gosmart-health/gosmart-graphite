@@ -101,7 +101,7 @@ async def test_rebac_dicom_full_organization_lifecycle():
     aet_a = f"AET_A_{suffix}"
     aet_b = f"AET_B_{suffix}"
 
-    from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
+    from gosmart_graphite.model.dicom_config import DICOMConfigurationCreateRequest
 
     cfg_a = await system_service.create_configuration(
         DICOMConfigurationCreateRequest(
