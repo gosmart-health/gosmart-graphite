@@ -14,6 +14,7 @@ from gosmart_graphite.actor import (
     get_dicom_actor,
     stop_audit_actor,
     stop_dicom_actor,
+    stop_embedding_actor,
     stop_fhir_actor,
 )
 from gosmart_graphite.api.v1.router import api_v1_router
@@ -140,6 +141,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.warning("dicom_scp_stop_failed", error=str(e))
     stop_dicom_actor()
     stop_fhir_actor()
+    stop_embedding_actor()
     stop_audit_actor()
     await neo4j_client.close()
     logger.info("server_shutdown_complete")
