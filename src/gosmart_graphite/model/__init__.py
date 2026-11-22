@@ -2,6 +2,8 @@ from gosmart_graphite.model.actor_message import (
     DicomAssociationReleasedMessage,
     DicomIngestionMessage,
     DicomMockIngestionMessage,
+    EmbeddingMessage,
+    EmbeddingMethod,
     FhirIngestionMessage,
 )
 from gosmart_graphite.model.audit import (
@@ -150,6 +152,8 @@ __all__ = [
     "DicomIngestionMessage",
     "DicomMockIngestionMessage",
     "FhirIngestionMessage",
+    "EmbeddingMethod",
+    "EmbeddingMessage",
     "PatientModel",
     "StudyModel",
     "SeriesModel",
