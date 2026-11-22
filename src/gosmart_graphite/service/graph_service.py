@@ -664,7 +664,7 @@ class GraphService:
                 return True
 
             elapsed = time.monotonic() - start_time
-            if timeout_sec > 0 and elapsed >= timeout_sec:
+            if 0 < timeout_sec <= elapsed:
                 msg = (
                     f"Neo4j at '{uri}' remained unreachable after {attempt} attempt(s) "
                     f"over {elapsed:.1f}s (timeout={timeout_sec:.1f}s) while initializing schema constraints"
