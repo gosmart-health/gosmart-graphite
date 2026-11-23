@@ -80,6 +80,27 @@ uv run gosmart-graphite configure fhir-config --file devop-scripts/fhir_config.t
 uv run gosmart-graphite configure fhir-config --file /path/to/my_fhir_config.json --assign <group_id>
 ```
 
+## `scaffold_configs.sh` & `scaffold_configs.ps1` — Configuration Scaffolding
+
+Scaffolds initial configuration nodes (e.g., FHIR, DICOM, LLM) for a specified Group.
+
+### How to Run
+
+**Bash:**
+```shell
+./devop-scripts/scaffold_configs.sh
+```
+
+**PowerShell:**
+```powershell
+.\devop-scripts\scaffold_configs.ps1
+```
+
+You can also use the general configuration helper scripts directly (`configure-cli.sh` or `configure-cli.ps1`):
+```powershell
+.\devop-scripts\configure-cli.ps1 -c fhir -f .\devop-scripts\examples\fhir_config.json -a "GoSmart Health"
+```
+
 ## `cleanup-data.py` — Data Cleanup Tool
 
 This script cleans up the DICOM files and clears all data nodes for both DICOM

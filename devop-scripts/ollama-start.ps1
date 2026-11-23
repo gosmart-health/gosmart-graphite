@@ -1,13 +1,11 @@
 #!/usr/bin/env pwsh
 # A script to start the ollama server, keep the model in memory
 # Allow (remind) the use of Embedding mode
-# $ModelName = "gemma4:e2b" # <-- CHANGE THIS to your model name (e.g., gemma2:2b)
-# $ModelName = "qwen3-embedding:4b"
-# $ModelName = "qwen3.5:0.8b"
+$ModelName = "gemma4:e2b" # <-- CHANGE THIS to your model name (e.g., gemma2:2b)
 # Embedding models like nomic needs  IS_EMBEDDING = $true, otherwise it will
 # fail to load the model
-$ModelName = "nomic-embed-text:latest" 
-$IS_EMBEDDING = $true 
+#$ModelName = "nomic-embed-text:latest"
+#$IS_EMBEDDING = $true
 
 # Ensure environment variables are applied to this session
 $Env:OLLAMA_KEEP_ALIVE = "-1"
@@ -113,4 +111,3 @@ if ($IS_EMBEDDING) {
         Write-Error "Failed to preload model '$ModelName': $_"
     }
 }
-
