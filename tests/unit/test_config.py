@@ -100,3 +100,13 @@ def test_dev_mode_and_db_connect_retry_env_override():
         assert settings.DB_CONNECT_RETRY_TIMEOUT_SEC == 1200
         assert settings.DB_CONNECT_RETRY_INITIAL_DELAY_SEC == 1.5
         assert settings.DB_CONNECT_RETRY_MAX_DELAY_SEC == 45.0
+
+
+def test_nlu_model_path_default_and_env_override():
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=None)
+        assert settings.NLU_MODEL_PATH == "./models/intent_models.zip"
+
+    with patch.dict(os.environ, {"GOSMART_GS_NLU_MODEL_PATH": "/opt/models/custom.zip"}, clear=True):
+        settings = Settings(_env_file=None)
+        assert settings.NLU_MODEL_PATH == "/opt/models/custom.zip"

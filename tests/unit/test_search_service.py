@@ -460,3 +460,154 @@ def test_search_service_validates_and_escapes_index_name() -> None:
 
     assert svc.search("test") == []
     assert "VECTOR INDEX `my``idx`" in calls[0][0]
+
+
+def _ensure_test_nlu_bundle(tmp_path: Any) -> Any:
+    """Return the repo's trained NLU bundle if present, else train a temporary one from training/."""
+    from pathlib import Path
+
+    from gosmart_clinical_nlu import load_training_dir, save_bundle, train_intent_models
+
+    repo_root = Path(__file__).resolve().parents[2]
+    bundled = repo_root / "models" / "intent_models.zip"
+    if bundled.is_file():
+        return bundled
+    corpus = load_training_dir(repo_root / "training")
+    models = train_intent_models(corpus)
+    out = tmp_path / "intent_models.zip"
+    return save_bundle(models, out)
+
+
+def test_parse_utterance_proxies_to_loaded_models_and_forwards_ref_date() -> None:
+    from datetime import datetime
+    from unittest.mock import patch
+
+    from gosmart_clinical_nlu import ParsedUtterance
+
+    stub_models = MagicMock(name="stub_intent_models")
+    expected = ParsedUtterance(
+        status="matched",
+        intent="find_study",
+        confidence=0.99,
+        threshold=0.6,
+        candidates={"find_study": 0.99, "get_report": 0.01},
+    )
+    svc = SearchService(
+        embedding_service=MagicMock(),
+        client=MagicMock(),
+        intent_models=stub_models,
+    )
+    assert svc.nlu_ready is True
+
+    ref = datetime(2026, 11, 23, 10, 0, 0)
+    with patch("gosmart_graphite.service.search_service._nlu_parse_utterance", return_value=expected) as mock_parse:
+        result = svc.parse_utterance("  Find a CT for patient 12345678  ", ref_date=ref)
+
+    assert result == expected
+    mock_parse.assert_called_once_with("Find a CT for patient 12345678", stub_models, ref_date=ref)
+
+
+def test_parse_utterance_validates_non_string() -> None:
+    svc = SearchService(
+        embedding_service=MagicMock(),
+        client=MagicMock(),
+        intent_models=MagicMock(),
+    )
+    with pytest.raises(ValueError, match="utterance must be a string"):
+        svc.parse_utterance(None)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="utterance must be a string"):
+        svc.parse_utterance(123)  # type: ignore[arg-type]
+
+
+def test_init_loads_model_bundle_eagerly_and_parses_clinical_utterances(tmp_path: Any) -> None:
+    from datetime import datetime
+
+    bundle_path = _ensure_test_nlu_bundle(tmp_path)
+    svc = SearchService(
+        embedding_service=MagicMock(),
+        client=MagicMock(),
+        nlu_model_path=bundle_path,
+    )
+    assert svc.nlu_ready is True
+    assert svc.intent_models is not None
+    assert set(svc.intent_models.names) >= {"find_study", "get_report"}
+
+    study_res = svc.parse_utterance("Find a CT for patient 12345678")
+    assert study_res.status == "matched"
+    assert study_res.intent == "find_study"
+    assert study_res.confidence >= study_res.threshold
+    assert "find_study" in study_res.candidates
+    assert "get_report" in study_res.candidates
+    assert study_res.data is not None
+    assert study_res.data.modality == "CT"
+    assert study_res.data.patient_id == "12345678"
+
+    report_res = svc.parse_utterance(
+        "Get the MRI report from yesterday for patient 99887766",
+        ref_date=datetime(2026, 11, 23),
+    )
+    assert report_res.status == "matched"
+    assert report_res.intent == "get_report"
+    assert report_res.data is not None
+    assert report_res.data.modality == "MR"
+    assert report_res.data.patient_id == "99887766"
+    assert report_res.data.study_date == "20261122"
+
+    blank_res = svc.parse_utterance("   ")
+    assert blank_res.status == "low_confidence"
+    assert blank_res.confidence == 0.0
+
+    unmatched_res = svc.parse_utterance("Hello world")
+    assert unmatched_res.status == "low_confidence"
+
+
+def test_init_resolves_relative_model_path_from_other_cwd(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    if not (repo_root / "models" / "intent_models.zip").is_file():
+        pytest.skip("Repository models/intent_models.zip not present in this checkout")
+
+    monkeypatch.chdir(tmp_path)
+    svc = SearchService(
+        embedding_service=MagicMock(),
+        client=MagicMock(),
+        nlu_model_path="./models/intent_models.zip",
+    )
+    assert svc.nlu_ready is True
+    assert svc.nlu_model_path == (repo_root / "models" / "intent_models.zip").resolve()
+
+
+def test_init_raises_on_explicit_missing_model_path_or_require_flag(tmp_path: Any) -> None:
+    from unittest.mock import patch
+
+    missing = tmp_path / "does_not_exist.zip"
+    with pytest.raises(FileNotFoundError, match="Clinical NLU model bundle not found"):
+        SearchService(
+            embedding_service=MagicMock(),
+            client=MagicMock(),
+            nlu_model_path=missing,
+        )
+
+    fake_settings = MagicMock(NLU_MODEL_PATH=str(missing))
+    with patch("gosmart_graphite.service.search_service.get_settings", return_value=fake_settings):
+        with pytest.raises(FileNotFoundError, match="Clinical NLU model bundle not found"):
+            SearchService(
+                embedding_service=MagicMock(),
+                client=MagicMock(),
+                require_nlu_model=True,
+            )
+
+
+def test_init_graceful_degradation_when_default_bundle_missing(tmp_path: Any) -> None:
+    from unittest.mock import patch
+
+    missing = tmp_path / "missing_default.zip"
+    fake_settings = MagicMock(NLU_MODEL_PATH=str(missing))
+    with patch("gosmart_graphite.service.search_service.get_settings", return_value=fake_settings):
+        svc = SearchService(embedding_service=MagicMock(), client=MagicMock())
+
+    assert svc.nlu_ready is False
+    assert svc.intent_models is None
+    with pytest.raises(RuntimeError, match="Clinical NLU intent models are not loaded"):
+        svc.parse_utterance("Find a CT for patient 12345678")

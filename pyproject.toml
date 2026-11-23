@@ -81,4 +81,4 @@ select = [
 known-first-party = ["gosmart_graphite", "tests"]
 
 [tool.uv.sources]
-gosmart-clinical-nlu = { git = "https://github.com/gosmart-health/gosmart-clinical-nlu.git", rev = "dev" }
+gosmart-clinical-nlu = { git = "https://github.com/gosmart-health/gosmart-clinical-nlu.git", rev = "main" }

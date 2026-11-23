@@ -148,6 +148,12 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Clinical NLU Settings (gosmart-clinical-nlu)
+    NLU_MODEL_PATH: str = Field(
+        default="./models/intent_models.zip",
+        description="Path to the bundled gosmart-clinical-nlu intent models ZIP archive",
+    )
+
     # Storage Root URI
     STORAGE_ROOT_URI: str = Field(
         default="file:///tmp/gosmart_dicom_storage",

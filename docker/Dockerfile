@@ -14,11 +14,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy
 
-# Install build dependencies for C-extensions (argon2-cffi, cryptography, etc.)
+# Install build dependencies for C-extensions and git-sourced dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     ca-certificates \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Astral uv binary from official image
@@ -32,12 +33,14 @@ COPY pyproject.toml uv.lock ./
 # Install locked production dependencies without installing the root project itself
 RUN uv sync --frozen --no-dev --no-install-project
 
-# Copy project source and metadata needed by build backend (hatchling)
+# Copy project source, NLU training data, and metadata needed by build backend (hatchling)
 COPY README.md LICENSE ./
 COPY src/ ./src/
+COPY training/ ./training/
 
-# Install root project into virtual environment
-RUN uv sync --frozen --no-dev
+# Install root project into virtual environment and build the clinical NLU intent models bundle
+RUN uv sync --frozen --no-dev \
+    && uv run gosmart-clinical-nlu train --training-dir training --out models/intent_models.zip
 
 # ------------------------------------------------------------------------------
 # Stage 2: Runtime Runner

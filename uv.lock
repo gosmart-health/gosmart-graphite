@@ -1334,8 +1334,8 @@ grpc = [
 
 [[package]]
 name = "gosmart-clinical-nlu"
-version = "0.1.0"
-source = { git = "https://github.com/gosmart-health/gosmart-clinical-nlu.git?rev=dev#ca8160883012543b0f0f26a3b997e41a2ffea953" }
+version = "0.2.0"
+source = { git = "https://github.com/gosmart-health/gosmart-clinical-nlu.git?rev=main#49d3c29338bf7411b370abd67a20ed47091436f9" }
 dependencies = [
     { name = "dateparser" },
     { name = "ipykernel" },
@@ -1403,7 +1403,7 @@ requires-dist = [
     { name = "genkit", specifier = ">=0.13.0" },
     { name = "genkit-google-genai", specifier = ">=0.13.0" },
     { name = "genkit-ollama", specifier = ">=0.13.0" },
-    { name = "gosmart-clinical-nlu", git = "https://github.com/gosmart-health/gosmart-clinical-nlu.git?rev=dev" },
+    { name = "gosmart-clinical-nlu", git = "https://github.com/gosmart-health/gosmart-clinical-nlu.git?rev=main" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "ipykernel", specifier = "==7.4.0" },
     { name = "mcp", specifier = "==2.3.0" },
