@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 from gosmart_graphite.core.config import Settings, get_settings
 from gosmart_graphite.db.neo4j import Neo4jClient, get_neo4j
 from gosmart_graphite.model.health import HealthResponse, ServiceHealth

@@ -9,11 +9,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from gosmart_graphite.actor.dicom_actor import get_dicom_actor, stop_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor, stop_dicom_actor
 from gosmart_graphite.cli.configure import configure_app
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger, setup_logging
 from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.model.actor_message import DicomIngestionMessage
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.pynetdicom_service import pynetdicom_service
@@ -45,7 +46,7 @@ def start(
             f"[bold green]Starting Gosmart.Health GRAPHITE[/bold green]\n"
             f"• HTTP & OpenAPI: [cyan]http://{bind_host}:{bind_port}/docs[/cyan]\n"
             f"• MCP SSE Endpoint: [cyan]http://{bind_host}:{bind_port}/mcp/sse[/cyan]\n"
-            f"• DICOM C-STORE SCP: [cyan]{getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GS')}@"
+            f"• DICOM C-STORE SCP: [cyan]{getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GRAPHITE')}@"
             f"{getattr(settings, 'DICOM_SCP_HOST', '0.0.0.0')}:{getattr(settings, 'DICOM_SCP_PORT', 11112)}[/cyan]\n"
             f"• Storage Root: [yellow]{settings.STORAGE_ROOT_URI}[/yellow]\n"
             f"• Neo4j Connection: [magenta]{settings.DB_CONNECTION_URI}[/magenta]\n"
@@ -111,7 +112,7 @@ def health():
     )
     table.add_row(
         "DICOM C-STORE SCP",
-        f"[green]CONFIGURED ({getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GS')})[/green]",
+        f"[green]CONFIGURED ({getattr(settings, 'DICOM_AE_TITLE', 'GOSMART_GRAPHITE')})[/green]",
         f"Port: {getattr(settings, 'DICOM_SCP_PORT', 11112)} (Host: {getattr(settings, 'DICOM_SCP_HOST', '0.0.0.0')})",
     )
     table.add_row(
@@ -185,15 +186,14 @@ def ingest(
     if use_actor:
         actor = get_dicom_actor()
         res = actor.ask(
-            {
-                "type": "INGEST_FILE",
-                "file_path": str(path),
-                "source": f"file:{path}",
-                "source_identity": "user:cli",
-                "destination": f"file:{path}",
-                "destination_identity": "service:local_storage",
-                "acted_by": "user:cli",
-            }
+            DicomIngestionMessage(
+                file_path=str(path),
+                source=f"file:{path}",
+                source_identity="user:cli",
+                destination=f"file:{path}",
+                destination_identity="service:local_storage",
+                acted_by="user:cli",
+            )
         )
         stop_dicom_actor()
         console.print(f"[green]Actor Ingestion Result:[/green] {res}")

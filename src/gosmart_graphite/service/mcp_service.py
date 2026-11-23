@@ -12,12 +12,12 @@ from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.core.security import decode_token
 from gosmart_graphite.db.neo4j import neo4j_client
-from gosmart_graphite.model.llm import LLMConfigCreateRequest
-from gosmart_graphite.model.system import (
+from gosmart_graphite.model.dicom_config import (
     DICOMConfigurationCreateRequest,
     DICOMConfigurationUpdateRequest,
-    SystemUpdateRequest,
 )
+from gosmart_graphite.model.llm_config import LLMConfigCreateRequest
+from gosmart_graphite.model.system import SystemUpdateRequest
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.llm_config_service import llm_config_service
@@ -65,7 +65,7 @@ def check_mcp_admin_role() -> None:
 @mcp.tool()
 async def health_check() -> Dict[str, Any]:
     """Check system health status (Neo4j, Pykka Actor, Storage URI)."""
-    from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+    from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
 
     settings = get_settings()
     neo4j_healthy = await neo4j_client.verify_connectivity()
@@ -136,10 +136,11 @@ async def generate_mock_dicom(
 async def ingest_dicom_file(file_path: str, use_actor: bool = True) -> Dict[str, Any]:
     """Parse and ingest a local DICOM file into the knowledge graph and storage root."""
     if use_actor:
-        from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+        from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
+        from gosmart_graphite.model.actor_message import DicomIngestionMessage
 
         actor = get_dicom_actor()
-        res = actor.ask({"type": "INGEST_FILE", "file_path": file_path})
+        res = actor.ask(DicomIngestionMessage(file_path=file_path), block=True)
         logger.info("mcp_file_ingested_via_actor", file_path=file_path, result=res)
         return res
 
@@ -335,11 +336,13 @@ async def create_dicom_configuration(
     tls_enabled: bool = False,
     dicom_services_json: Optional[str] = None,
     transfer_syntaxes_json: Optional[str] = None,
+    storage_root_uri: Optional[str] = None,
+    group_id: Optional[str] = None,
     description: Optional[str] = None,
     test_id: Optional[str] = None,
     acted_by: str = "mcp_agent",
 ) -> Dict[str, Any]:
-    """Create a new DICOM Configuration (* for promiscuous mode) linked to the System."""
+    """Create a new DICOM Configuration attached to a sponsoring Group (or default 'GoSmart Health')."""
     check_mcp_admin_role()
     effective_acted_by = acted_by if acted_by != "mcp_agent" else get_current_mcp_acted_by(fallback="mcp_agent")
     roles = json.loads(roles_json) if roles_json else ["SCP"]
@@ -355,11 +358,18 @@ async def create_dicom_configuration(
         tls_enabled=tls_enabled,
         dicom_services=dicom_services,
         transfer_syntaxes=transfer_syntaxes,
+        storage_root_uri=storage_root_uri,
+        group_id=group_id,
         description=description,
         test_id=test_id,
     )
-    cfg = await system_service.create_configuration(config_data=req, acted_by=effective_acted_by)
-    logger.info("mcp_create_dicom_configuration_executed", config_id=cfg.get("id"), ae_title=ae_title)
+    cfg = await system_service.create_configuration(config_data=req, acted_by=effective_acted_by, assign_group=group_id)
+    logger.info(
+        "mcp_create_dicom_configuration_executed",
+        config_id=cfg.get("id"),
+        ae_title=ae_title,
+        group_id=group_id,
+    )
     return cfg
 
 
@@ -372,6 +382,7 @@ async def update_dicom_configuration(
     port: Optional[int] = None,
     is_local: Optional[bool] = None,
     tls_enabled: Optional[bool] = None,
+    storage_root_uri: Optional[str] = None,
     description: Optional[str] = None,
     acted_by: str = "mcp_agent",
 ) -> Optional[Dict[str, Any]]:
@@ -386,6 +397,7 @@ async def update_dicom_configuration(
         port=port,
         is_local=is_local,
         tls_enabled=tls_enabled,
+        storage_root_uri=storage_root_uri,
         description=description,
     )
     updated = await system_service.update_configuration(
@@ -626,9 +638,7 @@ async def store_scu(
     instances: List[str] = json.loads(instances_json) if instances_json else []
 
     if not instances and (study_instance_uid or series_instance_uid or sop_instance_uid or patient_id):
-        level = "IMAGE" if sop_instance_uid else ("SERIES" if series_instance_uid else "STUDY")
         matched = graph_service.find_instances_for_retrieve_sync(
-            level=level,
             patient_id=patient_id,
             study_uid=study_instance_uid,
             series_uid=series_instance_uid,
@@ -648,6 +658,7 @@ async def store_scu(
             "instances": instances,
             "acted_by": effective_acted_by,
         },
+        block=True,
         timeout=timeout,
     )
     logger.info("mcp_store_scu_executed", destination_aet=destination_aet, result=res)
@@ -746,9 +757,11 @@ class MCPAuthMiddleware:
                     if k.lower() == b"mcp-session-id":
                         try:
                             sid = v.decode("utf-8").strip()
-                            _active_mcp_sessions[sid] = user
-                        except Exception:
-                            pass
+                            if user:
+                                _active_mcp_sessions[sid] = user
+                        except Exception as why:
+                            logger.warning(f"Failed to capture mcp-session-id: {why}")
+
             # 2. Capture session_id from SSE body declaration
             elif message["type"] == "http.response.body":
                 body_bytes = message.get("body", b"")
@@ -758,8 +771,10 @@ class MCPAuthMiddleware:
                         for line in body_text.splitlines():
                             if "session_id=" in line:
                                 extracted_sid = line.split("session_id=")[1].strip().split("&")[0].split()[0]
-                                _active_mcp_sessions[extracted_sid] = user
-                    except Exception:
+                                if user:
+                                    _active_mcp_sessions[extracted_sid] = user
+                    except Exception as why:
+                        logger.warning(f"Failed to capture mcp-session-id: {why}")
                         pass
             await send(message)
 

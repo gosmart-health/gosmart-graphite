@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from gosmart_graphite.actor.audit_actor import get_audit_actor, record_audit, stop_audit_actor
-from gosmart_graphite.actor.dicom_actor import stop_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import stop_dicom_actor
 from gosmart_graphite.model.audit import AuditAction, AuditNode
 from gosmart_graphite.service.graph_service import graph_service
 
@@ -199,20 +199,20 @@ def test_dicom_c_echo_records_audit():
 
 def test_dicom_actor_mock_ingestion_records_audit():
     """Test that DicomIngestionActor records audit event on mock ingestion."""
-    from gosmart_graphite.actor.dicom_actor import get_dicom_actor
+    from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor
+    from gosmart_graphite.model.actor_message import DicomMockIngestionMessage
 
     ingest_actor = get_dicom_actor()
     test_id = f"test_ingest_{uuid.uuid4().hex[:6]}"
     patient_id = f"AUDIT_INGEST_{uuid.uuid4().hex[:6]}"
 
     result = ingest_actor.ask(
-        {
-            "type": "INGEST_MOCK",
-            "patient_id": patient_id,
-            "modality": "CT",
-            "test_id": test_id,
-            "acted_by": "audit_test_suite",
-        },
+        DicomMockIngestionMessage(
+            patient_id=patient_id,
+            modality="CT",
+            test_id=test_id,
+            acted_by="audit_test_suite",
+        ),
         timeout=10.0,
     )
     assert result.get("success") is True

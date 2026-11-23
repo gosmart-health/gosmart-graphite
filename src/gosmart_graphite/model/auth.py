@@ -3,7 +3,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 
 from pydantic import Field, field_validator
 
-from gosmart_graphite.model.graph import AuditableNode, AuditableRelation
+from gosmart_graphite.model.auditable import AuditableNode, AuditableRelation
 
 
 class UserNode(AuditableNode):
@@ -123,6 +123,9 @@ class GroupNode(AuditableNode):
         }
 
 
+Group = GroupNode
+
+
 # Graph Relationships for Auth, Groups, and Tenancy
 
 
@@ -164,14 +167,8 @@ class MemberOfRelation(AuditableRelation):
     is_primary: bool = Field(default=False, description="Whether this is the user's primary/default group affiliation")
 
 
-class SubGroupOfRelation(AuditableRelation):
-    """Relationship connecting Child Group -> Parent Group (hierarchical tree)."""
-
-    __type__: ClassVar[str] = "SUB_GROUP_OF"
-
-
 class BelongsToRelation(AuditableRelation):
-    """Relationship connecting Patient -> Group."""
+    """Relationship connecting Patient/Encounter -> Group, Child Group -> Parent Group, or Root Group -> System."""
 
     __type__: ClassVar[str] = "BELONGS_TO"
 
@@ -192,3 +189,9 @@ class ServesRelation(AuditableRelation):
     """Relationship connecting DICOMConfiguration -> Group with 'SERVES' relation type."""
 
     __type__: ClassVar[str] = "SERVES"
+
+
+class HasLostAndFoundRelation(AuditableRelation):
+    """Relationship connecting System -> LostAndFound Group for operational recovery of unassociated nodes."""
+
+    __type__: ClassVar[str] = "HAS_LOST_AND_FOUND"

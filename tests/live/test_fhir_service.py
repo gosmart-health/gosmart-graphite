@@ -137,7 +137,7 @@ async def test_live_fetch_enc_relevant_resources(test_config: dict[str, Any]):
 @pytest.mark.skipif(not FHIR_PROXY_LIVE, reason="Live FHIR proxy is not running")
 @pytest.mark.anyio
 async def test_live_fetch_and_upsert_study_790735190745_twice(test_config: dict[str, Any]):
-    """Fetch live study 1.2.840.99999999.40196652.790735190745 and upsert twice (CREATE then UPDATE)."""
+    """Fetch live study 1.2.840.99999999.40196652.790735190745 and verify CREATE then UNCHANGED no-op."""
     if not await neo4j_client.verify_connectivity():
         pytest.skip(f"Neo4j database is not reachable at {neo4j_client.settings.DB_CONNECTION_URI}")
 
@@ -187,7 +187,7 @@ async def test_live_fetch_and_upsert_study_790735190745_twice(test_config: dict[
         assert db_create_check[0]["actions"] == ["CREATE"]
         assert db_create_check[0]["created_cnt"] == len(upserted_node_ids)
 
-        # 2. Second pass: Updating (Action == "UPDATE")
+        # 2. Second pass: Identical resources -> idempotent no-op (Action remains "CREATE", returns "UNCHANGED")
         second_result = await fhir.upsert_relevant_resources(
             resources,
             test_id=test_id,
@@ -195,10 +195,10 @@ async def test_live_fetch_and_upsert_study_790735190745_twice(test_config: dict[
         )
         assert second_result["node_ids"] == upserted_node_ids
         assert second_result["relationship_ids"] == upserted_rel_ids
-        assert all(n["action"] == "UPDATE" for n in second_result["nodes"])
-        assert all(r["action"] == "UPDATE" for r in second_result["relationships"])
+        assert all(n["action"] == "UNCHANGED" for n in second_result["nodes"])
+        assert all(r["action"] == "UNCHANGED" for r in second_result["relationships"])
 
-        # Verify in Neo4j that no duplicates were created and Action == "UPDATE", UpdatedAt set
+        # Verify in Neo4j that no duplicates were created and Action remains "CREATE" with UpdatedAt null
         db_update_check = await neo4j_client.execute_query(
             """
             MATCH (n {test_id: $test_id})
@@ -209,8 +209,8 @@ async def test_live_fetch_and_upsert_study_790735190745_twice(test_config: dict[
             {"test_id": test_id},
         )
         assert db_update_check[0]["cnt"] == len(upserted_node_ids)
-        assert db_update_check[0]["actions"] == ["UPDATE"]
-        assert db_update_check[0]["updated_cnt"] == len(upserted_node_ids)
+        assert db_update_check[0]["actions"] == ["CREATE"]
+        assert db_update_check[0]["updated_cnt"] == 0
 
         rel_update_check = await neo4j_client.execute_query(
             """
@@ -222,8 +222,8 @@ async def test_live_fetch_and_upsert_study_790735190745_twice(test_config: dict[
             {"test_id": test_id},
         )
         assert rel_update_check[0]["cnt"] == len(upserted_rel_ids)
-        assert rel_update_check[0]["actions"] == ["UPDATE"]
-        assert rel_update_check[0]["updated_cnt"] == len(upserted_rel_ids)
+        assert rel_update_check[0]["actions"] == ["CREATE"]
+        assert rel_update_check[0]["updated_cnt"] == 0
     finally:
         # Separate disposal function (can be disabled via "cleanup_enable": false in tests/configs.json)
         cleanup_stats = await cleanup_fhir_test_graph(

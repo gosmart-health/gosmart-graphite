@@ -29,7 +29,8 @@ from gosmart_graphite.core.security import (
 )
 from gosmart_graphite.db.neo4j import neo4j_client
 from gosmart_graphite.main import app
-from gosmart_graphite.model.llm import LLM_Config
+from gosmart_graphite.model.llm_config import LLM_Config
+from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG
 from gosmart_graphite.service.llm_config_service import LLMConfigService, llm_config_service
 from gosmart_graphite.service.mcp_service import (
     MCPAuthMiddleware,
@@ -50,14 +51,14 @@ from gosmart_graphite.service.mcp_service import (
 
 def test_llm_config_deterministic_id_and_validation() -> None:
     cfg1 = LLM_Config(
-        tag="embedding",
+        tag=DEFAULT_EMBEDDING_TAG,
         provider="Ollama",
         model="nomic-embed-text:latest",
         url="http://localhost:11434",
         dimensions=768,
     )
     cfg2 = LLM_Config(
-        tag="embedding",
+        tag=DEFAULT_EMBEDDING_TAG,
         provider="VertexAI",
         model="gemini-embedding-001",
         dimensions=1536,
@@ -71,7 +72,7 @@ def test_llm_config_deterministic_id_and_validation() -> None:
         extra_config={"temperature": 0.1},
     )
     cfg_test_scoped = LLM_Config(
-        tag="embedding",
+        tag=DEFAULT_EMBEDDING_TAG,
         provider="ollama",
         model="nomic-embed-text:latest",
         test_id="test_llm_1",
@@ -84,10 +85,12 @@ def test_llm_config_deterministic_id_and_validation() -> None:
     assert cfg1.id != cfg_test_scoped.id
 
     # Group-scoped deterministic IDs differ across sponsoring groups for the same tag
-    scoped_grp_a = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a")
-    scoped_grp_b = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_b")
-    scoped_grp_a_dup = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a")
-    scoped_grp_a_test = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a", test_id="test_llm_1")
+    scoped_grp_a = LLM_Config.compute_group_scoped_id(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_a")
+    scoped_grp_b = LLM_Config.compute_group_scoped_id(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_b")
+    scoped_grp_a_dup = LLM_Config.compute_group_scoped_id(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_a")
+    scoped_grp_a_test = LLM_Config.compute_group_scoped_id(
+        tag=DEFAULT_EMBEDDING_TAG, group_id="grp_a", test_id="test_llm_1"
+    )
     assert scoped_grp_a == scoped_grp_a_dup
     assert scoped_grp_a != scoped_grp_b
     assert scoped_grp_a != scoped_grp_a_test
@@ -103,7 +106,7 @@ def test_llm_config_deterministic_id_and_validation() -> None:
     # Invalid truncated dimensions > dimensions
     with pytest.raises(ValidationError, match="dimensions_truncated"):
         LLM_Config(
-            tag="embedding",
+            tag=DEFAULT_EMBEDDING_TAG,
             provider="vertexai",
             model="gemini-embedding-001",
             dimensions=256,
@@ -202,7 +205,7 @@ async def test_upsert_overwrite_clones_archive_and_preserves_groups() -> None:
     target_grp = {"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"}
     mock_client.execute_query = AsyncMock(return_value=[{"group": target_grp}])
 
-    existing_cfg_id = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_b")
+    existing_cfg_id = LLM_Config.compute_group_scoped_id(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_b")
     fake_tx = _FakeAsyncTx(
         [
             # 1. Check existing node & active groups (grp_a and grp_b)
@@ -210,7 +213,7 @@ async def test_upsert_overwrite_clones_archive_and_preserves_groups() -> None:
                 {
                     "grp_existing": {
                         "id": existing_cfg_id,
-                        "tag": "embedding",
+                        "tag": DEFAULT_EMBEDDING_TAG,
                         "provider": "ollama",
                         "model": "old-model",
                         "Action": "CREATE",
@@ -227,7 +230,7 @@ async def test_upsert_overwrite_clones_archive_and_preserves_groups() -> None:
                 {
                     "config": {
                         "id": existing_cfg_id,
-                        "tag": "embedding",
+                        "tag": DEFAULT_EMBEDDING_TAG,
                         "provider": "vertexai",
                         "model": "gemini-embedding-001",
                         "api_key": "AIzaSyTopSecret9999",
@@ -250,7 +253,7 @@ async def test_upsert_overwrite_clones_archive_and_preserves_groups() -> None:
     with patch("gosmart_graphite.service.llm_config_service.record_audit"):
         res = await svc.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "api_key": "AIzaSyTopSecret9999",
@@ -280,8 +283,8 @@ async def test_upsert_shared_config_on_other_group_dissociates_and_creates_group
     target_grp = {"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"}
     mock_client.execute_query = AsyncMock(return_value=[{"group": target_grp}])
 
-    shared_cfg_id = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_a")
-    own_cfg_id = LLM_Config.compute_group_scoped_id(tag="embedding", group_id="grp_b")
+    shared_cfg_id = LLM_Config.compute_group_scoped_id(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_a")
+    own_cfg_id = LLM_Config.compute_group_scoped_id(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_b")
     fake_tx = _FakeAsyncTx(
         [
             # 1. Inspect: grp_b currently shares grp_a's embedding config
@@ -289,7 +292,7 @@ async def test_upsert_shared_config_on_other_group_dissociates_and_creates_group
                 {
                     "grp_existing": {
                         "id": shared_cfg_id,
-                        "tag": "embedding",
+                        "tag": DEFAULT_EMBEDDING_TAG,
                         "provider": "vertexai",
                         "model": "gemini-embedding-001",
                         "Action": "CREATE",
@@ -306,7 +309,7 @@ async def test_upsert_shared_config_on_other_group_dissociates_and_creates_group
                 {
                     "config": {
                         "id": own_cfg_id,
-                        "tag": "embedding",
+                        "tag": DEFAULT_EMBEDDING_TAG,
                         "provider": "vertexai",
                         "model": "gemini-embedding-001",
                         "api_key": "AIzaSyGroupBKey9999",
@@ -326,7 +329,7 @@ async def test_upsert_shared_config_on_other_group_dissociates_and_creates_group
     with patch("gosmart_graphite.service.llm_config_service.record_audit"):
         res = await svc.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "api_key": "AIzaSyGroupBKey9999",
@@ -355,11 +358,16 @@ async def test_group_tag_uniqueness_enforced_on_assign_update_and_restore() -> N
 
     # 1. assign_to_group rejects duplicate tag on target group
     svc.get_llm_config = AsyncMock(
-        return_value={"id": "cfg_a", "tag": "embedding", "provider": "vertexai", "model": "gemini-embedding-001"}
+        return_value={
+            "id": "cfg_a",
+            "tag": DEFAULT_EMBEDDING_TAG,
+            "provider": "vertexai",
+            "model": "gemini-embedding-001",
+        }
     )
     svc.resolve_target_group = AsyncMock(return_value={"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"})
     fake_tx = _FakeAsyncTx([_FakeAsyncResult({"conflict_id": "cfg_b"})])
-    with pytest.raises(ValueError, match="already has an active LLM_Config with tag 'embedding'"):
+    with pytest.raises(ValueError, match=f"already has an active LLM_Config with tag '{DEFAULT_EMBEDDING_TAG}'"):
         await svc.assign_to_group(config_id="cfg_a", group_identifier="grp_b")
     assert len(fake_tx.calls) == 1
 
@@ -369,7 +377,7 @@ async def test_group_tag_uniqueness_enforced_on_assign_update_and_restore() -> N
             {
                 "config": {
                     "id": "cfg_a",
-                    "tag": "embedding",
+                    "tag": DEFAULT_EMBEDDING_TAG,
                     "provider": "vertexai",
                     "model": "gemini-embedding-001",
                     "api_key": "",
@@ -378,10 +386,10 @@ async def test_group_tag_uniqueness_enforced_on_assign_update_and_restore() -> N
             }
         ]
     )
-    from gosmart_graphite.model.llm import LLMConfigUpdateRequest
+    from gosmart_graphite.model.llm_config import LLMConfigUpdateRequest
 
     fake_tx = _FakeAsyncTx([_FakeAsyncResult({"conflict_id": "cfg_b"})])
-    with pytest.raises(ValueError, match="already has an active LLM_Config with tag 'embedding'"):
+    with pytest.raises(ValueError, match=f"already has an active LLM_Config with tag '{DEFAULT_EMBEDDING_TAG}'"):
         await svc.update_llm_config(
             config_id="cfg_a",
             update_data=LLMConfigUpdateRequest(assign_group="grp_b"),
@@ -391,7 +399,7 @@ async def test_group_tag_uniqueness_enforced_on_assign_update_and_restore() -> N
     # 3. restore_llm_config rejects restoring link if group already has another active config with same tag
     fake_tx = _FakeAsyncTx(
         [
-            _FakeAsyncResult({"id": "cfg_old", "tag": "embedding", "test_id": None, "group_ids": ["grp_b"]}),
+            _FakeAsyncResult({"id": "cfg_old", "tag": DEFAULT_EMBEDDING_TAG, "test_id": None, "group_ids": ["grp_b"]}),
             _FakeAsyncResult({"conflict_id": "cfg_b"}),
         ]
     )
@@ -405,29 +413,39 @@ async def test_get_llm_config_by_tag_group_disambiguation() -> None:
     svc = LLMConfigService(client=mock_client)
 
     rec_a = {
-        "config": {"id": "cfg_a", "tag": "embedding", "provider": "vertexai", "model": "gemini-embedding-001"},
+        "config": {
+            "id": "cfg_a",
+            "tag": DEFAULT_EMBEDDING_TAG,
+            "provider": "vertexai",
+            "model": "gemini-embedding-001",
+        },
         "groups": [{"id": "grp_a", "name": "Clinic A", "code": "CLINIC_A"}],
     }
     rec_b = {
-        "config": {"id": "cfg_b", "tag": "embedding", "provider": "vertexai", "model": "gemini-embedding-001"},
+        "config": {
+            "id": "cfg_b",
+            "tag": DEFAULT_EMBEDDING_TAG,
+            "provider": "vertexai",
+            "model": "gemini-embedding-001",
+        },
         "groups": [{"id": "grp_b", "name": "Clinic B", "code": "CLINIC_B"}],
     }
 
     # 1. Explicit group_id returns matching group's config
     mock_client.execute_query = AsyncMock(return_value=[rec_b])
-    res_b = await svc.get_llm_config(tag="embedding", group_id="grp_b")
+    res_b = await svc.get_llm_config(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_b")
     assert res_b is not None
     assert res_b["id"] == "cfg_b"
 
     # 2. Ambiguous across groups with no group_id or active_group_id raises RuntimeError
     mock_client.execute_query = AsyncMock(return_value=[rec_a, rec_b])
-    with pytest.raises(RuntimeError, match="Ambiguous LLM_Config for tag 'embedding'"):
-        await svc.get_llm_config(tag="embedding")
+    with pytest.raises(RuntimeError, match=f"Ambiguous LLM_Config for tag '{DEFAULT_EMBEDDING_TAG}'"):
+        await svc.get_llm_config(tag=DEFAULT_EMBEDDING_TAG)
 
     # 3. Active group context disambiguates when multiple configs share a tag
     token = set_active_group_id("grp_b")
     try:
-        res_ctx = await svc.get_llm_config(tag="embedding")
+        res_ctx = await svc.get_llm_config(tag=DEFAULT_EMBEDDING_TAG)
     finally:
         reset_active_group_id(token)
     assert res_ctx is not None
@@ -440,15 +458,15 @@ async def test_resolve_config_for_group_upward_and_default_fallback() -> None:
     svc = LLMConfigService(client=mock_client)
 
     root_cfg_props = {
-        "id": LLM_Config(tag="embedding", provider="ollama", model="root-model").id,
-        "tag": "embedding",
+        "id": LLM_Config(tag=DEFAULT_EMBEDDING_TAG, provider="ollama", model="root-model").id,
+        "tag": DEFAULT_EMBEDDING_TAG,
         "provider": "ollama",
         "model": "root-model",
         "url": "http://root:11434",
     }
     child_cfg_props = {
-        "id": LLM_Config(tag="embedding", provider="vertexai", model="gemini-embedding-001").id,
-        "tag": "embedding",
+        "id": LLM_Config(tag=DEFAULT_EMBEDDING_TAG, provider="vertexai", model="gemini-embedding-001").id,
+        "tag": DEFAULT_EMBEDDING_TAG,
         "provider": "vertexai",
         "model": "gemini-embedding-001",
     }
@@ -460,7 +478,7 @@ async def test_resolve_config_for_group_upward_and_default_fallback() -> None:
             {"config": root_cfg_props, "group_id": "grp_root", "depth": 2},
         ]
     )
-    resolved = await svc.resolve_config_for_group(tag="embedding", group_id="grp_child")
+    resolved = await svc.resolve_config_for_group(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_child")
     assert resolved is not None
     assert resolved.provider == "vertexai"
 
@@ -473,7 +491,7 @@ async def test_resolve_config_for_group_upward_and_default_fallback() -> None:
     )
     token = set_active_group_id("grp_orphan")
     try:
-        fallback_resolved = await svc.resolve_config_for_group(tag="embedding")
+        fallback_resolved = await svc.resolve_config_for_group(tag=DEFAULT_EMBEDDING_TAG)
     finally:
         reset_active_group_id(token)
     assert fallback_resolved is not None
@@ -482,12 +500,12 @@ async def test_resolve_config_for_group_upward_and_default_fallback() -> None:
     # Case C: ambiguous multiple configs at same depth raises RuntimeError
     mock_client.execute_query = AsyncMock(
         return_value=[
-            {"config": {"id": "id_1", "tag": "embedding", "provider": "ollama", "model": "m1"}, "depth": 1},
-            {"config": {"id": "id_2", "tag": "embedding", "provider": "vertexai", "model": "m2"}, "depth": 1},
+            {"config": {"id": "id_1", "tag": DEFAULT_EMBEDDING_TAG, "provider": "ollama", "model": "m1"}, "depth": 1},
+            {"config": {"id": "id_2", "tag": DEFAULT_EMBEDDING_TAG, "provider": "vertexai", "model": "m2"}, "depth": 1},
         ]
     )
     with pytest.raises(RuntimeError, match="Ambiguous LLM_Config"):
-        await svc.resolve_config_for_group(tag="embedding", group_id="grp_child")
+        await svc.resolve_config_for_group(tag=DEFAULT_EMBEDDING_TAG, group_id="grp_child")
 
 
 @pytest.mark.anyio
@@ -512,7 +530,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
     # 2. JSON array rejected
     array_file = tmp_path / "array.json"
     array_file.write_text(
-        json.dumps([{"tag": "embedding", "provider": "ollama", "model": "nomic-embed-text:latest"}]),
+        json.dumps([{"tag": DEFAULT_EMBEDDING_TAG, "provider": "ollama", "model": "nomic-embed-text:latest"}]),
         encoding="utf-8",
     )
     res_array = runner.invoke(cli_app, ["configure", "llm-config", "--file", str(array_file)])
@@ -524,7 +542,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
     valid_file.write_text(
         json.dumps(
             {
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "api_key": "AIzaSyCliSecret9999",
@@ -535,6 +553,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
     )
 
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()),
         patch.object(
             llm_config_service,
             "upsert_llm_config",
@@ -548,8 +567,8 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
 
     # 4. Valid upsert succeeds and masks API key in Rich summary output
     saved_response = {
-        "id": LLM_Config(tag="embedding", provider="vertexai", model="gemini-embedding-001").id,
-        "tag": "embedding",
+        "id": LLM_Config(tag=DEFAULT_EMBEDDING_TAG, provider="vertexai", model="gemini-embedding-001").id,
+        "tag": DEFAULT_EMBEDDING_TAG,
         "provider": "vertexai",
         "model": "gemini-embedding-001",
         "url": "",
@@ -565,6 +584,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
         "action": "CREATE",
     }
     with (
+        patch("gosmart_graphite.cli.configure._ensure_cli_db_ready", new=AsyncMock()) as mock_ready,
         patch.object(
             llm_config_service,
             "upsert_llm_config",
@@ -580,6 +600,7 @@ def test_cli_configure_llm_config_validation_and_upsert(tmp_path: Path) -> None:
         assert "AIzaSyCliSecret9999" not in res_ok.output
         assert "AIza****9999" in res_ok.output
         assert "gemini-embedding-001" in res_ok.output
+        mock_ready.assert_awaited_once_with(assign_group="GoSmart Health", acted_by="cli:configure", test_id=None)
         mock_upsert.assert_awaited_once()
         assert mock_upsert.call_args.kwargs["assign_group"] == "GoSmart Health"
 
@@ -726,10 +747,10 @@ def test_api_llm_configuration_crud(admin_client: TestClient) -> None:
 
 @pytest.mark.anyio
 async def test_mcp_llm_configuration_tools_and_group_middleware() -> None:
-    cfg_id = LLM_Config(tag="embedding", provider="ollama", model="nomic-embed-text:latest").id
+    cfg_id = LLM_Config(tag=DEFAULT_EMBEDDING_TAG, provider="ollama", model="nomic-embed-text:latest").id
     mock_cfg = {
         "id": cfg_id,
-        "tag": "embedding",
+        "tag": DEFAULT_EMBEDDING_TAG,
         "provider": "ollama",
         "model": "nomic-embed-text:latest",
         "api_key": "",
@@ -738,7 +759,7 @@ async def test_mcp_llm_configuration_tools_and_group_middleware() -> None:
 
     with patch.object(llm_config_service, "upsert_llm_config", new=AsyncMock(return_value=mock_cfg)):
         saved = await upsert_llm_configuration(
-            tag="embedding",
+            tag=DEFAULT_EMBEDDING_TAG,
             provider="ollama",
             model="nomic-embed-text:latest",
             url="http://localhost:11434",
@@ -748,11 +769,11 @@ async def test_mcp_llm_configuration_tools_and_group_middleware() -> None:
         assert saved["id"] == cfg_id
 
     with patch.object(llm_config_service, "list_llm_configs", new=AsyncMock(return_value=[mock_cfg])):
-        listed = await list_llm_configurations(tag="embedding")
+        listed = await list_llm_configurations(tag=DEFAULT_EMBEDDING_TAG)
         assert len(listed) == 1
 
     with patch.object(llm_config_service, "get_llm_config", new=AsyncMock(return_value=mock_cfg)):
-        fetched = await get_llm_configuration(tag="embedding")
+        fetched = await get_llm_configuration(tag=DEFAULT_EMBEDDING_TAG)
         assert fetched is not None
         assert fetched["id"] == cfg_id
 
@@ -776,7 +797,7 @@ async def test_mcp_llm_configuration_tools_and_group_middleware() -> None:
     token_user = _current_mcp_user.set({"id": "u_basic", "system_roles": ["CLINICIAN"]})
     try:
         with pytest.raises(PermissionError, match="Admin"):
-            await upsert_llm_configuration(tag="embedding", provider="ollama", model="m")
+            await upsert_llm_configuration(tag=DEFAULT_EMBEDDING_TAG, provider="ollama", model="m")
     finally:
         _current_mcp_user.reset(token_user)
 

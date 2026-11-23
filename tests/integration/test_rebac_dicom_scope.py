@@ -10,7 +10,7 @@ from pynetdicom import AE
 from pynetdicom.sop_class import StudyRootQueryRetrieveInformationModelFind
 
 from gosmart_graphite.actor.audit_actor import get_audit_actor, stop_audit_actor
-from gosmart_graphite.actor.dicom_actor import get_dicom_actor, stop_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import get_dicom_actor, stop_dicom_actor
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.db.neo4j import neo4j_client
 from gosmart_graphite.main import app
@@ -101,7 +101,7 @@ async def test_rebac_dicom_full_organization_lifecycle():
     aet_a = f"AET_A_{suffix}"
     aet_b = f"AET_B_{suffix}"
 
-    from gosmart_graphite.model.system import DICOMConfigurationCreateRequest
+    from gosmart_graphite.model.dicom_config import DICOMConfigurationCreateRequest
 
     cfg_a = await system_service.create_configuration(
         DICOMConfigurationCreateRequest(

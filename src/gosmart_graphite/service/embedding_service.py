@@ -15,14 +15,17 @@ from genkit_ollama import Ollama
 
 from gosmart_graphite.core.config import Settings, get_settings
 from gosmart_graphite.core.logging import get_logger
-from gosmart_graphite.model.llm import LLM_Config
+from gosmart_graphite.model.llm_config import LLM_Config
 
 if TYPE_CHECKING:
     from gosmart_graphite.service.llm_config_service import LLMConfigService
 
 logger = get_logger("gosmart_gs.vector_service")
 
-DEFAULT_EMBEDDING_TAG = "embedding"
+DEFAULT_EMBEDDING_TAG = "embedding-v1"
+
+# These are just the basic prefixes. Refer to the provider's documents for
+# asymmetric Q/A, and symmetric usages.
 
 INSTRUCTION_PREFIXES: dict[str, dict[str, Any]] = {
     "nomic-embed-text": {
@@ -39,6 +42,12 @@ INSTRUCTION_PREFIXES: dict[str, dict[str, Any]] = {
     "quen3-embedding": {
         "search": "Given the search query, retrieve relevant passages that answer the query\nQuery: ",
         "document": "",
+        "is_parametric": False,
+        "parameterStyle": "",
+    },
+    "embeddinggemma-2": {
+        "search": "task: search result | query: ",
+        "document": "title: ${title} | text: ",  # If you have a title provide it instead of none
         "is_parametric": False,
         "parameterStyle": "",
     },
@@ -103,12 +112,13 @@ def compute_cosine_scores(
 
     q_norm = float(np.linalg.norm(q))
     t_norms = np.linalg.norm(targets, axis=1)
-    denom = q_norm * t_norms
+    denominator = q_norm * t_norms
 
     dots = targets @ q
-    cos_sim = np.where(denom > 0.0, dots / np.where(denom > 0.0, denom, 1.0), -1.0)
+    cos_sim = np.where(denominator > 0.0, dots / np.where(denominator > 0.0, denominator, 1.0), -1.0)
     cos_sim = np.clip(cos_sim, -1.0, 1.0)
     scores = np.clip((cos_sim + 1.0) / 2.0, 0.0, 1.0)
+    # noinspection bad-return
     return [float(s) for s in scores]
 
 
@@ -126,6 +136,7 @@ def compute_dot_product_scores(
 
     dots = np.clip(targets @ q, -1.0, 1.0)
     scores = np.clip((dots + 1.0) / 2.0, 0.0, 1.0)
+    # noinspection bad-return
     return [float(s) for s in scores]
 
 
@@ -144,6 +155,7 @@ def compute_euclidean_scores(
 
     dists = np.linalg.norm(targets - q, axis=1)
     scores = 1.0 / (1.0 + dists)
+    # noinspection bad-return
     return [float(s) for s in np.clip(scores, 0.0, 1.0)]
 
 
@@ -162,6 +174,7 @@ def compute_manhattan_scores(
 
     dists = np.sum(np.abs(targets - q), axis=1)
     scores = 1.0 / (1.0 + dists)
+    # noinspection bad-return
     return [float(s) for s in np.clip(scores, 0.0, 1.0)]
 
 
@@ -458,6 +471,7 @@ class EmbeddingService:
         group_id: Optional[str] = None,
         tag: str = DEFAULT_EMBEDDING_TAG,
         test_id: Optional[str] = None,
+        title: str = "none",
         llm_config: Optional[LLM_Config] = None,
         config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
@@ -477,8 +491,10 @@ class EmbeddingService:
         embedder_name = self.resolve_embedder_name(config=cfg, model=target_model, resolved_api_key=resolved_key)
 
         mode: Literal["search", "document"] = "search" if is_query else "document"
-        prefix = self.prefix_by_model(target_model, mode)
+        prefix = self.prefix_by_model(target_model, mode).replace("${title}", title)
         content = f"{prefix}{text}" if prefix else text
+
+        logger.info(f"Embedding text: {content}")
 
         embed_config: dict[str, Any] = {}
         if cfg.extra_config:
@@ -515,6 +531,7 @@ class EmbeddingService:
         group_id: Optional[str] = None,
         tag: str = DEFAULT_EMBEDDING_TAG,
         test_id: Optional[str] = None,
+        title: str = "none",
         llm_config: Optional[LLM_Config] = None,
         config: Optional[dict[str, Any]] = None,
     ) -> list[float]:
@@ -530,6 +547,7 @@ class EmbeddingService:
             group_id=group_id,
             tag=tag,
             test_id=test_id,
+            title=title,
             llm_config=llm_config,
             config=config,
         )

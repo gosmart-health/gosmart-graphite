@@ -19,7 +19,7 @@ from pynetdicom.sop_class import (
 
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.db.neo4j import neo4j_client
-from gosmart_graphite.model.graph import DICOMConfigurationNode
+from gosmart_graphite.model.dicom_config import DICOMConfigurationNode
 from gosmart_graphite.service.dicom_service import dicom_service
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.media_service import media_service

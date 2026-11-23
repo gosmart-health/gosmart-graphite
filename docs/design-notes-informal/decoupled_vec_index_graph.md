@@ -18,10 +18,11 @@ Embedding nodes should inherit from `AuditableNode`.
 
 In addition to the fields inherited from `AuditableNode`, each Embedding node should define:
 
-- **Label**: `:EMBEDDING`
+- **Label**: `:Embedding`
 - **`modelTag`**: System-specific short string identifying the embedding model used.
 - **`size`**: Dimensionality (length) of the vector.
 - **`vector`**: L2-normalized vector representation (an array of floats), indexed by a vector index.
+- **`text`**: Original source text from which the embedding vector was generated.
 - **`targetFieldTag`**: Tag identifying the field on the target node that the vector represents.
 
 ### Relationships — `:EMBEDS`

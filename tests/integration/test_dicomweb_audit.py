@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gosmart_graphite.actor.audit_actor import get_audit_actor, stop_audit_actor
-from gosmart_graphite.actor.dicom_actor import stop_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import stop_dicom_actor
 from gosmart_graphite.core.auth_dependency import get_current_user
 from gosmart_graphite.main import app
 from gosmart_graphite.model.audit import AuditAction

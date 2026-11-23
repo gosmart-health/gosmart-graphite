@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, LiteralString, Optional
 
 from gosmart_graphite.actor.audit_actor import record_audit
 from gosmart_graphite.core.auth_dependency import get_active_group_id
@@ -16,17 +16,18 @@ from gosmart_graphite.core.security import (
 )
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.audit import AuditAction
-from gosmart_graphite.model.graph import (
+from gosmart_graphite.model.auditable import (
     generate_deterministic_id,
     to_negated_relation_type,
     to_positive_relation_type,
 )
-from gosmart_graphite.model.llm import (
+from gosmart_graphite.model.llm_config import (
     HasLlmConfigRelation,
     LLM_Config,
     LLMConfigCreateRequest,
     LLMConfigUpdateRequest,
 )
+from gosmart_graphite.service.system_service import normalize_test_id
 
 logger = get_logger("gosmart_gs.llm_config")
 
@@ -44,13 +45,6 @@ def _clean_neo4j_value(val: Any) -> Any:
     return val
 
 
-def _normalize_test_id(test_id: Optional[str]) -> Optional[str]:
-    if test_id and isinstance(test_id, str):
-        stripped = test_id.strip()
-        return stripped if stripped else None
-    return None
-
-
 def _parse_extra_config_value(raw_val: Any) -> Optional[Dict[str, Any]]:
     if raw_val is None or raw_val == "":
         return None
@@ -60,7 +54,8 @@ def _parse_extra_config_value(raw_val: Any) -> Optional[Dict[str, Any]]:
         try:
             parsed = json.loads(raw_val)
             return parsed if isinstance(parsed, dict) else None
-        except Exception:
+        except Exception as why:
+            logger.error(f"Failed to parse extra config value: {why}")
             return None
     return None
 
@@ -148,7 +143,7 @@ def _node_props_payload(cfg_node: LLM_Config, encrypted_api_key: str) -> Dict[st
 class LLMConfigService:
     """Service managing Neo4j-persisted, purpose-tagged, group-scoped LLM configurations."""
 
-    _UPSERT_INSPECT_CYPHER = """
+    _UPSERT_INSPECT_CYPHER: LiteralString = """
     MATCH (tg:Group {id: $target_group_id})
     OPTIONAL MATCH (tg)-[tgr:HAS_LLM_CONFIG]->(grp_existing:LLM_Config {tag: $tag})
     WHERE (tgr.Action IS NULL OR tgr.Action <> 'DELETE')
@@ -178,7 +173,7 @@ class LLMConfigService:
     LIMIT 1
     """
 
-    _GROUP_TAG_CONFLICT_CYPHER = """
+    _GROUP_TAG_CONFLICT_CYPHER: LiteralString = """
     MATCH (g:Group {id: $group_id})-[r:HAS_LLM_CONFIG]->(other:LLM_Config {tag: $tag})
     WHERE other.id <> $config_id
       AND (r.Action IS NULL OR r.Action <> 'DELETE')
@@ -199,7 +194,7 @@ class LLMConfigService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_resolve_group_query(identifier: Optional[str]) -> tuple[str, Optional[str]]:
+    def _build_resolve_group_query(identifier: Optional[str]) -> tuple[LiteralString, Optional[str]]:
         clean_ident = identifier.strip() if isinstance(identifier, str) and identifier.strip() else None
         if clean_ident is None:
             query = """
@@ -257,7 +252,7 @@ class LLMConfigService:
 
         Raises RuntimeError when 0 or > 1 matching active groups exist.
         """
-        norm_test_id = _normalize_test_id(test_id)
+        norm_test_id = normalize_test_id(test_id)
         query, clean_ident = self._build_resolve_group_query(identifier)
         records = await self.client.execute_query(
             query,
@@ -275,7 +270,7 @@ class LLMConfigService:
         test_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronously resolve a single active Group by id/name/code, or default 'GoSmart Health'."""
-        norm_test_id = _normalize_test_id(test_id)
+        norm_test_id = normalize_test_id(test_id)
         query, clean_ident = self._build_resolve_group_query(identifier)
         driver = self.client.get_sync_driver()
         with driver.session(database=self.client.settings.DB_DATABASE) as session:
@@ -319,7 +314,7 @@ class LLMConfigService:
             req = config_data
 
         effective_assign = assign_group if assign_group is not None else req.assign_group
-        norm_test_id = _normalize_test_id(test_id if test_id is not None else req.test_id)
+        norm_test_id = normalize_test_id(test_id if test_id is not None else req.test_id)
         return req, effective_assign, norm_test_id
 
     @classmethod
@@ -417,8 +412,11 @@ class LLMConfigService:
 
         Tags are unique within an associated Group (not globally), allowing multiple sponsoring Groups
         to maintain independent configurations (e.g., separate API keys) for the same purpose tag.
+
         When overwriting an existing active LLM_Config for the target group/tag, clones the previous
-        node as an archived node with Action='DELETE' and links previously associated groups to the
+        node as an archived node with Action='DELETE'.
+
+        The links previously associated groups to the
         archived clone via NOT_HAS_LLM_CONFIG before updating the canonical node in place.
         """
         req, effective_assign, norm_test_id = self._parse_upsert_request(
@@ -448,9 +446,9 @@ class LLMConfigService:
             )
             check_rec = await check_res.single()
             (
-                effective_cfg_id,
+                effective_cfg_id2,
                 effective_props,
-                was_active,
+                was_active2,
                 prev_group_ids,
                 existing_props,
                 dissociate_shared_cfg_id,
@@ -484,8 +482,8 @@ class LLMConfigService:
                     acted_by=acted_by,
                 )
 
-            if was_active:
-                archive_id = f"{effective_cfg_id}__archived__{uuid.uuid4().hex[:12]}"
+            if was_active2:
+                archive_id = f"{effective_cfg_id2}__archived__{uuid.uuid4().hex[:12]}"
                 neg_links = [
                     {
                         "group_id": gid,
@@ -514,7 +512,7 @@ class LLMConfigService:
                         r_not.CreatedAt = datetime({{timezone: 'UTC'}}),
                         r_not.test_id = $test_id
                     """,
-                    cfg_id=effective_cfg_id,
+                    cfg_id=effective_cfg_id2,
                     archive_id=archive_id,
                     acted_by=acted_by,
                     neg_links=neg_links,
@@ -523,7 +521,7 @@ class LLMConfigService:
 
             rel = HasLlmConfigRelation(
                 start_node_id=target_group_id,
-                end_node_id=effective_cfg_id,
+                end_node_id=effective_cfg_id2,
                 test_id=norm_test_id,
                 ActedBy=acted_by,
             )
@@ -562,17 +560,18 @@ class LLMConfigService:
                 """,
                 target_group_id=target_group_id,
                 props=effective_props,
-                was_active=was_active,
+                was_active=was_active2,
                 rel_id=rel.id,
                 test_id=norm_test_id,
                 acted_by=acted_by,
             )
             rec = await upsert_res.single()
             if not rec:
-                return {}, [], was_active, effective_cfg_id
-            return rec.get("config", {}), rec.get("groups", []), was_active, effective_cfg_id
+                return {}, [], was_active2, effective_cfg_id2
+            return rec.get("config", {}), rec.get("groups", []), was_active2, effective_cfg_id2
 
         saved_props, groups, was_active, effective_cfg_id = await self.client.execute_write_tx(_upsert_tx)
+        # noinspection DuplicatedCode
         resp = _dict_to_llm_config_response(saved_props, groups)
 
         record_audit(
@@ -631,9 +630,9 @@ class LLMConfigService:
             )
             check_rec = check_res.single()
             (
-                effective_cfg_id,
+                effective_cfg_id3,
                 effective_props,
-                was_active,
+                was_active3,
                 prev_group_ids,
                 existing_props,
                 dissociate_shared_cfg_id,
@@ -667,8 +666,8 @@ class LLMConfigService:
                     acted_by=acted_by,
                 )
 
-            if was_active:
-                archive_id = f"{effective_cfg_id}__archived__{uuid.uuid4().hex[:12]}"
+            if was_active3:
+                archive_id = f"{effective_cfg_id3}__archived__{uuid.uuid4().hex[:12]}"
                 neg_links = [
                     {
                         "group_id": gid,
@@ -697,7 +696,7 @@ class LLMConfigService:
                         r_not.CreatedAt = datetime({{timezone: 'UTC'}}),
                         r_not.test_id = $test_id
                     """,
-                    cfg_id=effective_cfg_id,
+                    cfg_id=effective_cfg_id3,
                     archive_id=archive_id,
                     acted_by=acted_by,
                     neg_links=neg_links,
@@ -706,7 +705,7 @@ class LLMConfigService:
 
             rel = HasLlmConfigRelation(
                 start_node_id=target_group_id,
-                end_node_id=effective_cfg_id,
+                end_node_id=effective_cfg_id3,
                 test_id=norm_test_id,
                 ActedBy=acted_by,
             )
@@ -745,17 +744,18 @@ class LLMConfigService:
                 """,
                 target_group_id=target_group_id,
                 props=effective_props,
-                was_active=was_active,
+                was_active=was_active3,
                 rel_id=rel.id,
                 test_id=norm_test_id,
                 acted_by=acted_by,
             )
             rec = upsert_res.single()
             if not rec:
-                return {}, [], was_active, effective_cfg_id
-            return rec.get("config", {}), rec.get("groups", []), was_active, effective_cfg_id
+                return {}, [], was_active3, effective_cfg_id3
+            return rec.get("config", {}), rec.get("groups", []), was_active3, effective_cfg_id3
 
         saved_props, groups, was_active, effective_cfg_id = self.client.execute_write_tx_sync(_upsert_tx)
+        # noinspection DuplicatedCode
         resp = _dict_to_llm_config_response(saved_props, groups)
 
         record_audit(
@@ -783,11 +783,16 @@ class LLMConfigService:
     # Runtime Upward Group-Tree Resolution
     # ------------------------------------------------------------------
 
-    _ANCESTOR_RESOLVE_CYPHER = """
-    MATCH path = (start_g:Group {id: $group_id})-[:SUB_GROUP_OF*0..]->(anc:Group)
+    _ANCESTOR_RESOLVE_CYPHER: LiteralString = """
+    MATCH path = (start_g:Group {id: $group_id})-[:BELONGS_TO*0..]->(anc:Group)
     WHERE (start_g.Action IS NULL OR start_g.Action <> 'DELETE')
       AND coalesce(start_g.is_active, true) = true
-      AND all(n IN nodes(path) WHERE (n.Action IS NULL OR n.Action <> 'DELETE') AND coalesce(n.is_active, true) = true)
+      AND all(
+        n IN nodes(path)
+        WHERE 'Group' IN labels(n)
+          AND (n.Action IS NULL OR n.Action <> 'DELETE')
+          AND coalesce(n.is_active, true) = true
+      )
       AND all(rel IN relationships(path) WHERE rel.Action IS NULL OR rel.Action <> 'DELETE')
     MATCH (anc)-[r:HAS_LLM_CONFIG]->(l:LLM_Config {tag: $tag})
     WHERE (r.Action IS NULL OR r.Action <> 'DELETE')
@@ -801,7 +806,7 @@ class LLMConfigService:
     RETURN properties(l) AS config, anc.id AS group_id, depth
     """
 
-    _DEFAULT_GROUP_RESOLVE_CYPHER = """
+    _DEFAULT_GROUP_RESOLVE_CYPHER: LiteralString = """
     MATCH (g:Group {name: $default_name})-[r:HAS_LLM_CONFIG]->(l:LLM_Config {tag: $tag})
     WHERE (g.Action IS NULL OR g.Action <> 'DELETE')
       AND coalesce(g.is_active, true) = true
@@ -852,7 +857,7 @@ class LLMConfigService:
     ) -> Optional[LLM_Config]:
         """Resolve an active LLM_Config by traversing upward from group_id, falling back to 'GoSmart Health'."""
         clean_tag = tag.strip()
-        norm_test_id = _normalize_test_id(test_id)
+        norm_test_id = normalize_test_id(test_id)
         effective_group_id = (
             group_id.strip() if isinstance(group_id, str) and group_id.strip() else get_active_group_id()
         )
@@ -880,7 +885,7 @@ class LLMConfigService:
     ) -> Optional[LLM_Config]:
         """Synchronously resolve an active LLM_Config upward from group_id, falling back to 'GoSmart Health'."""
         clean_tag = tag.strip()
-        norm_test_id = _normalize_test_id(test_id)
+        norm_test_id = normalize_test_id(test_id)
         effective_group_id = (
             group_id.strip() if isinstance(group_id, str) and group_id.strip() else get_active_group_id()
         )
@@ -919,7 +924,7 @@ class LLMConfigService:
         test_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """List active LLM_Config nodes with associated sponsoring groups (api_key masked)."""
-        norm_test_id = _normalize_test_id(test_id)
+        norm_test_id = normalize_test_id(test_id)
         clean_tag = tag.strip() if isinstance(tag, str) and tag.strip() else None
         clean_provider = provider.strip().lower() if isinstance(provider, str) and provider.strip() else None
         clean_group_id = group_id.strip() if isinstance(group_id, str) and group_id.strip() else None
@@ -959,7 +964,7 @@ class LLMConfigService:
         test_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Retrieve a single active LLM_Config by ID or by (tag[, group_id]) (api_key masked)."""
-        norm_test_id = _normalize_test_id(test_id)
+        norm_test_id = normalize_test_id(test_id)
         clean_group = group_id.strip() if isinstance(group_id, str) and group_id.strip() else None
 
         if config_id:
@@ -1123,6 +1128,8 @@ class LLMConfigService:
                 test_id=merged_node.test_id,
             )
             extra_group_id = grp["id"]
+            if not extra_group_id:
+                raise ValueError(f"Group {update_data.assign_group} not found")
             extra_rel_id = HasLlmConfigRelation(
                 start_node_id=extra_group_id,
                 end_node_id=config_id,
@@ -1149,7 +1156,7 @@ class LLMConfigService:
                     group_id=extra_group_id,
                     tag=merged_node.tag,
                     config_id=config_id,
-                    test_id=_normalize_test_id(merged_node.test_id),
+                    test_id=normalize_test_id(merged_node.test_id),
                 )
                 conflict_rec = await conflict_res.single()
                 if conflict_rec and conflict_rec.get("conflict_id"):
@@ -1263,8 +1270,8 @@ class LLMConfigService:
         if not cfg:
             return None
 
-        eff_test_id = _normalize_test_id(test_id if test_id is not None else cfg.get("test_id"))
-        cfg_test_id = _normalize_test_id(cfg.get("test_id"))
+        eff_test_id = normalize_test_id(test_id if test_id is not None else cfg.get("test_id"))
+        cfg_test_id = normalize_test_id(cfg.get("test_id"))
         target_group = await self.resolve_target_group(identifier=group_identifier, test_id=eff_test_id)
         group_id = target_group["id"]
         rel = HasLlmConfigRelation(
@@ -1279,7 +1286,7 @@ class LLMConfigService:
             conflict_res = await tx.run(
                 self._GROUP_TAG_CONFLICT_CYPHER,
                 group_id=group_id,
-                tag=cfg["tag"],
+                tag=cfg["tag"] if cfg else "???",
                 config_id=config_id,
                 test_id=cfg_test_id,
             )
@@ -1434,7 +1441,7 @@ class LLMConfigService:
                 return False, None
 
             group_ids = [gid for gid in (rec.get("group_ids") or []) if gid]
-            cfg_test_id = rec.get("test_id")
+            cfg_test_id4 = rec.get("test_id")
 
             for gid in group_ids:
                 new_rel_id = generate_deterministic_id(
@@ -1468,7 +1475,7 @@ class LLMConfigService:
                 config_id=config_id,
                 acted_by=acted_by,
             )
-            return True, cfg_test_id
+            return True, cfg_test_id4
 
         success, cfg_test_id = await self.client.execute_write_tx(_del_tx)
         if success:
@@ -1514,7 +1521,7 @@ class LLMConfigService:
                 return None
 
             cfg_tag = rec.get("tag")
-            cfg_test_id = _normalize_test_id(rec.get("test_id"))
+            cfg_test_id = normalize_test_id(rec.get("test_id"))
             group_ids = [gid for gid in (rec.get("group_ids") or []) if gid]
 
             if cfg_tag:

@@ -6,7 +6,7 @@ from typing import Any, ClassVar, Dict, Literal, Optional
 from pydantic import Field, field_validator, model_validator
 
 from gosmart_graphite.core.config import get_settings
-from gosmart_graphite.model.graph import AuditableNode
+from gosmart_graphite.model.auditable import AuditableNode
 
 AuditSeverity = Literal["INFO", "WARNING", "ERROR", "CRITICAL"]
 
@@ -48,6 +48,10 @@ class AuditAction(str, Enum):
     DICOM_CONFIGURATION_REMOVED = "DICOM Configuration Removed"
     DICOM_CONFIGURATION_SERVES_GROUP = "DICOM Configuration Associated with Group"
     DICOM_CONFIGURATION_DISSOCIATED = "DICOM Configuration Dissociated from Group"
+
+    # FHIR Configuration Actions
+    FHIR_CONFIGURATION_CREATED = "FHIR Configuration Created"
+    FHIR_CONFIGURATION_ASSIGNED = "FHIR Configuration Associated with Group"
 
     # LLM Configuration Actions
     LLM_CONFIGURATION_CREATED = "LLM Configuration Created"

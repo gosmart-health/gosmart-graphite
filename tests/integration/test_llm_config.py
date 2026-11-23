@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from gosmart_graphite.db.neo4j import neo4j_client
-from gosmart_graphite.service.embedding_service import EmbeddingService
+from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG, EmbeddingService
 from gosmart_graphite.service.graph_service import graph_service
 from gosmart_graphite.service.group_service import group_service
 from gosmart_graphite.service.llm_config_service import llm_config_service
@@ -60,10 +60,10 @@ async def test_live_neo4j_hierarchy_resolution_and_overwrite() -> None:
         await group_service.nest_group(child_grp["id"], parent_grp["id"], test_id=test_id)
         await group_service.nest_group(parent_grp["id"], root_grp["id"], test_id=test_id)
 
-        # Register default 'embedding' config on root group
+        # Register default embedding config on root group
         root_res = await llm_config_service.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "ollama",
                 "model": "nomic-embed-text:latest",
                 "url": "http://localhost:11434",
@@ -73,11 +73,11 @@ async def test_live_neo4j_hierarchy_resolution_and_overwrite() -> None:
             acted_by="pytest",
             test_id=test_id,
         )
-        assert root_res["tag"] == "embedding"
+        assert root_res["tag"] == DEFAULT_EMBEDDING_TAG
 
-        # Child inherits root's config via SUB_GROUP_OF*0..
+        # Child inherits root's config via BELONGS_TO*0..
         resolved_for_child = await llm_config_service.resolve_config_for_group(
-            tag="embedding",
+            tag=DEFAULT_EMBEDDING_TAG,
             group_id=child_grp["id"],
             test_id=test_id,
         )
@@ -87,7 +87,7 @@ async def test_live_neo4j_hierarchy_resolution_and_overwrite() -> None:
         # Overwrite config and verify EmbeddingService executes dynamically with mock Genkit
         await llm_config_service.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "dimensions": 4,
@@ -100,7 +100,7 @@ async def test_live_neo4j_hierarchy_resolution_and_overwrite() -> None:
         )
 
         resolved_after = await llm_config_service.resolve_config_for_group(
-            tag="embedding",
+            tag=DEFAULT_EMBEDDING_TAG,
             group_id=child_grp["id"],
             test_id=test_id,
         )
@@ -169,7 +169,7 @@ async def test_live_neo4j_same_tag_across_multiple_sponsor_groups() -> None:
 
         res_root = await llm_config_service.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "api_key": "AIzaSyRootSponsorKey0000",
@@ -181,7 +181,7 @@ async def test_live_neo4j_same_tag_across_multiple_sponsor_groups() -> None:
         )
         res_a = await llm_config_service.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "api_key": "AIzaSySponsorAKey1111",
@@ -193,7 +193,7 @@ async def test_live_neo4j_same_tag_across_multiple_sponsor_groups() -> None:
         )
         res_b = await llm_config_service.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "api_key": "AIzaSySponsorBKey2222",
@@ -205,29 +205,31 @@ async def test_live_neo4j_same_tag_across_multiple_sponsor_groups() -> None:
         )
 
         assert len({res_root["id"], res_a["id"], res_b["id"]}) == 3
-        listed = await llm_config_service.list_llm_configs(tag="embedding", test_id=test_id)
+        listed = await llm_config_service.list_llm_configs(tag=DEFAULT_EMBEDDING_TAG, test_id=test_id)
         assert len(listed) == 3
 
         cfg_clinic_a = await llm_config_service.resolve_config_for_group(
-            tag="embedding", group_id=clinic_a["id"], test_id=test_id
+            tag=DEFAULT_EMBEDDING_TAG, group_id=clinic_a["id"], test_id=test_id
         )
         cfg_clinic_b = await llm_config_service.resolve_config_for_group(
-            tag="embedding", group_id=clinic_b["id"], test_id=test_id
+            tag=DEFAULT_EMBEDDING_TAG, group_id=clinic_b["id"], test_id=test_id
         )
         assert cfg_clinic_a is not None
         assert cfg_clinic_b is not None
         assert cfg_clinic_a.resolve_api_key() == "AIzaSySponsorAKey1111"
         assert cfg_clinic_b.resolve_api_key() == "AIzaSySponsorBKey2222"
 
-        fetched_a = await llm_config_service.get_llm_config(tag="embedding", group_id=sponsor_a["id"], test_id=test_id)
+        fetched_a = await llm_config_service.get_llm_config(
+            tag=DEFAULT_EMBEDDING_TAG, group_id=sponsor_a["id"], test_id=test_id
+        )
         assert fetched_a is not None
         assert fetched_a["id"] == res_a["id"]
 
         with pytest.raises(RuntimeError, match="Ambiguous LLM_Config"):
-            await llm_config_service.get_llm_config(tag="embedding", test_id=test_id)
+            await llm_config_service.get_llm_config(tag=DEFAULT_EMBEDDING_TAG, test_id=test_id)
 
         # Duplicate tag assignment onto sponsor_b must be rejected
-        with pytest.raises(ValueError, match="already has an active LLM_Config with tag 'embedding'"):
+        with pytest.raises(ValueError, match=f"already has an active LLM_Config with tag '{DEFAULT_EMBEDDING_TAG}'"):
             await llm_config_service.assign_to_group(
                 config_id=res_a["id"],
                 group_identifier=sponsor_b["id"],
@@ -238,7 +240,7 @@ async def test_live_neo4j_same_tag_across_multiple_sponsor_groups() -> None:
         # Overwriting sponsor_b's config keeps sponsor_a's config untouched
         await llm_config_service.upsert_llm_config(
             config_data={
-                "tag": "embedding",
+                "tag": DEFAULT_EMBEDDING_TAG,
                 "provider": "vertexai",
                 "model": "gemini-embedding-001",
                 "api_key": "AIzaSySponsorBKey9999",
@@ -249,10 +251,10 @@ async def test_live_neo4j_same_tag_across_multiple_sponsor_groups() -> None:
             test_id=test_id,
         )
         cfg_clinic_a_after = await llm_config_service.resolve_config_for_group(
-            tag="embedding", group_id=clinic_a["id"], test_id=test_id
+            tag=DEFAULT_EMBEDDING_TAG, group_id=clinic_a["id"], test_id=test_id
         )
         cfg_clinic_b_after = await llm_config_service.resolve_config_for_group(
-            tag="embedding", group_id=clinic_b["id"], test_id=test_id
+            tag=DEFAULT_EMBEDDING_TAG, group_id=clinic_b["id"], test_id=test_id
         )
         assert cfg_clinic_a_after is not None and cfg_clinic_a_after.resolve_api_key() == "AIzaSySponsorAKey1111"
         assert cfg_clinic_b_after is not None and cfg_clinic_b_after.resolve_api_key() == "AIzaSySponsorBKey9999"

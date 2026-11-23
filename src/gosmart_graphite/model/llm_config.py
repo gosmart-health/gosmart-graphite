@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from gosmart_graphite.core.security import resolve_llm_api_key
-from gosmart_graphite.model.graph import AuditableNode, AuditableRelation, generate_deterministic_id
+from gosmart_graphite.model.auditable import AuditableNode, AuditableRelation, generate_deterministic_id
 
 
 def _parse_extra_config(v: Any) -> Optional[Dict[str, Any]]:
@@ -35,7 +35,7 @@ class LLM_Config(AuditableNode):
 
     tag: str = Field(
         ...,
-        description="Purpose tag/key unique within an associated Group (e.g. 'embedding', 'router', 'rag')",
+        description="Purpose tag/key unique within an associated Group (e.g. 'embedding-v1', 'router', 'rag')",
     )
     provider: str = Field(
         ...,
@@ -212,7 +212,7 @@ class LLMConfigCreateRequest(BaseModel):
 
     tag: str = Field(
         ...,
-        description="Purpose tag unique within an associated Group (e.g. 'embedding', 'router', 'rag')",
+        description="Purpose tag unique within an associated Group (e.g. 'embedding-v1', 'router', 'rag')",
     )
     provider: str = Field(..., description="LLM provider ('ollama', 'vertexai', 'googleai', etc.)")
     model: str = Field(..., description="Canonical model name")
