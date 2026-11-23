@@ -107,6 +107,9 @@ graph TD
   - `Embedding` (`EmbeddingNode`, `__label__ = "Embedding"`): Auditable node storing `modelTag` (e.g., `LLM_Config.tag`), `size` (auto-validated vector length), `vector` (L2-normalized float array indexed by `embedding_vector_idx`), `text` (original source text embedded), and `targetFieldTag` (e.g., `FINDINGS`, `CONCLUSION`) with target-scoped deterministic UUIDv5 `id` generation.
   - `EmbedsRelation` (`__type__ = "EMBEDS"`): Auditable relationship linking `(:Embedding)-[:EMBEDS {aspect}]->(target domain node)`.
   - `DiagnosticReportFieldTag` (`StrEnum`): Canonical field/aspect tags (`FINDINGS`, `CONCLUSION`) for `DiagnosticReport` embeddings.
+* **`search.py`**: Semantic vector search DTO models:
+  - `SearchIncludeLabel` (`StrEnum`): Opt-in context node labels (`Encounter`, `FHIR_Patient`, `ImagingStudy`, `Patient`, `Study`).
+  - `SearchResult`: Deduplicated target node match (`score`, `node_label`, `node_id`, `text`, `target_field_tag`, `model_tag`, `embedding_id`, `is_deleted`, plus optional hydrated `encounter`, `fhir_patient`, `imaging_studies`, `patient`, and `studies` fields).
 * **`dicom.py`**: Pydantic models for domain entities:
   - `PatientModel`: `patient_id`, `patient_name`, `patient_birth_date`, `patient_sex`
   - `StudyModel`: `study_instance_uid`, `study_date`, `study_time`, `study_description`, `accession_number`
@@ -131,6 +134,9 @@ graph TD
   - `EmbeddingService` (aliased as `VectorService`) dynamically resolves active `LLM_Config` (default `tag='embedding-v1'`) for the active `Group` (`ContextVar` or explicit `group_id`).
   - Maintains a thread-safe Genkit client cache keyed by resolved config fingerprint (`provider`, `url`, resolved `api_key`, `location`, `project_id`).
   - Supports `dimensions` (e.g., `output_dimensionality`) and Matryoshka `dimensions_truncated` post-truncation with L2 vector normalization and similarity scoring.
+* **`search_service.py`**:
+  - `SearchService` (singleton `search_service`) provides both synchronous `search()` and asynchronous `search_async()` semantic vector similarity search over `embedding_vector_idx` (default `limit=20`, `test_id` isolation, `include_deleted` admin override with `is_deleted` flag).
+  - Deduplicates hits per target node (retaining the highest-scoring `:Embedding`), filters `group_id` against `group_id` + active descendants (`[:BELONGS_TO*1..]`) using nearest-owning-group tenancy semantics (`UPWARD_GROUP_RELATION_TYPES`), falls back to exact `vector.similarity.cosine` when filtered HNSW saturates, and performs post-LIMIT opt-in hydration for `SearchIncludeLabel` context nodes.
 * **`media_service.py`**:
   - Storage-agnostic media service implementing unified read, write, exists, delete, stat, list_files, copy, move, and DICOM dataset read/write.
   - Multi-provider URI support: Local files (`file://`), Windows UNC (`\\server\share`), Google Cloud Storage (`gs://`), Amazon S3 (`s3://`), and Azure Blob (`az://` or `azure://`).

@@ -141,6 +141,10 @@ from gosmart_graphite.model.result import (
     STATUS_OK,
     Result,
 )
+from gosmart_graphite.model.search import (
+    SearchIncludeLabel,
+    SearchResult,
+)
 from gosmart_graphite.model.system import (
     SystemBootstrapResponse,
     SystemResponse,
@@ -206,6 +210,8 @@ __all__ = [
     "STATUS_BAD_DATA",
     "STATUS_INTERNAL_ERROR",
     "Result",
+    "SearchIncludeLabel",
+    "SearchResult",
     "SystemResponse",
     "SystemUpdateRequest",
     "DICOMConfigurationResponse",

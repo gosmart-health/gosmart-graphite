@@ -34,6 +34,11 @@ from gosmart_graphite.service.group_service import (
 from gosmart_graphite.service.llm_config_service import LLMConfigService, llm_config_service
 from gosmart_graphite.service.media_service import MediaService, media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService, pynetdicom_service
+from gosmart_graphite.service.search_service import (
+    DEFAULT_SEARCH_LIMIT,
+    SearchService,
+    search_service,
+)
 from gosmart_graphite.service.user_service import UserService, user_service
 
 VectorService = EmbeddingService
@@ -42,6 +47,7 @@ embedding_service = vector_service
 __all__ = [
     "DEFAULT_EMBEDDING_TAG",
     "DEFAULT_MY_GROUP_MAX_DEPTH",
+    "DEFAULT_SEARCH_LIMIT",
     "LOST_AND_FOUND_GROUP_CODE",
     "LOST_AND_FOUND_GROUP_NAME",
     "LOST_AND_FOUND_GROUP_TYPE",
@@ -63,6 +69,8 @@ __all__ = [
     "media_service",
     "PyNetDicomService",
     "pynetdicom_service",
+    "SearchService",
+    "search_service",
     "GroupService",
     "group_or_lost_and_found",
     "group_service",
