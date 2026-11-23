@@ -33,7 +33,7 @@ graph TD
         PyNetDicom --> DicomService
         APIRouter --> DicomService
         
-        DicomService -->|Dispatch Ingestion Task| PykkaActor[DicomIngestionActor<br/>actor/dicom_actor.py]
+        DicomService -->|Dispatch Ingestion Task| PykkaActor[DicomIngestionActor<br/>actor/dicom_ingestion_actor.py]
         PykkaActor -->|Sync Graph Save| GraphService[Graph Service<br/>service/graph_service.py]
         MCPServer --> GraphService
         APIRouter --> GraphService
@@ -52,9 +52,9 @@ graph TD
 
 ### 3.1 Core Subsystem (`core/`)
 * **`config.py`**: Pydantic Settings implementation enforcing the `GOSMART_GS_` environment variable prefix:
-  - `DB_CONNECTION_URI`, `DB_USER`, `DB_PASSWORD`, `DB_DATABASE`
+  - `DB_CONNECTION_URI`, `DB_USER`, `DB_PASSWORD`, `DB_DATABASE`, `DB_CONNECT_RETRY_TIMEOUT_SEC`, `DB_CONNECT_RETRY_INITIAL_DELAY_SEC`, `DB_CONNECT_RETRY_MAX_DELAY_SEC`
   - `STORAGE_ROOT_URI`
-  - `HOST`, `PORT`, `RELOAD`
+  - `DEV_MODE`, `HOST`, `PORT`, `RELOAD`
   - `LOG_LEVEL`, `LOG_FORMAT`, `LOG_DIR`, `LOG_FILE`, `LOG_ROTATION_DAYS`, `LOG_BACKUP_COUNT`, `LOG_TO_FILE`
   - `DICOM_AE_TITLE`, `DICOM_SCP_PORT`, `DICOM_MAX_PDU`
   - `LLM_CONFIG_ENCRYPTION_KEY`: Optional Fernet key or passphrase for encrypting stored `LLM_Config` `api_key` values at rest in Neo4j
@@ -72,28 +72,44 @@ graph TD
   - Synchronous driver (`GraphDatabase.driver`) for Pykka threading actors.
   - Managed explicit write transactions (`execute_write_tx`, `execute_write_tx_sync`) guaranteeing atomic relationship swaps and retries.
   - Connection pooling and verification (`verify_connectivity`).
-  - Schema constraint initialization:
-    - Deterministic ID uniqueness: `Patient.id`, `Study.id`, `Series.id`, `Instance.id IS UNIQUE`
-    - DICOM natural key uniqueness: `Patient.patient_id`, `Study.study_instance_uid`, `Series.series_instance_uid`, `Instance.sop_instance_uid IS UNIQUE`
-    - LLM configuration constraints & indexes: `LLM_Config.id IS UNIQUE` (`llm_config_sys_id_unique`), index on `LLM_Config.tag` (`llm_config_tag_idx`)
+* **`schema_loader.py` & Consolidated `.cypher` Schema Scripts**:
+  - Schema DDL is consolidated into five focused `.cypher` files loaded in deterministic order from an explicit, immutable allowlist (`SCHEMA_SCRIPT_FILES`) rather than directory scanning to prevent arbitrary Cypher script injection:
+    - `system_schema.cypher`: `System`, `User`, `Identity`, `Authenticator`, `Group`, and `AuditLog` uniqueness constraints plus `BELONGS_TO` / `NOT_BELONGS_TO` relationship indexes.
+    - `config_schema.cypher`: `DICOMConfiguration`, `FHIRConfiguration`, and `LLM_Config` constraints/indexes (`llm_config_tag_idx`) plus configuration association relationship indexes (`HAS_LLM_CONFIG`, `HAS_FHIR_CONFIG`, `HAS_DICOM_CONFIGURATION`, `SERVES`, and `NOT_*` counterparts).
+    - `dicom_schema.cypher`: Deterministic `id` and DICOM UID uniqueness constraints for `Patient`, `Study`, `Series`, and `Instance`.
+    - `fhir_schema.cypher`: FHIR R4B resource uniqueness constraints, property indexes, and cross-domain `Study.accession_number` index.
+    - `embedding_schema.cypher`: `:Embedding` uniqueness constraint (`id`), property indexes (`test_id`, `modelTag`, `targetFieldTag`), relationship indexes (`EMBEDS`, `NOT_EMBEDS`), and 768-dimension cosine `CREATE VECTOR INDEX` (`embedding_vector_idx` on `(:Embedding).vector`).
+  - **Fail-fast & Triage Semantics**: Missing manifest scripts, lexical/parse errors, or Cypher execution errors raise a non-negotiable `SchemaInitializationError` logging the exact script filename, 1-based line number(s) (including Neo4j column offsets when available), failing statement, and underlying database error, aborting startup.
+  - **Startup Connectivity Policy (`GOSMART_GS_DEV_MODE`)**: In production (`DEV_MODE=false`), `GraphService.init_schema_constraints()` automatically retries Neo4j connectivity with capped exponential backoff (`GOSMART_GS_DB_CONNECT_RETRY_TIMEOUT_SEC`, default `600s`; `0` = indefinite) to ride out transient cloud outages or upgrades before raising `SchemaInitializationError`. Setting `GOSMART_GS_DEV_MODE=true` relaxes offline Neo4j connectivity during local development.
 
 ### 3.3 Data Models Subsystem (`model/`)
-* **`graph.py`**: Graph domain, auditable base entities, and query models:
+* **`auditable.py`**: Auditable base entities, deterministic ID derivation, and relation negation helpers:
   - `generate_deterministic_id()`: Computes deterministic UUIDv5 from canonical JSON-serialized identity subsets.
   - `Auditable`: Base model providing `id`, `test_id`, `Action` (`CREATE`, `UPDATE`, `DELETE`, `RESTORE`), `ActedAt`, `ActedBy`, `CreatedAt`, `UpdatedAt`, and `ExpiresAt` (all timestamps Cypher `datetime({timezone: 'UTC'})`).
   - `AuditableNode`: Base node with single static class label enforcement (`__label__`).
   - `AuditableRelation`: Base relationship with single static class type enforcement (`__type__`) and reserved `NOT_` negation semantics.
-  - Concrete Nodes: `PatientNode` (`:Patient`), `StudyNode` (`:Study`), `SeriesNode` (`:Series`), `InstanceNode` (`:Instance`), `SystemNode` (`:System`), `DICOMConfigurationNode` (`:DICOMConfiguration`).
-  - Concrete Relationships: `HasStudyRelation` (`HAS_STUDY`), `HasSeriesRelation` (`HAS_SERIES`), `HasInstanceRelation` (`HAS_INSTANCE`), `HasDicomConfigurationRelation` (`HAS_DICOM_CONFIGURATION`).
+  - Relation negation helpers: `to_negated_relation_type()`, `to_positive_relation_type()`, `is_negated_relation_type()`.
+* **`dicom_config.py`**: DICOM protocol configuration graph models and API DTOs:
+  - `DICOMConfigurationNode` (`:DICOMConfiguration`) and `HasDicomConfigurationRelation` (`HAS_DICOM_CONFIGURATION`): DIMSE/DICOMweb parameters, TLS security settings, services, transfer syntaxes, default `storage_root_uri`, and promiscuous mode support.
+  - `DICOMConfigurationGroupSummary`, `DICOMConfigurationResponse`, `DICOMConfigurationCreateRequest`, `DICOMConfigurationUpdateRequest`: Request/response DTOs for DICOM configuration CRUD.
+* **`graph.py`**: Concrete graph domain models and generic query models:
+  - Concrete Nodes: `PatientNode` (`:Patient`), `StudyNode` (`:Study`), `SeriesNode` (`:Series`), `InstanceNode` (`:Instance`), `SystemNode` (`:System`), `FHIRConfigurationNode` (`:FHIRConfiguration`), `TransferStatusNode` (`:TransferStatus`).
+  - Concrete Relationships: `HasStudyRelation` (`HAS_STUDY`), `HasSeriesRelation` (`HAS_SERIES`), `HasInstanceRelation` (`HAS_INSTANCE`).
   - Generic query models: `CypherQueryRequest`, `GraphNode`, `GraphRelationship`, `GraphQueryResult`.
-* **`system.py`**: Pydantic DTO models for system and protocol configurations:
+* **`system.py`**: Pydantic DTO models for system metadata and lifecycle operations:
   - `SystemResponse`, `SystemUpdateRequest`: Root environment metadata with owner contact information and serial numbers.
-  - `DICOMConfigurationResponse`, `DICOMConfigurationCreateRequest`, `DICOMConfigurationUpdateRequest`: DIMSE/DICOMweb parameters, TLS security settings, services, transfer syntaxes, and promiscuous mode support.
-  - `SystemBootstrapResponse`: Idempotent environment initialization status.
+  - `SystemBootstrapResponse`, `TestCleanupResponse`: Idempotent environment initialization and test cleanup status.
 * **`llm.py`**: Dynamic, group-scoped LLM configuration models:
   - `LLM_Config` (`LLMConfigNode`, `__label__ = "LLM_Config"`): Auditable node capturing `tag` (globally unique purpose key), normalized `provider`, `model`, `url`, `dimensions`, `dimensions_truncated` (validated `<= dimensions`), `api_key`, `location`, `project_id`, `extra_config`, and `description`.
   - `HasLlmConfigRelation` (`__type__ = "HAS_LLM_CONFIG"`): Links sponsoring `(:Group)` to `(:LLM_Config)`.
   - API/CLI DTOs: `LLMConfigCreateRequest`, `LLMConfigUpdateRequest`, `LLMConfigAssignRequest`, `LLMConfigGroupSummary`, `LLMConfigResponse` (always masks `api_key` and exposes `has_api_key` and `api_key_source`).
+* **`embedding.py`**: Decoupled vector embedding graph models:
+  - `Embedding` (`EmbeddingNode`, `__label__ = "Embedding"`): Auditable node storing `modelTag` (e.g., `LLM_Config.tag`), `size` (auto-validated vector length), `vector` (L2-normalized float array indexed by `embedding_vector_idx`), `text` (original source text embedded), and `targetFieldTag` (e.g., `FINDINGS`, `CONCLUSION`) with target-scoped deterministic UUIDv5 `id` generation.
+  - `EmbedsRelation` (`__type__ = "EMBEDS"`): Auditable relationship linking `(:Embedding)-[:EMBEDS {aspect}]->(target domain node)`.
+  - `DiagnosticReportFieldTag` (`StrEnum`): Canonical field/aspect tags (`FINDINGS`, `CONCLUSION`) for `DiagnosticReport` embeddings.
+* **`search.py`**: Semantic vector search DTO models:
+  - `SearchIncludeLabel` (`StrEnum`): Opt-in context node labels (`Encounter`, `FHIR_Patient`, `ImagingStudy`, `Patient`, `Study`).
+  - `SearchResult`: Deduplicated target node match (`score`, `node_label`, `node_id`, `text`, `target_field_tag`, `model_tag`, `embedding_id`, `is_deleted`, plus optional hydrated `encounter`, `fhir_patient`, `imaging_studies`, `patient`, and `studies` fields).
 * **`dicom.py`**: Pydantic models for domain entities:
   - `PatientModel`: `patient_id`, `patient_name`, `patient_birth_date`, `patient_sex`
   - `StudyModel`: `study_instance_uid`, `study_date`, `study_time`, `study_description`, `accession_number`
@@ -113,11 +129,14 @@ graph TD
   - Async and `_sync` Neo4j persistence for `(:LLM_Config)` nodes and `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` links.
   - `resolve_target_group()`: Matches active `Group` by `id`, `name`, or `code` (defaults to `'GoSmart Health'`; fails on 0 or `>1` matches).
   - `upsert_llm_config()`: Overwrite clones prior canonical state to `<id>__archived__<hex>` (`Action='DELETE'`) with `[:NOT_HAS_LLM_CONFIG]` links on previously linked groups while preserving active `[:HAS_LLM_CONFIG]` links across all sponsoring groups.
-  - `resolve_config_for_group()` / `resolve_config_for_group_sync()`: Upward `(:Group)-[:SUB_GROUP_OF*0..]->(:Group)` shortest-path resolution with `'GoSmart Health'` fallback; raises on same-depth ambiguity.
+  - `resolve_config_for_group()` / `resolve_config_for_group_sync()`: Upward `(:Group)-[:BELONGS_TO*0..]->(:Group)` shortest-path resolution with `'GoSmart Health'` fallback; raises on same-depth ambiguity.
 * **`embedding_service.py`**:
-  - `EmbeddingService` (aliased as `VectorService`) dynamically resolves active `LLM_Config` (default `tag='embedding'`) for the active `Group` (`ContextVar` or explicit `group_id`).
+  - `EmbeddingService` (aliased as `VectorService`) dynamically resolves active `LLM_Config` (default `tag='embedding-v1'`) for the active `Group` (`ContextVar` or explicit `group_id`).
   - Maintains a thread-safe Genkit client cache keyed by resolved config fingerprint (`provider`, `url`, resolved `api_key`, `location`, `project_id`).
   - Supports `dimensions` (e.g., `output_dimensionality`) and Matryoshka `dimensions_truncated` post-truncation with L2 vector normalization and similarity scoring.
+* **`search_service.py`**:
+  - `SearchService` (singleton `search_service`) provides both synchronous `search()` and asynchronous `search_async()` semantic vector similarity search over `embedding_vector_idx` using native Cypher 25 `SEARCH ... IN (VECTOR INDEX ...)` with automatic cached fallback to `db.index.vector.queryNodes` for older Neo4j 5.x servers (default `limit=20`, `test_id` isolation, `include_deleted` admin override with `is_deleted` flag).
+  - Deduplicates hits per target node (retaining the highest-scoring `:Embedding`), filters `group_id` against `group_id` + active descendants (`[:BELONGS_TO*1..]`) using nearest-owning-group tenancy semantics (`UPWARD_GROUP_RELATION_TYPES`), falls back to exact `vector.similarity.cosine` when filtered HNSW saturates, and performs post-LIMIT opt-in hydration for `SearchIncludeLabel` context nodes.
 * **`media_service.py`**:
   - Storage-agnostic media service implementing unified read, write, exists, delete, stat, list_files, copy, move, and DICOM dataset read/write.
   - Multi-provider URI support: Local files (`file://`), Windows UNC (`\\server\share`), Google Cloud Storage (`gs://`), Amazon S3 (`s3://`), and Azure Blob (`az://` or `azure://`).
@@ -151,10 +170,17 @@ graph TD
 
 
 ### 3.5 Actor Subsystem (`actor/`)
-* **`dicom_actor.py`**:
+* **`dicom_ingestion_actor.py`**:
   - `DicomIngestionActor`: Subclasses `pykka.ThreadingActor` to process ingestion tasks asynchronously in a background worker thread.
   - Handles messages: `PING`, `INGEST_FILE`, `INGEST_MOCK`.
   - Maintains processed counters and execution status.
+* **`fhir_actor.py`**:
+  - `FhirActor`: Subclasses `pykka.ThreadingActor` with a dedicated event loop to fetch FHIR R4B encounter bundles, register graph nodes/relationships, link `:Encounter` nodes to their target `:Group`, and dispatch fire-and-forget embedding tasks for persisted `DiagnosticReport` resources via `notify_embedding()`.
+* **`embedding_actor.py`**:
+  - `EmbeddingActor`: Subclasses `pykka.ThreadingActor` with a dedicated event loop to compute and register decoupled `:Embedding` nodes and `:EMBEDS` relationships in Neo4j asynchronously.
+  - Handles `PING`, `STATUS`, and `EmbeddingMessage` (`type="EMBED_RESOURCE"`) dispatched by `EmbeddingMethod` (initially `DIAGNOSTIC_REPORT`, invoking `DiagnosticReportService.parse_diagnostic_report()`, `compute_embeddings()`, and `graph_register()`).
+  - Accepts the full FHIR R4B `DiagnosticReport` resource, optional `group_context` / `group_id`, `tag`, and optional `test_id`, and exposes singleton helpers `get_embedding_actor()`, `stop_embedding_actor()`, and `notify_embedding()`.
+  - Stopped cleanly during FastAPI lifespan shutdown after `FhirActor` and before `AuditActor` / Neo4j driver close.
 
 ### 3.6 API Subsystem (`api/`) & CLI (`cli.py`)
 * **`main.py`**:

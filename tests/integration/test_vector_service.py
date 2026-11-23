@@ -3,17 +3,17 @@
 import numpy as np
 import pytest
 
-from gosmart_graphite.service.embedding_service import EmbeddingService
+from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG, EmbeddingService
 
 
 def test_live_vector_embedding_from_neo4j() -> None:
-    """Integration test against the active 'embedding' LLM_Config stored in Neo4j.
+    """Integration test against the active DEFAULT_EMBEDDING_TAG ('embedding-v1') LLM_Config stored in Neo4j.
 
     Automatically skips if Neo4j is unreachable or no active embedding LLM_Config exists.
     """
     svc = EmbeddingService()
     if not svc.is_configured():
-        pytest.skip("No active 'embedding' LLM_Config configured in Neo4j; skipping live test.")
+        pytest.skip(f"No active '{DEFAULT_EMBEDDING_TAG}' LLM_Config configured in Neo4j; skipping live test.")
 
     clinical_note = "Patient presents with acute onset dyspnea and denies chest pain."
     vector = svc.embed_text(clinical_note)

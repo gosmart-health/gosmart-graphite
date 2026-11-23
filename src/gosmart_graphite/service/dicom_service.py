@@ -30,8 +30,8 @@ class DicomService:
         local_path.mkdir(parents=True, exist_ok=True)
         return local_path
 
+    @staticmethod
     def parse_dataset(
-        self,
         ds: Dataset,
         storage_uri: Optional[str] = None,
         file_size: Optional[int] = None,
@@ -173,8 +173,8 @@ class DicomService:
         else:
             return media_service.write_sync(target_uri, content_or_dataset)
 
+    @staticmethod
     def create_mock_dicom(
-        self,
         patient_id: str = "P1001",
         patient_name: str = "DOE^JOHN",
         modality: str = "CT",

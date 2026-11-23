@@ -76,3 +76,27 @@ def test_tests_env_overrides_root_env(tmp_path):
         settings = Settings(_env_file=(root_env, tests_env))
         assert settings.APP_NAME == "RootApp"
         assert settings.PORT == 9999
+
+
+def test_dev_mode_and_db_connect_retry_defaults():
+    with patch.dict(os.environ, {}, clear=True):
+        settings = Settings(_env_file=None)
+        assert settings.DEV_MODE is False
+        assert settings.DB_CONNECT_RETRY_TIMEOUT_SEC == 600
+        assert settings.DB_CONNECT_RETRY_INITIAL_DELAY_SEC == 2.0
+        assert settings.DB_CONNECT_RETRY_MAX_DELAY_SEC == 30.0
+
+
+def test_dev_mode_and_db_connect_retry_env_override():
+    custom_env = {
+        "GOSMART_GS_DEV_MODE": "true",
+        "GOSMART_GS_DB_CONNECT_RETRY_TIMEOUT_SEC": "1200",
+        "GOSMART_GS_DB_CONNECT_RETRY_INITIAL_DELAY_SEC": "1.5",
+        "GOSMART_GS_DB_CONNECT_RETRY_MAX_DELAY_SEC": "45.0",
+    }
+    with patch.dict(os.environ, custom_env, clear=True):
+        settings = Settings(_env_file=None)
+        assert settings.DEV_MODE is True
+        assert settings.DB_CONNECT_RETRY_TIMEOUT_SEC == 1200
+        assert settings.DB_CONNECT_RETRY_INITIAL_DELAY_SEC == 1.5
+        assert settings.DB_CONNECT_RETRY_MAX_DELAY_SEC == 45.0

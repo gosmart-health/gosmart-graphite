@@ -9,25 +9,57 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.types import Receive, Scope, Send
 
-from gosmart_graphite.actor import get_audit_actor, get_dicom_actor, stop_audit_actor, stop_dicom_actor
+from gosmart_graphite.actor import (
+    get_audit_actor,
+    get_dicom_actor,
+    stop_audit_actor,
+    stop_dicom_actor,
+    stop_embedding_actor,
+    stop_fhir_actor,
+)
 from gosmart_graphite.api.v1.router import api_v1_router
 from gosmart_graphite.core.config import get_settings
 from gosmart_graphite.core.logging import bind_log_context, clear_log_context, get_logger, setup_logging
 from gosmart_graphite.db.neo4j import neo4j_client
+from gosmart_graphite.db.schema_loader import SchemaInitializationError
 from gosmart_graphite.service.graph_service import graph_service
 
 logger = get_logger("gosmart_gs.server")
 
 
+def logo_print():
+    logo = """
+ ██████╗  ██████╗ ███████╗███╗   ███╗ █████╗ ██████╗ ████████╗
+██╔════╝ ██╔═══██╗██╔════╝████╗ ████║██╔══██╗██╔══██╗╚══██╔══╝
+██║  ███╗██║   ██║███████╗██╔████╔██║███████║██████╔╝   ██║
+██║   ██║██║   ██║╚════██║██║╚██╔╝██║██╔══██║██╔══██╗   ██║
+╚██████╔╝╚██████╔╝███████║██║ ╚═╝ ██║██║  ██║██║  ██║   ██║
+ ╚═════╝  ╚═════╝ ╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝   ╚═╝
+
+ ██████╗ ██████╗  █████╗ ██████╗ ██╗  ██╗██╗████████╗███████╗
+██╔════╝ ██╔══██╗██╔══██╗██╔══██╗██║  ██║██║╚══██╔══╝██╔════╝
+██║  ███╗██████╔╝███████║██████╔╝███████║██║   ██║   █████╗
+██║   ██║██╔══██╗██╔══██║██╔═══╝ ██╔══██║██║   ██║   ██╔══╝
+╚██████╔╝██║  ██║██║  ██║██║     ██║  ██║██║   ██║   ███████╗
+ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝  ╚═╝╚═╝   ╚═╝   ╚══════╝
+
+Copyright (c) 2026, GoSmart Health, Apache 2.0 License
+https://gosmart.health
+"""
+    print(logo)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan for managing background services and DB drivers."""
+    logo_print()
     setup_logging()
     settings = get_settings()
     logger.info(
         "server_starting",
         app_name=settings.APP_NAME,
         version=settings.APP_VERSION,
+        dev_mode=settings.DEV_MODE,
         log_rotation_days=settings.LOG_ROTATION_DAYS,
     )
     logger.info("storage_configured", storage_root=settings.STORAGE_ROOT_URI)
@@ -40,8 +72,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from gosmart_graphite.service.system_service import system_service
 
         await system_service.bootstrap_system()
+    except SchemaInitializationError as e:
+        logger.critical("schema_initialization_fatal_error", error=str(e), exc_info=True)
+        raise
     except Exception as e:
-        logger.warning("neo4j_init_notice", error=str(e))
+        if not settings.DEV_MODE:
+            logger.critical("neo4j_init_fatal_error", error=str(e), exc_info=True)
+            raise
+        logger.warning("neo4j_init_notice", error=str(e), dev_mode=True)
 
     # Initialize Pykka background actors
     audit_actor_ref = get_audit_actor()
@@ -67,7 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             if not active_configs:
                 scp_host = getattr(settings, "DICOM_SCP_HOST", "0.0.0.0")
                 scp_port = getattr(settings, "DICOM_SCP_PORT", 11112)
-                scp_aet = getattr(settings, "DICOM_AE_TITLE", "GOSMART_GS")
+                scp_aet = getattr(settings, "DICOM_AE_TITLE", "GOSMART_GRAPHITE")
                 active_configs = [
                     {
                         "id": f"default_scp_{scp_port}",
@@ -102,6 +140,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.warning("dicom_scp_stop_failed", error=str(e))
     stop_dicom_actor()
+    stop_fhir_actor()
+    stop_embedding_actor()
     stop_audit_actor()
     await neo4j_client.close()
     logger.info("server_shutdown_complete")

@@ -136,7 +136,7 @@ def test_cloud_credentials_resolution(monkeypatch):
 async def test_local_read_all_10_mr_files(mr_files: list[Path]):
     """Test reading all 10 MR DICOM files using async media_service.read."""
     for file_path in mr_files:
-        uri = f"file://{file_path.resolve()}"
+        uri = f"file://{file_path.resolve().as_posix()}"
         data = await media_service.read(uri)
         assert len(data) == file_path.stat().st_size
         assert data.startswith(b"\x00" * 128 + b"DICM") or b"DICM" in data[:132]
@@ -149,7 +149,7 @@ async def test_local_read_dicom_all_10_mr_files(mr_files: list[Path]):
     sop_uids = set()
 
     for file_path in mr_files:
-        uri = f"file://{file_path.resolve()}"
+        uri = f"file://{file_path.resolve().as_posix()}"
         ds = await media_service.read_dicom(uri)
 
         # Validate DICOM header attributes
@@ -171,7 +171,7 @@ async def test_local_write_stat_list_delete_cycle(mr_files: list[Path]):
         # 1. Write all 10 MR files to temp storage
         written_uris = []
         for i, f in enumerate(mr_files):
-            target_uri = f"file://{(tmp_path / f'slice_{i:02d}.dcm').resolve()}"
+            target_uri = f"file://{(tmp_path / f'slice_{i:02d}.dcm').resolve().as_posix()}"
             raw_bytes = f.read_bytes()
             saved_uri = await media_service.write(target_uri, raw_bytes)
             written_uris.append(saved_uri)
@@ -186,22 +186,24 @@ async def test_local_write_stat_list_delete_cycle(mr_files: list[Path]):
         assert meta.scheme == StorageScheme.FILE
 
         # 3. List files
-        listed = await media_service.list_files(f"file://{tmp_path.resolve()}")
+        listed = await media_service.list_files(f"file://{tmp_path.resolve().as_posix()}")
         assert len(listed) == 10
 
         # Pattern filtering
-        filtered = await media_service.list_files(f"file://{tmp_path.resolve()}", pattern=r"slice_0[0-2]\.dcm")
+        filtered = await media_service.list_files(
+            f"file://{tmp_path.resolve().as_posix()}", pattern=r"slice_0[0-2]\.dcm"
+        )
         assert len(filtered) == 3
 
         # 4. Copy file
-        copy_dest = f"file://{(tmp_path / 'slice_00_copy.dcm').resolve()}"
+        copy_dest = f"file://{(tmp_path / 'slice_00_copy.dcm').resolve().as_posix()}"
         await media_service.copy(first_uri, copy_dest)
         assert await media_service.exists(copy_dest)
         copy_meta = await media_service.stat(copy_dest)
         assert copy_meta.size_bytes == meta.size_bytes
 
         # 5. Move file
-        move_dest = f"file://{(tmp_path / 'slice_00_moved.dcm').resolve()}"
+        move_dest = f"file://{(tmp_path / 'slice_00_moved.dcm').resolve().as_posix()}"
         await media_service.move(copy_dest, move_dest)
         assert not await media_service.exists(copy_dest)
         assert await media_service.exists(move_dest)
@@ -216,13 +218,13 @@ async def test_local_write_stat_list_delete_cycle(mr_files: list[Path]):
 async def test_local_write_dicom_dataset(mr_files: list[Path]):
     """Test serializing and writing a pydicom Dataset directly via media_service.write_dicom."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        src_uri = f"file://{mr_files[0].resolve()}"
+        src_uri = f"file://{mr_files[0].resolve().as_posix()}"
         ds = await media_service.read_dicom(src_uri)
 
         # Modify an attribute
         ds.PatientComments = "Validated by GoSmart MediaService"
 
-        dst_uri = f"file://{(Path(tmpdir) / 'modified_mr.dcm').resolve()}"
+        dst_uri = f"file://{(Path(tmpdir) / 'modified_mr.dcm').resolve().as_posix()}"
         saved_uri = await media_service.write_dicom(dst_uri, ds)
         assert saved_uri == dst_uri
 
@@ -283,7 +285,7 @@ async def test_gcs_operations_with_all_10_mr_files(mr_files: list[Path]):
 
     # 6. Cross-storage copy: GCS -> Local
     with tempfile.TemporaryDirectory() as tmpdir:
-        local_dst = f"file://{(Path(tmpdir) / 'downloaded.dcm').resolve()}"
+        local_dst = f"file://{(Path(tmpdir) / 'downloaded.dcm').resolve().as_posix()}"
         await svc.copy(first_gcs, local_dst)
         assert await svc.exists(local_dst)
         ds_local = await svc.read_dicom(local_dst)
@@ -389,7 +391,7 @@ async def test_azure_scaffolding(mr_files: list[Path]):
 def test_sync_methods_and_thread_execution(mr_files: list[Path]):
     """Test synchronous methods and execution from background worker threads (like Pykka actors)."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        dst = f"file://{(Path(tmpdir) / 'sync_test.dcm').resolve()}"
+        dst = f"file://{(Path(tmpdir) / 'sync_test.dcm').resolve().as_posix()}"
         sample_bytes = mr_files[0].read_bytes()
 
         # Synchronous write
@@ -406,7 +408,7 @@ def test_sync_methods_and_thread_execution(mr_files: list[Path]):
         assert ds.Modality == "MR"
 
         # Synchronous list_files
-        listed = media_service.list_files_sync(f"file://{Path(tmpdir).resolve()}")
+        listed = media_service.list_files_sync(f"file://{Path(tmpdir).resolve().as_posix()}")
         assert len(listed) == 1
 
         # Synchronous delete
@@ -419,7 +421,7 @@ def test_async_method_called_from_separate_thread_with_run_sync(mr_files: list[P
 
     def worker_job():
         # This runs in a new OS thread without an asyncio event loop, exactly like a Pykka ThreadingActor
-        uri = f"file://{mr_files[0].resolve()}"
+        uri = f"file://{mr_files[0].resolve().as_posix()}"
         # Test calling run_sync directly
         data = media_service.run_sync(media_service.read(uri))
         assert len(data) == mr_files[0].stat().st_size

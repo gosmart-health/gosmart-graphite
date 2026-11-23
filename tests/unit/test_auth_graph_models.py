@@ -8,7 +8,6 @@ from gosmart_graphite.model.auth import (
     MemberOfRelation,
     PerformedAtRelation,
     ScopedToRelation,
-    SubGroupOfRelation,
     UserNode,
     UsesAuthenticatorRelation,
 )
@@ -100,8 +99,11 @@ def test_member_of_relation_properties_and_negation():
 
 
 def test_hierarchical_relations_types():
-    sub_grp = SubGroupOfRelation(start_node_id="facility_1", end_node_id="hospital_1")
-    assert sub_grp.__type__ == "SUB_GROUP_OF"
+    grp_to_grp = BelongsToRelation(start_node_id="facility_1", end_node_id="hospital_1")
+    assert grp_to_grp.__type__ == "BELONGS_TO"
+
+    grp_to_sys = BelongsToRelation(start_node_id="grp_root", end_node_id="sys_root")
+    assert grp_to_sys.__type__ == "BELONGS_TO"
 
     has_id = HasIdentityRelation(start_node_id="usr_1", end_node_id="id_1")
     assert has_id.__type__ == "HAS_IDENTITY"

@@ -1,0 +1,21 @@
+{
+  "ae_title": "GOSMART_MOCK",
+  "roles": ["SCP"],
+  "host": "manabusb3.local.",
+  "port": 11114,
+  "is_local": false,
+  "tls_enabled": false,
+  "tls_cert_path": null,
+  "tls_key_path": null,
+  "tls_ca_path": null,
+  "tls_ciphers": null,
+  "dicom_services": ["*"],
+  "transfer_syntaxes": ["*"],
+  "dicomweb_enabled": true,
+  "dicomweb_url_prefix": "/dicomweb",
+  "dicomweb_qido_enabled": true,
+  "dicomweb_wado_enabled": true,
+  "dicomweb_stow_enabled": true,
+  "description": "Local development DICOM SCP configuration",
+  "storage_root_uri": "file://tmp/graphite/MOCK"
+}

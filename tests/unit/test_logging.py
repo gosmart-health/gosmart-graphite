@@ -16,83 +16,97 @@ from gosmart_graphite.core.logging import (
 
 def test_logging_setup_and_7_day_rotation():
     with tempfile.TemporaryDirectory() as tmpdir:
-        settings = Settings(
-            LOG_DIR=tmpdir,
-            LOG_FILE="test_rotation.log",
-            LOG_ROTATION_DAYS=7,
-            LOG_BACKUP_COUNT=8,
-            LOG_TO_FILE=True,
-            LOG_FORMAT="json",
-        )
-        setup_logging(settings)
+        try:
+            settings = Settings(
+                LOG_DIR=tmpdir,
+                LOG_FILE="test_rotation.log",
+                LOG_ROTATION_DAYS=7,
+                LOG_BACKUP_COUNT=8,
+                LOG_TO_FILE=True,
+                LOG_FORMAT="json",
+            )
+            setup_logging(settings)
 
-        # Verify handlers on root logger
-        root = logging.getLogger()
-        file_handlers = [h for h in root.handlers if isinstance(h, TimedRotatingFileHandler)]
-        assert len(file_handlers) >= 1
-        fh = file_handlers[0]
+            # Verify handlers on root logger
+            root = logging.getLogger()
+            file_handlers = [h for h in root.handlers if isinstance(h, TimedRotatingFileHandler)]
+            assert len(file_handlers) >= 1
+            fh = file_handlers[0]
 
-        # Verify 7-day rotation configuration
-        assert fh.when == "D"
-        assert fh.interval == 7 * 86400 or fh.interval == 7  # 7 days
-        assert fh.backupCount == 8
+            # Verify 7-day rotation configuration
+            assert fh.when == "D"
+            assert fh.interval == 7 * 86400 or fh.interval == 7  # 7 days
+            assert fh.backupCount == 8
+        finally:
+            root = logging.getLogger()
+            for h in list(root.handlers):
+                if isinstance(h, TimedRotatingFileHandler):
+                    h.close()
+                    root.removeHandler(h)
 
 
 def test_structlog_json_values_and_context():
     with tempfile.TemporaryDirectory() as tmpdir:
-        log_path = Path(tmpdir) / "test_json.log"
-        settings = Settings(
-            LOG_DIR=tmpdir,
-            LOG_FILE="test_json.log",
-            LOG_TO_FILE=True,
-            LOG_FORMAT="json",
-        )
-        setup_logging(settings)
+        try:
+            log_path = Path(tmpdir) / "test_json.log"
+            settings = Settings(
+                LOG_DIR=tmpdir,
+                LOG_FILE="test_json.log",
+                LOG_TO_FILE=True,
+                LOG_FORMAT="json",
+            )
+            setup_logging(settings)
 
-        logger = get_logger("test.structlog")
+            logger = get_logger("test.structlog")
 
-        # Bind context variables
-        bind_log_context(request_id="REQ-12345", session_user="radiologist_1")
+            # Bind context variables
+            bind_log_context(request_id="REQ-12345", session_user="radiologist_1")
 
-        # Emit log with complex JSON log values
-        metadata_payload = {
-            "patient_id": "PT-999",
-            "modality": "CT",
-            "slice_thickness_mm": 1.25,
-            "tags": ["head", "contrast", "axial"],
-            "series_count": 3,
-        }
-        logger.info(
-            "dicom_ingestion_event",
-            status="SUCCESS",
-            dicom_metadata=metadata_payload,
-            execution_time_ms=45.6,
-        )
+            # Emit log with complex JSON log values
+            metadata_payload = {
+                "patient_id": "PT-999",
+                "modality": "CT",
+                "slice_thickness_mm": 1.25,
+                "tags": ["head", "contrast", "axial"],
+                "series_count": 3,
+            }
+            logger.info(
+                "dicom_ingestion_event",
+                status="SUCCESS",
+                dicom_metadata=metadata_payload,
+                execution_time_ms=45.6,
+            )
 
-        clear_log_context()
+            clear_log_context()
 
-        # Flush handlers
-        for h in logging.getLogger().handlers:
-            h.flush()
+            # Flush handlers
+            for h in logging.getLogger().handlers:
+                h.flush()
 
-        # Verify content written to rotating file
-        assert log_path.exists()
-        lines = [line.strip() for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        assert len(lines) >= 1
+            # Verify content written to rotating file
+            assert log_path.exists()
+            lines = [line.strip() for line in log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+            assert len(lines) >= 1
 
-        last_log = json.loads(lines[-1])
+            last_log = json.loads(lines[-1])
 
-        # Verify structured JSON attributes
-        assert last_log["event"] == "dicom_ingestion_event"
-        assert last_log["request_id"] == "REQ-12345"
-        assert last_log["session_user"] == "radiologist_1"
-        assert last_log["status"] == "SUCCESS"
-        assert last_log["execution_time_ms"] == 45.6
-        assert last_log["dicom_metadata"]["patient_id"] == "PT-999"
-        assert last_log["dicom_metadata"]["slice_thickness_mm"] == 1.25
-        assert last_log["dicom_metadata"]["tags"] == ["head", "contrast", "axial"]
-        assert "timestamp" in last_log
-        assert "level" in last_log
+            # Verify structured JSON attributes
+            assert last_log["event"] == "dicom_ingestion_event"
+            assert last_log["request_id"] == "REQ-12345"
+            assert last_log["session_user"] == "radiologist_1"
+            assert last_log["status"] == "SUCCESS"
+            assert last_log["execution_time_ms"] == 45.6
+            assert last_log["dicom_metadata"]["patient_id"] == "PT-999"
+            assert last_log["dicom_metadata"]["slice_thickness_mm"] == 1.25
+            assert last_log["dicom_metadata"]["tags"] == ["head", "contrast", "axial"]
+            assert "timestamp" in last_log
+            assert "level" in last_log
+        finally:
+            root = logging.getLogger()
+            for h in list(root.handlers):
+                if isinstance(h, TimedRotatingFileHandler):
+                    h.close()
+                    root.removeHandler(h)
 
 
 def test_neo4j_already_exists_notification_filter():

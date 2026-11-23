@@ -3,10 +3,12 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from gosmart_graphite.core.auth_dependency import get_current_group_context, get_current_user
-from gosmart_graphite.model.system import (
+from gosmart_graphite.model.dicom_config import (
     DICOMConfigurationCreateRequest,
     DICOMConfigurationResponse,
     DICOMConfigurationUpdateRequest,
+)
+from gosmart_graphite.model.system import (
     SystemBootstrapResponse,
     SystemResponse,
     SystemUpdateRequest,

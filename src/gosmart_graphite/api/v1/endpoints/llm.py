@@ -11,7 +11,7 @@ from gosmart_graphite.core.auth_dependency import (
     get_current_user,
     require_roles,
 )
-from gosmart_graphite.model.llm import (
+from gosmart_graphite.model.llm_config import (
     LLMConfigAssignRequest,
     LLMConfigCreateRequest,
     LLMConfigResponse,
@@ -33,7 +33,7 @@ def _resolve_actor(x_user_id: Optional[str], current_user: Dict[str, Any]) -> st
 
 @router.get("/configurations/llm", response_model=List[LLMConfigResponse])
 async def list_llm_configurations(
-    tag: Optional[str] = Query(default=None, description="Filter by LLM_Config tag (e.g. 'embedding', 'router')"),
+    tag: Optional[str] = Query(default=None, description="Filter by LLM_Config tag (e.g. 'embedding-v1', 'router')"),
     provider: Optional[str] = Query(default=None, description="Filter by provider (e.g. 'ollama', 'vertexai')"),
     group_id: Optional[str] = Query(default=None, description="Filter to configs assigned to this Group ID"),
     include_tests: bool = Query(default=False, description="Whether to include test configurations"),

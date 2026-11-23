@@ -2,12 +2,16 @@
   <dictionary name="project">
     <words>
       <w>GOSMART</w>
+      <w>SNOMED</w>
       <w>caplog</w>
       <w>cfind</w>
       <w>dicomweb</w>
       <w>dimse</w>
+      <w>googleai</w>
       <w>pykka</w>
+      <w>qido</w>
       <w>sopclass</w>
+      <w>strftime</w>
     </words>
   </dictionary>
 </component>

@@ -44,8 +44,8 @@ graph TD
         HospGroup["(:Group {id: 'grp_hospital', name: 'Peninsula Regional Hospital', type: 'HOSPITAL'})"]
         ClinicGroup["(:Group {id: 'grp_clinic', name: 'Half Moon Bay Clinic', type: 'FACILITY'})"]
 
-        HospGroup -->|SUB_GROUP_OF| TopGroup
-        ClinicGroup -->|SUB_GROUP_OF| HospGroup
+        HospGroup -->|BELONGS_TO| TopGroup
+        ClinicGroup -->|BELONGS_TO| HospGroup
 
         User -->|"MEMBER_OF {roles: ['radiologist'], status: 'ACTIVE'}"| ClinicGroup
     end
@@ -102,11 +102,12 @@ graph TD
 * `(:Identity)-[:USES_AUTHENTICATOR]->(:Authenticator)`
 * `(:User)-[:HAS_AUTHENTICATOR]->(:Authenticator)` *(direct MFA, WebAuthn, or API keys)*
 * `(:User)-[:MEMBER_OF {roles: List[str], permissions: List[str], status: str}]->(:Group)`
-* `(:Group)-[:SUB_GROUP_OF]->(:Group)`
+* `(:Group)-[:BELONGS_TO]->(:Group)` *(and root catch-all `(:Group {name: 'GoSmart Health'})-[:BELONGS_TO]->(:System)`)*
 * `(:Study)-[:PERFORMED_AT]->(:Group)`
 * `(:Patient)-[:BELONGS_TO]->(:Group)`
+* `(:Encounter)-[:BELONGS_TO]->(:Group)` *(created by `FhirActor` during FHIR ingestion when `group_id` resolves to an active, non-deleted `Group`; empty, missing, or soft-deleted/inactive groups log an error while continuing ingestion)*
 * `(:DICOMConfiguration)-[:SCOPED_TO]->(:Group)`
-* `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` *(upward traversal via `SUB_GROUP_OF*0..` resolves active group LLM settings with `'GoSmart Health'` fallback; negated as `NOT_HAS_LLM_CONFIG`)*
+* `(:Group)-[:HAS_LLM_CONFIG]->(:LLM_Config)` *(upward traversal via `BELONGS_TO*0..` over `:Group` nodes resolves active group LLM settings with `'GoSmart Health'` fallback; negated as `NOT_HAS_LLM_CONFIG`)*
 
 ---
 
@@ -118,7 +119,7 @@ Access scope is dynamically computed per user query using the downward transitiv
 ```cypher
 // 1. Resolve effective group scope for a user
 MATCH (u:User {id: $user_id})-[:MEMBER_OF {status: 'ACTIVE'}]->(user_grp:Group)
-OPTIONAL MATCH (sub_grp:Group)-[:SUB_GROUP_OF*1..]->(user_grp)
+OPTIONAL MATCH (sub_grp:Group)-[:BELONGS_TO*1..]->(user_grp)
 WITH collect(DISTINCT user_grp) + collect(DISTINCT sub_grp) AS accessible_groups
 
 // 2. Filter target DICOM entities
@@ -163,7 +164,7 @@ gantt
 * **Scope**:
   1. Add dependencies: `pyjwt>=2.8.0`, `passlib[argon2]>=1.7.4`, `cryptography>=42.0.0`.
   2. Implement `core/security.py`: Argon2 password hashing, API key hashing (`SHA-256`), JWT signing and decoding (RS256/HS256).
-  3. Define graph models in `model/auth.py`: `UserNode`, `IdentityNode`, `AuthenticatorNode`, `GroupNode`, `MemberOfRelation`, `SubGroupOfRelation`.
+  3. Define graph models in `model/auth.py`: `UserNode`, `IdentityNode`, `AuthenticatorNode`, `GroupNode`, `MemberOfRelation`, `BelongsToRelation`.
 * **Validation**:
   * Unit tests verifying Argon2 password hashing/verification.
   * Deterministic ID generation tests for `UserNode` and `IdentityNode`.

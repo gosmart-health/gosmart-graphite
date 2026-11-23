@@ -1,5 +1,11 @@
 from gosmart_graphite.actor.audit_actor import AuditActor, get_audit_actor, record_audit, stop_audit_actor
-from gosmart_graphite.actor.dicom_actor import DicomIngestionActor, get_dicom_actor, stop_dicom_actor
+from gosmart_graphite.actor.dicom_ingestion_actor import DicomIngestionActor, get_dicom_actor, stop_dicom_actor
+from gosmart_graphite.actor.embedding_actor import (
+    EmbeddingActor,
+    get_embedding_actor,
+    notify_embedding,
+    stop_embedding_actor,
+)
 from gosmart_graphite.actor.fhir_actor import FhirActor, get_fhir_actor, notify_fhir, stop_fhir_actor
 from gosmart_graphite.actor.store_scu_actor import DicomStoreScuActor, get_store_scu_actor, stop_store_scu_actor
 
@@ -18,4 +24,8 @@ __all__ = [
     "get_fhir_actor",
     "stop_fhir_actor",
     "notify_fhir",
+    "EmbeddingActor",
+    "get_embedding_actor",
+    "stop_embedding_actor",
+    "notify_embedding",
 ]

@@ -84,6 +84,11 @@ def test_dicomweb_stow_rs_provenance(client):
     """Verify STOW-RS captures client IP, user ID scaffolding, and service identity."""
     from unittest.mock import MagicMock, patch
 
+    from gosmart_graphite.model.actor_message import (
+        DicomAssociationReleasedMessage,
+        DicomIngestionMessage,
+    )
+
     ds = dicom_service.create_mock_dicom(
         patient_id="STOW-PROV-001",
         modality="MR",
@@ -105,14 +110,64 @@ def test_dicomweb_stow_rs_provenance(client):
             },
         )
         assert response.status_code == 200
-        mock_actor.tell.assert_called_once()
-        msg = mock_actor.tell.call_args[0][0]
-        assert msg["type"] == "INGEST_FILE"
-        assert msg["source"].startswith("stow:")
-        assert msg["source_identity"] == "user:dr_watson"
-        assert msg["destination"].startswith("stow:")
-        assert msg["destination_identity"] == "service:dicomweb"
-        assert msg["acted_by"] == "user:dr_watson"
+        assert mock_actor.tell.call_count == 2
+        msg = mock_actor.tell.call_args_list[0].args[0]
+        rel_msg = mock_actor.tell.call_args_list[1].args[0]
+        assert isinstance(msg, DicomIngestionMessage)
+        assert msg.type == "INGEST_FILE"
+        assert msg.source.startswith("stow:")
+        assert msg.source_identity == "user:dr_watson"
+        assert msg.destination.startswith("stow:")
+        assert msg.destination_identity == "service:dicomweb"
+        assert msg.acted_by == "user:dr_watson"
+        assert msg.association_id is not None and msg.association_id.startswith("stow:")
+        assert isinstance(rel_msg, DicomAssociationReleasedMessage)
+        assert rel_msg.association_id == msg.association_id
+
+
+def test_dicomweb_stow_rs_multipart_shares_association_id_and_releases(client):
+    """Verify multi-instance STOW-RS batches share a single association_id and emit one release message."""
+    from unittest.mock import MagicMock, patch
+
+    from gosmart_graphite.model.actor_message import (
+        DicomAssociationReleasedMessage,
+        DicomIngestionMessage,
+    )
+
+    ds1 = dicom_service.create_mock_dicom(patient_id="STOW-BATCH-001", modality="CT")
+    ds2 = dicom_service.create_mock_dicom(patient_id="STOW-BATCH-001", modality="CT")
+    ds2.StudyInstanceUID = ds1.StudyInstanceUID
+    ds2.SeriesInstanceUID = ds1.SeriesInstanceUID
+
+    buf1, buf2 = io.BytesIO(), io.BytesIO()
+    ds1.save_as(buf1, enforce_file_format=True)
+    ds2.save_as(buf2, enforce_file_format=True)
+
+    boundary = "dicom_batch_assoc_boundary"
+    body = (
+        f"--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode("ascii")
+        + buf1.getvalue()
+        + f"\r\n--{boundary}\r\nContent-Type: application/dicom\r\n\r\n".encode("ascii")
+        + buf2.getvalue()
+        + f"\r\n--{boundary}--\r\n".encode("ascii")
+    )
+
+    mock_actor = MagicMock()
+    mock_actor.is_alive.return_value = True
+    with patch("gosmart_graphite.api.v1.endpoints.dicomweb.get_dicom_actor", return_value=mock_actor):
+        response = client.post(
+            "/dicomweb/studies",
+            content=body,
+            headers={"Content-Type": f'multipart/related; type="application/dicom"; boundary={boundary}'},
+        )
+    assert response.status_code == 200
+    sent = [c.args[0] for c in mock_actor.tell.call_args_list]
+    assert len(sent) == 3
+    assert isinstance(sent[0], DicomIngestionMessage)
+    assert isinstance(sent[1], DicomIngestionMessage)
+    assert isinstance(sent[2], DicomAssociationReleasedMessage)
+    assert sent[0].association_id is not None and sent[0].association_id.startswith("stow:")
+    assert sent[0].association_id == sent[1].association_id == sent[2].association_id
 
 
 def test_dicomweb_qido_series_and_instances(client):
