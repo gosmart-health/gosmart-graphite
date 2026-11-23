@@ -135,7 +135,7 @@ graph TD
   - Maintains a thread-safe Genkit client cache keyed by resolved config fingerprint (`provider`, `url`, resolved `api_key`, `location`, `project_id`).
   - Supports `dimensions` (e.g., `output_dimensionality`) and Matryoshka `dimensions_truncated` post-truncation with L2 vector normalization and similarity scoring.
 * **`search_service.py`**:
-  - `SearchService` (singleton `search_service`) provides both synchronous `search()` and asynchronous `search_async()` semantic vector similarity search over `embedding_vector_idx` (default `limit=20`, `test_id` isolation, `include_deleted` admin override with `is_deleted` flag).
+  - `SearchService` (singleton `search_service`) provides both synchronous `search()` and asynchronous `search_async()` semantic vector similarity search over `embedding_vector_idx` using native Cypher 25 `SEARCH ... IN (VECTOR INDEX ...)` with automatic cached fallback to `db.index.vector.queryNodes` for older Neo4j 5.x servers (default `limit=20`, `test_id` isolation, `include_deleted` admin override with `is_deleted` flag).
   - Deduplicates hits per target node (retaining the highest-scoring `:Embedding`), filters `group_id` against `group_id` + active descendants (`[:BELONGS_TO*1..]`) using nearest-owning-group tenancy semantics (`UPWARD_GROUP_RELATION_TYPES`), falls back to exact `vector.similarity.cosine` when filtered HNSW saturates, and performs post-LIMIT opt-in hydration for `SearchIncludeLabel` context nodes.
 * **`media_service.py`**:
   - Storage-agnostic media service implementing unified read, write, exists, delete, stat, list_files, copy, move, and DICOM dataset read/write.

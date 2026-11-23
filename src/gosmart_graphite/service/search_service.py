@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, FrozenSet, List, LiteralString, Optional, Sequence, Type, TypeVar, Union, cast
 
+from neo4j.exceptions import ClientError, CypherSyntaxError
 from pydantic import BaseModel
 
 from gosmart_graphite.core.logging import get_logger
@@ -29,6 +30,31 @@ _HNSW_MIN_CANDIDATES: int = 100
 _HNSW_MAX_CANDIDATES: int = 2000
 
 _TModel = TypeVar("_TModel", bound=BaseModel)
+
+
+def _escape_cypher_identifier(identifier: str) -> str:
+    """Validate and backtick-escape a Cypher identifier (such as a vector index name)."""
+    if not isinstance(identifier, str) or not identifier.strip():
+        raise ValueError(f"index_name must be a non-empty string, got {identifier!r}")
+    clean = identifier.strip()
+    if any(ch in clean for ch in ("\x00", "\n", "\r")):
+        raise ValueError(f"index_name contains invalid control characters: {identifier!r}")
+    escaped = clean.replace("`", "``")
+    return f"`{escaped}`"
+
+
+def _is_unsupported_cypher25_search_error(exc: Exception) -> bool:
+    """Return True when a Neo4j server rejects Cypher 25 / native SEARCH syntax (e.g., Neo4j 5.x)."""
+    if isinstance(exc, CypherSyntaxError):
+        return True
+    if isinstance(exc, ClientError):
+        code = str(getattr(exc, "code", "") or "")
+        msg = str(exc).upper()
+        if "SYNTAXERROR" in code.upper():
+            return True
+        if "INVALID" in code.upper() and ("CYPHER 25" in msg or "SEARCH" in msg or "VERSION" in msg):
+            return True
+    return False
 
 
 def _validate_limit(limit: int) -> int:
@@ -352,10 +378,12 @@ def _build_return_map(extra_fields: list[str]) -> str:
 
 def _build_hnsw_search_cypher(
     *,
+    index_name: str = EMBEDDING_VECTOR_INDEX_NAME,
     has_group_filter: bool,
     has_test_id: bool,
     include_set: FrozenSet[SearchIncludeLabel],
     max_group_depth: int,
+    use_cypher25_search: bool = True,
 ) -> LiteralString:
     group_preamble = _build_group_scope_preamble() if has_group_filter else ""
     group_carry = "allowed_group_ids, " if has_group_filter else ""
@@ -365,10 +393,25 @@ def _build_hnsw_search_cypher(
     context_clauses, extra_fields = _build_context_hydration_clauses(include_set)
     return_map = _build_return_map(extra_fields)
 
-    query = f"""
-    {group_preamble}
+    if use_cypher25_search:
+        escaped_index = _escape_cypher_identifier(index_name)
+        cypher_header = "CYPHER 25"
+        vector_lookup_clause = f"""
+    MATCH (e:Embedding)
+    SEARCH e IN (
+        VECTOR INDEX {escaped_index}
+        FOR $query_vector
+        LIMIT $candidate_k
+    ) SCORE AS score"""
+    else:
+        cypher_header = ""
+        vector_lookup_clause = """
     CALL db.index.vector.queryNodes($index_name, $candidate_k, $query_vector)
-    YIELD node AS e, score
+    YIELD node AS e, score"""
+
+    query = f"""{cypher_header}
+    {group_preamble}
+    {vector_lookup_clause}
     WITH {group_carry}collect({{e: e, score: score}}) AS raw_hits
     WITH {group_carry}size(raw_hits) AS raw_hit_count, raw_hits
     CALL ({call_scope}) {{
@@ -546,9 +589,11 @@ class SearchService:
         client: Optional[Neo4jClient] = None,
         index_name: str = EMBEDDING_VECTOR_INDEX_NAME,
     ) -> None:
+        _escape_cypher_identifier(index_name)
         self.client = client or neo4j_client
         self.embedding_service = embedding_service or EmbeddingService()
-        self.index_name = index_name
+        self.index_name = index_name.strip()
+        self._use_cypher25_search: bool = True
 
     def _prepare_search_context(
         self,
@@ -623,6 +668,84 @@ class SearchService:
             result = session.run(cypher, params)
             return [record.data() for record in result]
 
+    async def _run_hnsw_query_async(
+        self,
+        *,
+        has_group: bool,
+        has_test_id: bool,
+        include_set: FrozenSet[SearchIncludeLabel],
+        max_group_depth: int,
+        params: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        use_c25 = self._use_cypher25_search
+        hnsw_cypher = _build_hnsw_search_cypher(
+            index_name=self.index_name,
+            has_group_filter=has_group,
+            has_test_id=has_test_id,
+            include_set=include_set,
+            max_group_depth=max_group_depth,
+            use_cypher25_search=use_c25,
+        )
+        try:
+            return await self.client.execute_query(hnsw_cypher, params)
+        except Exception as exc:
+            if not use_c25 or not _is_unsupported_cypher25_search_error(exc):
+                raise
+            self._use_cypher25_search = False
+            logger.info(
+                "search_cypher25_unsupported_falling_back_to_query_nodes",
+                index_name=self.index_name,
+                error=str(exc),
+            )
+            legacy_cypher = _build_hnsw_search_cypher(
+                index_name=self.index_name,
+                has_group_filter=has_group,
+                has_test_id=has_test_id,
+                include_set=include_set,
+                max_group_depth=max_group_depth,
+                use_cypher25_search=False,
+            )
+            return await self.client.execute_query(legacy_cypher, params)
+
+    def _run_hnsw_query_sync(
+        self,
+        *,
+        has_group: bool,
+        has_test_id: bool,
+        include_set: FrozenSet[SearchIncludeLabel],
+        max_group_depth: int,
+        params: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        use_c25 = self._use_cypher25_search
+        hnsw_cypher = _build_hnsw_search_cypher(
+            index_name=self.index_name,
+            has_group_filter=has_group,
+            has_test_id=has_test_id,
+            include_set=include_set,
+            max_group_depth=max_group_depth,
+            use_cypher25_search=use_c25,
+        )
+        try:
+            return self._execute_query_sync(hnsw_cypher, params)
+        except Exception as exc:
+            if not use_c25 or not _is_unsupported_cypher25_search_error(exc):
+                raise
+            self._use_cypher25_search = False
+            logger.info(
+                "search_cypher25_unsupported_falling_back_to_query_nodes",
+                index_name=self.index_name,
+                error=str(exc),
+            )
+            legacy_cypher = _build_hnsw_search_cypher(
+                index_name=self.index_name,
+                has_group_filter=has_group,
+                has_test_id=has_test_id,
+                include_set=include_set,
+                max_group_depth=max_group_depth,
+                use_cypher25_search=False,
+            )
+            return self._execute_query_sync(legacy_cypher, params)
+
     async def search_async(
         self,
         query: str,
@@ -667,13 +790,13 @@ class SearchService:
         has_group = ctx["group_id"] is not None
         has_test_id = ctx["test_id"] is not None
 
-        hnsw_cypher = _build_hnsw_search_cypher(
-            has_group_filter=has_group,
+        rows = await self._run_hnsw_query_async(
+            has_group=has_group,
             has_test_id=has_test_id,
             include_set=ctx["include_set"],
             max_group_depth=ctx["max_group_depth"],
+            params=params,
         )
-        rows = await self.client.execute_query(hnsw_cypher, params)
         if not rows:
             return []
 
@@ -746,13 +869,13 @@ class SearchService:
         has_group = ctx["group_id"] is not None
         has_test_id = ctx["test_id"] is not None
 
-        hnsw_cypher = _build_hnsw_search_cypher(
-            has_group_filter=has_group,
+        rows = self._run_hnsw_query_sync(
+            has_group=has_group,
             has_test_id=has_test_id,
             include_set=ctx["include_set"],
             max_group_depth=ctx["max_group_depth"],
+            params=params,
         )
-        rows = self._execute_query_sync(hnsw_cypher, params)
         if not rows:
             return []
 

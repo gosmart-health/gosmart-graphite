@@ -197,7 +197,9 @@ async def test_search_async_unscoped_embeds_query_and_hydrates_results() -> None
     )
     assert len(calls) == 1
     cypher, params = calls[0]
-    assert "db.index.vector.queryNodes" in cypher
+    assert cypher.startswith("CYPHER 25")
+    assert "SEARCH e IN (" in cypher
+    assert "VECTOR INDEX `embedding_vector_idx`" in cypher
     assert "e.test_id IS NULL" in cypher
     assert "allowed_group_ids" not in cypher
     assert "OPTIONAL MATCH" not in cypher
@@ -341,7 +343,7 @@ async def test_search_async_triggers_exact_cosine_fallback_when_hnsw_saturated()
     results = await svc.search_async("nodule", group_id="grp-small", limit=5)
 
     assert len(calls) == 2
-    assert "db.index.vector.queryNodes" in calls[0][0]
+    assert "SEARCH e IN (" in calls[0][0]
     assert "vector.similarity.cosine" in calls[1][0]
     assert len(results) == 1
     assert results[0].node_id == "dr-small-tenant"
@@ -360,3 +362,101 @@ async def test_search_async_returns_empty_when_group_not_found() -> None:
 
     assert results == []
     assert len(calls) == 1
+
+
+@pytest.mark.anyio
+async def test_search_async_falls_back_to_query_nodes_when_cypher25_unsupported() -> None:
+    from neo4j.exceptions import CypherSyntaxError
+
+    mock_emb = MagicMock()
+    mock_emb.embed_text_async = AsyncMock(return_value=[1.0, 0.0, 0.0])
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _exec(query: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        calls.append((query, dict(parameters or {})))
+        if "SEARCH e IN (" in query:
+            raise CypherSyntaxError("Invalid input '25': expected Cypher version")
+        return [{"raw_hit_count": 1, "results": [_sample_hit_row(node_id="dr-legacy-1", score=0.91)]}]
+
+    mock_client = MagicMock()
+    mock_client.execute_query = AsyncMock(side_effect=_exec)
+    svc = SearchService(embedding_service=mock_emb, client=mock_client)
+
+    first = await svc.search_async("pneumonia")
+    second = await svc.search_async("pneumonia")
+
+    assert len(first) == 1 and first[0].node_id == "dr-legacy-1"
+    assert len(second) == 1 and second[0].node_id == "dr-legacy-1"
+    # First call tried Cypher 25 SEARCH then fell back; second call went straight to queryNodes
+    assert len(calls) == 3
+    assert "SEARCH e IN (" in calls[0][0]
+    assert "db.index.vector.queryNodes" in calls[1][0]
+    assert "db.index.vector.queryNodes" in calls[2][0]
+
+
+def test_search_sync_falls_back_to_query_nodes_and_caches() -> None:
+    from neo4j.exceptions import CypherSyntaxError
+
+    mock_emb = MagicMock()
+    mock_emb.embed_text = MagicMock(return_value=[1.0, 0.0, 0.0])
+
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def _run(query: str, parameters: dict[str, Any] | None = None, **kwargs: Any) -> _FakeSyncResult:
+        calls.append((query, dict(parameters or {})))
+        if "SEARCH e IN (" in query:
+            raise CypherSyntaxError("Invalid input 'SEARCH'")
+        return _FakeSyncResult([{"raw_hit_count": 1, "results": [_sample_hit_row(node_id="dr-legacy-sync")]}])
+
+    mock_session = MagicMock()
+    mock_session.run.side_effect = _run
+    mock_session.__enter__.return_value = mock_session
+    mock_session.__exit__.return_value = False
+    mock_driver = MagicMock()
+    mock_driver.session.return_value = mock_session
+    mock_client = MagicMock()
+    mock_client.settings = MagicMock(DB_DATABASE="neo4j")
+    mock_client.get_sync_driver.return_value = mock_driver
+
+    svc = SearchService(embedding_service=mock_emb, client=mock_client)
+    res1 = svc.search("dyspnea")
+    res2 = svc.search("dyspnea")
+
+    assert [r.node_id for r in res1] == ["dr-legacy-sync"]
+    assert [r.node_id for r in res2] == ["dr-legacy-sync"]
+    assert len(calls) == 3
+    assert "SEARCH e IN (" in calls[0][0]
+    assert "db.index.vector.queryNodes" in calls[1][0]
+    assert "db.index.vector.queryNodes" in calls[2][0]
+
+
+@pytest.mark.anyio
+async def test_search_async_propagates_non_syntax_errors_without_fallback() -> None:
+    mock_emb = MagicMock()
+    mock_emb.embed_text_async = AsyncMock(return_value=[1.0, 0.0, 0.0])
+    mock_client = MagicMock()
+    mock_client.execute_query = AsyncMock(side_effect=RuntimeError("connection reset"))
+
+    svc = SearchService(embedding_service=mock_emb, client=mock_client)
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await svc.search_async("pneumonia")
+
+    assert mock_client.execute_query.await_count == 1
+    assert svc._use_cypher25_search is True
+
+
+def test_search_service_validates_and_escapes_index_name() -> None:
+    with pytest.raises(ValueError, match="index_name"):
+        SearchService(embedding_service=MagicMock(), client=MagicMock(), index_name="   ")
+
+    with pytest.raises(ValueError, match="control characters"):
+        SearchService(embedding_service=MagicMock(), client=MagicMock(), index_name="bad\nindex")
+
+    mock_emb = MagicMock()
+    mock_emb.embed_text = MagicMock(return_value=[1.0, 0.0, 0.0])
+    mock_client, calls = _make_sync_client([[{"raw_hit_count": 0, "results": []}]])
+    svc = SearchService(embedding_service=mock_emb, client=mock_client, index_name="my`idx")
+
+    assert svc.search("test") == []
+    assert "VECTOR INDEX `my``idx`" in calls[0][0]
