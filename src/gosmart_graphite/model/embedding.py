@@ -41,6 +41,10 @@ class Embedding(AuditableNode):
         ...,
         description="L2-normalized vector representation (array of finite floats), indexed by a vector index",
     )
+    text: str = Field(
+        ...,
+        description="Original source text from which the embedding vector was generated",
+    )
     targetFieldTag: str = Field(
         ...,
         description=(
@@ -53,7 +57,7 @@ class Embedding(AuditableNode):
         description="Deterministic ID of the target node used for target-scoped deterministic Embedding ID derivation",
     )
 
-    @field_validator("modelTag", "targetFieldTag", mode="before")
+    @field_validator("modelTag", "targetFieldTag", "text", mode="before")
     @classmethod
     def validate_required_tag(cls, v: Any) -> str:
         if not isinstance(v, str) or not v.strip():

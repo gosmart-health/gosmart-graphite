@@ -36,6 +36,7 @@ def test_embedding_auto_populates_size_and_normalizes_fields() -> None:
         target_node_id="  dr-node-1  ",
         modelTag="  embedding-v1  ",
         vector=[0.6, 0.8, 0.0],
+        text="  Lungs are clear.  ",
         targetFieldTag="  FINDINGS  ",
         test_id="  t_emb_norm  ",
         ActedBy="pytest",
@@ -46,6 +47,7 @@ def test_embedding_auto_populates_size_and_normalizes_fields() -> None:
     assert emb.test_id == "t_emb_norm"
     assert emb.size == 3
     assert emb.vector == [0.6, 0.8, 0.0]
+    assert emb.text == "Lungs are clear."
     assert emb.Action == "CREATE"
     assert emb.id != ""
 
@@ -56,6 +58,7 @@ def test_embedding_auto_populates_size_and_normalizes_fields() -> None:
     assert props["modelTag"] == "embedding-v1"
     assert props["size"] == 3
     assert props["vector"] == [0.6, 0.8, 0.0]
+    assert props["text"] == "Lungs are clear."
     assert props["targetFieldTag"] == "FINDINGS"
     assert props["test_id"] == "t_emb_norm"
 
@@ -66,6 +69,7 @@ def test_embedding_deterministic_id_idempotency_and_scoping() -> None:
         modelTag="embedding-v1",
         size=3,
         vector=[0.6, 0.8, 0.0],
+        text="Lungs are clear.",
         targetFieldTag=DiagnosticReportFieldTag.FINDINGS,
         test_id="t_scope",
     )
@@ -74,6 +78,7 @@ def test_embedding_deterministic_id_idempotency_and_scoping() -> None:
         modelTag="embedding-v1",
         size=3,
         vector=[0.0, 0.6, 0.8],  # Updated vector payload -> same deterministic ID
+        text="Updated findings narrative.",  # Updated source text -> same deterministic ID
         targetFieldTag=DiagnosticReportFieldTag.FINDINGS,
         test_id="t_scope",
     )
@@ -90,6 +95,7 @@ def test_embedding_deterministic_id_idempotency_and_scoping() -> None:
         target_node_id="dr-2",
         modelTag="embedding-v1",
         vector=[0.6, 0.8, 0.0],
+        text="Lungs are clear.",
         targetFieldTag=DiagnosticReportFieldTag.FINDINGS,
         test_id="t_scope",
     )
@@ -100,6 +106,7 @@ def test_embedding_deterministic_id_idempotency_and_scoping() -> None:
         target_node_id="dr-1",
         modelTag="embedding-v1",
         vector=[0.6, 0.8, 0.0],
+        text="Normal chest.",
         targetFieldTag=DiagnosticReportFieldTag.CONCLUSION,
         test_id="t_scope",
     )
@@ -110,6 +117,7 @@ def test_embedding_deterministic_id_idempotency_and_scoping() -> None:
         target_node_id="dr-1",
         modelTag="embedding-v2",
         vector=[0.6, 0.8, 0.0],
+        text="Lungs are clear.",
         targetFieldTag=DiagnosticReportFieldTag.FINDINGS,
         test_id="t_scope",
     )
@@ -120,6 +128,7 @@ def test_embedding_deterministic_id_idempotency_and_scoping() -> None:
         target_node_id="dr-1",
         modelTag="embedding-v1",
         vector=[0.6, 0.8, 0.0],
+        text="Lungs are clear.",
         targetFieldTag=DiagnosticReportFieldTag.FINDINGS,
     )
     assert emb_prod.id != emb1.id
@@ -128,17 +137,55 @@ def test_embedding_deterministic_id_idempotency_and_scoping() -> None:
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"modelTag": "", "vector": [1.0], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "   ", "vector": [1.0], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "vector": [1.0], "targetFieldTag": ""},
-        {"modelTag": "embedding-v1", "vector": [], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "vector": "not-a-vector", "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "vector": [True, 0.5], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "vector": [math.nan, 0.5], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "vector": [math.inf, 0.5], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "size": 5, "vector": [0.6, 0.8], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "size": -1, "vector": [0.6, 0.8], "targetFieldTag": "FINDINGS"},
-        {"modelTag": "embedding-v1", "size": True, "vector": [1.0], "targetFieldTag": "FINDINGS"},
+        {"modelTag": "", "vector": [1.0], "text": "Lungs are clear.", "targetFieldTag": "FINDINGS"},
+        {"modelTag": "   ", "vector": [1.0], "text": "Lungs are clear.", "targetFieldTag": "FINDINGS"},
+        {"modelTag": "embedding-v1", "vector": [1.0], "text": "Lungs are clear.", "targetFieldTag": ""},
+        {"modelTag": "embedding-v1", "vector": [1.0], "targetFieldTag": "FINDINGS"},
+        {"modelTag": "embedding-v1", "vector": [1.0], "text": "", "targetFieldTag": "FINDINGS"},
+        {"modelTag": "embedding-v1", "vector": [1.0], "text": "   ", "targetFieldTag": "FINDINGS"},
+        {"modelTag": "embedding-v1", "vector": [1.0], "text": None, "targetFieldTag": "FINDINGS"},
+        {"modelTag": "embedding-v1", "vector": [1.0], "text": 123, "targetFieldTag": "FINDINGS"},
+        {"modelTag": "embedding-v1", "vector": [], "text": "Lungs are clear.", "targetFieldTag": "FINDINGS"},
+        {
+            "modelTag": "embedding-v1",
+            "vector": "not-a-vector",
+            "text": "Lungs are clear.",
+            "targetFieldTag": "FINDINGS",
+        },
+        {"modelTag": "embedding-v1", "vector": [True, 0.5], "text": "Lungs are clear.", "targetFieldTag": "FINDINGS"},
+        {
+            "modelTag": "embedding-v1",
+            "vector": [math.nan, 0.5],
+            "text": "Lungs are clear.",
+            "targetFieldTag": "FINDINGS",
+        },
+        {
+            "modelTag": "embedding-v1",
+            "vector": [math.inf, 0.5],
+            "text": "Lungs are clear.",
+            "targetFieldTag": "FINDINGS",
+        },
+        {
+            "modelTag": "embedding-v1",
+            "size": 5,
+            "vector": [0.6, 0.8],
+            "text": "Lungs are clear.",
+            "targetFieldTag": "FINDINGS",
+        },
+        {
+            "modelTag": "embedding-v1",
+            "size": -1,
+            "vector": [0.6, 0.8],
+            "text": "Lungs are clear.",
+            "targetFieldTag": "FINDINGS",
+        },
+        {
+            "modelTag": "embedding-v1",
+            "size": True,
+            "vector": [1.0],
+            "text": "Lungs are clear.",
+            "targetFieldTag": "FINDINGS",
+        },
     ],
 )
 def test_embedding_validation_rejects_invalid_inputs(kwargs: dict[str, object]) -> None:

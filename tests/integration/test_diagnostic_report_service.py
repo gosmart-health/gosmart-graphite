@@ -453,6 +453,7 @@ async def test_embedding_schema_and_graph_register_idempotency_and_vector_query(
         RETURN e.id AS emb_id,
                e.modelTag AS model_tag,
                e.size AS size,
+               e.text AS text,
                e.targetFieldTag AS field_tag,
                e.Action AS emb_action,
                r.id AS rel_id,
@@ -471,12 +472,18 @@ async def test_embedding_schema_and_graph_register_idempotency_and_vector_query(
         DiagnosticReportFieldTag.CONCLUSION,
         DiagnosticReportFieldTag.FINDINGS,
     ]
+    assert [r["text"] for r in rows] == [
+        "No acute cardiopulmonary abnormality.",
+        "Lungs are clear without consolidation.",
+    ]
     assert all(r["model_tag"] == DEFAULT_EMBEDDING_TAG for r in rows)
     assert all(r["size"] == DEFAULT_EMBEDDING_VECTOR_DIMENSIONS for r in rows)
     assert all(r["emb_action"] == "CREATE" for r in rows)
     assert all(r["rel_action"] == "CREATE" for r in rows)
 
-    # 3. Re-registration -> strictly idempotent (same IDs, no duplicates, Action='UPDATE')
+    # 3. Re-registration -> strictly idempotent (same IDs, no duplicates, Action='UPDATE', e.text updated in-place)
+    rt.findings = "Lungs remain clear without acute consolidation."
+    rt.conclusion = "No acute cardiopulmonary disease."
     reg2 = dr_svc.graph_register(rt, test_id=test_id, acted_by="pytest")
     assert reg2.status == STATUS_OK
     assert reg2.value is not None
@@ -485,11 +492,20 @@ async def test_embedding_schema_and_graph_register_idempotency_and_vector_query(
     rows_after = await neo4j_client.execute_query(
         """
         MATCH (e:Embedding {test_id: $test_id})-[r:EMBEDS]->(dr:DiagnosticReport {id: $dr_id})
-        RETURN e.id AS emb_id, e.Action AS emb_action, e.UpdatedAt AS updated_at, r.Action AS rel_action
+        RETURN e.id AS emb_id,
+               e.text AS text,
+               e.Action AS emb_action,
+               e.UpdatedAt AS updated_at,
+               r.Action AS rel_action
+        ORDER BY e.targetFieldTag
         """,
         {"test_id": test_id, "dr_id": dr_node_id},
     )
     assert len(rows_after) == 2
+    assert [r["text"] for r in rows_after] == [
+        "No acute cardiopulmonary disease.",
+        "Lungs remain clear without acute consolidation.",
+    ]
     assert all(r["emb_action"] == "UPDATE" for r in rows_after)
     assert all(r["rel_action"] == "UPDATE" for r in rows_after)
     assert all(r["updated_at"] is not None for r in rows_after)
@@ -673,7 +689,7 @@ async def test_embedding_actor_end_to_end_diagnostic_report_pipeline():
         """
         MATCH (e:Embedding {test_id: $test_id})-[r:EMBEDS]->(dr:DiagnosticReport {id: $dr_id})
         RETURN e.id AS emb_id, e.targetFieldTag AS field_tag, e.modelTag AS model_tag,
-               e.size AS size, size(e.vector) AS vec_len, r.aspect AS aspect
+               e.text AS text, e.size AS size, size(e.vector) AS vec_len, r.aspect AS aspect
         ORDER BY e.targetFieldTag
         """,
         {"test_id": test_id, "dr_id": dr_node_id},
@@ -686,6 +702,10 @@ async def test_embedding_actor_end_to_end_diagnostic_report_pipeline():
     assert [r["aspect"] for r in rows] == [
         DiagnosticReportFieldTag.CONCLUSION,
         DiagnosticReportFieldTag.FINDINGS,
+    ]
+    assert [r["text"] for r in rows] == [
+        "Mild cardiomegaly.",
+        "Mild cardiomegaly without acute pulmonary edema.",
     ]
     assert all(r["model_tag"] == DEFAULT_EMBEDDING_TAG for r in rows)
     assert all(r["size"] == r["vec_len"] and r["size"] > 0 for r in rows)

@@ -869,6 +869,7 @@ def test_graph_register_upserts_findings_and_conclusion_atomically() -> None:
         target_node_id=target_dr_id,
         modelTag=llm_cfg.tag,
         vector=vec_f,
+        text="Lungs are clear.",
         targetFieldTag=DiagnosticReportFieldTag.FINDINGS,
         test_id="t_reg_both",
         ActedBy="pytest",
@@ -877,6 +878,7 @@ def test_graph_register_upserts_findings_and_conclusion_atomically() -> None:
         target_node_id=target_dr_id,
         modelTag=llm_cfg.tag,
         vector=vec_c,
+        text="Normal chest.",
         targetFieldTag=DiagnosticReportFieldTag.CONCLUSION,
         test_id="t_reg_both",
         ActedBy="pytest",
@@ -926,10 +928,14 @@ def test_graph_register_upserts_findings_and_conclusion_atomically() -> None:
     assert len(res.value) == 2
     assert [e.id for e in res.value] == [expected_emb_f.id, expected_emb_c.id]
     assert [e.targetFieldTag for e in res.value] == ["FINDINGS", "CONCLUSION"]
+    assert [e.text for e in res.value] == ["Lungs are clear.", "Normal chest."]
     assert all(e.modelTag == DEFAULT_EMBEDDING_TAG for e in res.value)
     assert all(e.size == DEFAULT_EMBEDDING_VECTOR_DIMENSIONS for e in res.value)
 
     mock_client.execute_write_tx_sync.assert_called_once()
+    query = captured["query"]
+    assert isinstance(query, str)
+    assert query.count("e.text = item.emb.text") == 2
     params = captured["params"]
     assert isinstance(params, dict)
     assert params["target_id"] == target_dr_id
@@ -938,11 +944,13 @@ def test_graph_register_upserts_findings_and_conclusion_atomically() -> None:
     assert isinstance(items, list) and len(items) == 2
     assert items[0]["emb"]["id"] == expected_emb_f.id
     assert items[0]["emb"]["modelTag"] == DEFAULT_EMBEDDING_TAG
+    assert items[0]["emb"]["text"] == "Lungs are clear."
     assert items[0]["emb"]["targetFieldTag"] == "FINDINGS"
     assert "target_node_id" not in items[0]["emb"]
     assert items[0]["rel"]["id"] == expected_rel_f.id
     assert items[0]["rel"]["aspect"] == "FINDINGS"
     assert items[1]["emb"]["id"] == expected_emb_c.id
+    assert items[1]["emb"]["text"] == "Normal chest."
     assert items[1]["rel"]["id"] == expected_rel_c.id
     assert items[1]["rel"]["aspect"] == "CONCLUSION"
 
@@ -974,11 +982,13 @@ def test_graph_register_single_section_conclusion_only() -> None:
     assert res.status == STATUS_OK
     assert res.value is not None and len(res.value) == 1
     assert res.value[0].targetFieldTag == "CONCLUSION"
+    assert res.value[0].text == "Normal chest."
     assert res.value[0].size == 3
     params = captured["params"]
     assert isinstance(params, dict)
     assert params["target_id"] == target_dr_id
     assert len(params["items"]) == 1
+    assert params["items"][0]["emb"]["text"] == "Normal chest."
 
 
 def test_graph_register_empty_report_no_text_is_noop() -> None:
@@ -1028,6 +1038,31 @@ def test_graph_register_text_without_computed_embeddings_returns_bad_data() -> N
     res = svc.graph_register(rt)
     assert res.status == STATUS_BAD_DATA
     assert "compute_embeddings" in res.message
+    mock_client.execute_write_tx_sync.assert_not_called()
+
+
+def test_graph_register_vector_without_source_text_returns_bad_data() -> None:
+    group, llm_cfg = _sample_group_and_llm("t_reg_notext")
+    mock_client = MagicMock()
+    svc = DiagnosticReportService(
+        group_service=MagicMock(),
+        llm_config_service=MagicMock(),
+        embedding_service=MagicMock(),
+        client=mock_client,
+    )
+    rt = ReportTexts(
+        report=_diagnostic_report(report_id="dr-reg-notext"),
+        group_context=group,
+        llm_config=llm_cfg,
+        findings="   ",
+        conclusion="",
+        embedding_findings=[0.6, 0.8, 0.0],
+        embedding_conclusion=[],
+    )
+
+    res = svc.graph_register(rt)
+    assert res.status == STATUS_BAD_DATA
+    assert "Invalid embedding data" in res.message
     mock_client.execute_write_tx_sync.assert_not_called()
 
 

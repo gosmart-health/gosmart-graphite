@@ -104,7 +104,7 @@ graph TD
   - `HasLlmConfigRelation` (`__type__ = "HAS_LLM_CONFIG"`): Links sponsoring `(:Group)` to `(:LLM_Config)`.
   - API/CLI DTOs: `LLMConfigCreateRequest`, `LLMConfigUpdateRequest`, `LLMConfigAssignRequest`, `LLMConfigGroupSummary`, `LLMConfigResponse` (always masks `api_key` and exposes `has_api_key` and `api_key_source`).
 * **`embedding.py`**: Decoupled vector embedding graph models:
-  - `Embedding` (`EmbeddingNode`, `__label__ = "Embedding"`): Auditable node storing `modelTag` (e.g., `LLM_Config.tag`), `size` (auto-validated vector length), `vector` (L2-normalized float array indexed by `embedding_vector_idx`), and `targetFieldTag` (e.g., `FINDINGS`, `CONCLUSION`) with target-scoped deterministic UUIDv5 `id` generation.
+  - `Embedding` (`EmbeddingNode`, `__label__ = "Embedding"`): Auditable node storing `modelTag` (e.g., `LLM_Config.tag`), `size` (auto-validated vector length), `vector` (L2-normalized float array indexed by `embedding_vector_idx`), `text` (original source text embedded), and `targetFieldTag` (e.g., `FINDINGS`, `CONCLUSION`) with target-scoped deterministic UUIDv5 `id` generation.
   - `EmbedsRelation` (`__type__ = "EMBEDS"`): Auditable relationship linking `(:Embedding)-[:EMBEDS {aspect}]->(target domain node)`.
   - `DiagnosticReportFieldTag` (`StrEnum`): Canonical field/aspect tags (`FINDINGS`, `CONCLUSION`) for `DiagnosticReport` embeddings.
 * **`dicom.py`**: Pydantic models for domain entities:

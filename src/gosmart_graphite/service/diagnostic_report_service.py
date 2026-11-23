@@ -38,6 +38,7 @@ ON CREATE SET
     e.modelTag = item.emb.modelTag,
     e.size = item.emb.size,
     e.vector = item.emb.vector,
+    e.text = item.emb.text,
     e.targetFieldTag = item.emb.targetFieldTag,
     e.test_id = item.emb.test_id,
     e.Action = 'CREATE',
@@ -49,6 +50,7 @@ ON MATCH SET
     e.modelTag = item.emb.modelTag,
     e.size = item.emb.size,
     e.vector = item.emb.vector,
+    e.text = item.emb.text,
     e.targetFieldTag = item.emb.targetFieldTag,
     e.test_id = coalesce(item.emb.test_id, e.test_id),
     e.Action = 'UPDATE',
@@ -570,11 +572,23 @@ class DiagnosticReportService:
 
         model_tag = report_texts.llm_config.tag if report_texts.llm_config else tag
 
-        section_vectors: list[tuple[DiagnosticReportFieldTag, list[float]]] = []
+        section_vectors: list[tuple[DiagnosticReportFieldTag, list[float], str]] = []
         if report_texts.embedding_findings:
-            section_vectors.append((DiagnosticReportFieldTag.FINDINGS, report_texts.embedding_findings))
+            section_vectors.append(
+                (
+                    DiagnosticReportFieldTag.FINDINGS,
+                    report_texts.embedding_findings,
+                    report_texts.findings or "",
+                )
+            )
         if report_texts.embedding_conclusion:
-            section_vectors.append((DiagnosticReportFieldTag.CONCLUSION, report_texts.embedding_conclusion))
+            section_vectors.append(
+                (
+                    DiagnosticReportFieldTag.CONCLUSION,
+                    report_texts.embedding_conclusion,
+                    report_texts.conclusion or "",
+                )
+            )
 
         if not section_vectors:
             has_text = bool((report_texts.findings or "").strip() or (report_texts.conclusion or "").strip())
@@ -590,12 +604,13 @@ class DiagnosticReportService:
         embeddings: list[Embedding] = []
         tx_items: list[dict[str, Any]] = []
         try:
-            for field_tag, vec in section_vectors:
+            for field_tag, vec, source_text in section_vectors:
                 emb = Embedding(
                     target_node_id=target_node_id,
                     modelTag=model_tag,
                     size=len(vec),
                     vector=vec,
+                    text=source_text,
                     targetFieldTag=str(field_tag),
                     test_id=effective_test_id,
                     ActedBy=effective_acted_by,
