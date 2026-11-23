@@ -1,0 +1,10 @@
+{
+  "positive": [
+    "Get the radiology report for patient 12345678",
+    "Read impression on CT for 12345678",
+    "Show me the report for mrn 98765432",
+    "Open the MRI report for patient 12345678 from yesterday",
+    "Print the report for mrn 98765432 from last week"
+  ],
+  "negative": []
+}

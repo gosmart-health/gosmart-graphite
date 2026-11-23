@@ -15,12 +15,13 @@ dependencies = [
     "genkit>=0.13.0",
     "genkit-google-genai>=0.13.0",
     "genkit-ollama>=0.13.0",
+    "gosmart-clinical-nlu",
     "httpx>=0.28.1",
     "ipykernel==7.4.0",
     "mcp==2.3.0",
     "neo4j==6.4.1",
     "numpy>=2.5.4",
-    "pydantic==2.14.3",
+    "pydantic==2.14.4",
     "pydantic-settings==2.16.3",
     "pydicom==3.0.2",
     "pyjwt>=2.8.0",
@@ -78,3 +79,6 @@ select = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["gosmart_graphite", "tests"]
+
+[tool.uv.sources]
+gosmart-clinical-nlu = { git = "https://github.com/gosmart-health/gosmart-clinical-nlu.git", rev = "dev" }

@@ -1,0 +1,10 @@
+{
+  "positive": [
+    "Find a CT patient 12345678 from yesterday",
+    "Pull up yesterday's CT for 12345678",
+    "Show me MRI scans for mrn 98765432 last week",
+    "List CT studies for patient 12345678",
+    "Find ultrasounds for mrn 98765432 from today"
+  ],
+  "negative": []
+}

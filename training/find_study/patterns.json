@@ -1,0 +1,24 @@
+[
+  {
+    "label": "MODALITY",
+    "pattern": [{"LOWER": {"IN": ["ct", "mri", "mr", "us", "ultrasound", "xray", "x-ray", "pet"]}}]
+  },
+  {
+    "label": "PATIENT_ID",
+    "pattern": [
+      {"LOWER": {"IN": ["patient", "mrn", "id"]}, "OP": "?"},
+      {"TEXT": {"REGEX": "^\\d{6,10}$"}}
+    ]
+  },
+  {
+    "label": "REL_DATE",
+    "pattern": [{"LOWER": {"IN": ["today", "yesterday"]}}]
+  },
+  {
+    "label": "REL_DATE",
+    "pattern": [
+      {"LOWER": "last"},
+      {"LOWER": {"IN": ["week", "month", "monday", "tuesday", "wednesday", "thursday", "friday"]}}
+    ]
+  }
+]
