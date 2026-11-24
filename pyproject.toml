@@ -41,6 +41,9 @@ dependencies = [
 gosmart-graphite = "gosmart_graphite.cli:cli_app"
 gosmart-gs = "gosmart_graphite.cli:cli_app"
 
+[project.entry-points."gosmart_clinical_nlu.intents"]
+graphite = "gosmart_graphite.nlu.intents:register_graphite_intents"
+
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]
 testpaths = ["tests"]

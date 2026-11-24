@@ -38,11 +38,11 @@ LLM providers, models, and endpoints are persisted **dynamically** in Neo4j as
 
 ## Clinical NLU
 
-Intent models are trained deterministically from `training/` via `uv run gosmart-clinical-nlu train --training-dir training --out models/intent_models.zip` (or `./devop-scripts/nlu-train.sh`).
+Intent models are trained deterministically from `training/` via `uv run gosmart-clinical-nlu train --training-dir training --out nlu_models/intent_models.zip` (or `./devop-scripts/nlu-train.sh`).
 
 | Variable | Default | Description |
 |:---------|:--------|:------------|
-| `GOSMART_GS_NLU_MODEL_PATH` | `./models/intent_models.zip` | Path to the bundled `gosmart-clinical-nlu` intent models ZIP archive preloaded by `SearchService` |
+| `GOSMART_GS_NLU_MODEL_PATH` | `./nlu_models/intent_models.zip` | Path to the bundled `gosmart-clinical-nlu` intent models ZIP archive preloaded by `SearchService` |
 
 ## Storage
 

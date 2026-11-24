@@ -469,7 +469,7 @@ def _ensure_test_nlu_bundle(tmp_path: Any) -> Any:
     from gosmart_clinical_nlu import load_training_dir, save_bundle, train_intent_models
 
     repo_root = Path(__file__).resolve().parents[2]
-    bundled = repo_root / "models" / "intent_models.zip"
+    bundled = repo_root / "nlu_models" / "intent_models.zip"
     if bundled.is_file():
         return bundled
     corpus = load_training_dir(repo_root / "training")
@@ -522,6 +522,8 @@ def test_parse_utterance_validates_non_string() -> None:
 def test_init_loads_model_bundle_eagerly_and_parses_clinical_utterances(tmp_path: Any) -> None:
     from datetime import datetime
 
+    from gosmart_graphite.nlu.intents import GraphiteReportQueryIntent, GraphiteStudyQueryIntent
+
     bundle_path = _ensure_test_nlu_bundle(tmp_path)
     svc = SearchService(
         embedding_service=MagicMock(),
@@ -538,7 +540,7 @@ def test_init_loads_model_bundle_eagerly_and_parses_clinical_utterances(tmp_path
     assert study_res.confidence >= study_res.threshold
     assert "find_study" in study_res.candidates
     assert "get_report" in study_res.candidates
-    assert study_res.data is not None
+    assert isinstance(study_res.data, GraphiteStudyQueryIntent)
     assert study_res.data.modality == "CT"
     assert study_res.data.patient_id == "12345678"
 
@@ -548,7 +550,7 @@ def test_init_loads_model_bundle_eagerly_and_parses_clinical_utterances(tmp_path
     )
     assert report_res.status == "matched"
     assert report_res.intent == "get_report"
-    assert report_res.data is not None
+    assert isinstance(report_res.data, GraphiteReportQueryIntent)
     assert report_res.data.modality == "MR"
     assert report_res.data.patient_id == "99887766"
     assert report_res.data.study_date == "20261122"
@@ -565,17 +567,17 @@ def test_init_resolves_relative_model_path_from_other_cwd(tmp_path: Any, monkeyp
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[2]
-    if not (repo_root / "models" / "intent_models.zip").is_file():
-        pytest.skip("Repository models/intent_models.zip not present in this checkout")
+    if not (repo_root / "nlu_models" / "intent_models.zip").is_file():
+        pytest.skip("Repository nlu_models/intent_models.zip not present in this checkout")
 
     monkeypatch.chdir(tmp_path)
     svc = SearchService(
         embedding_service=MagicMock(),
         client=MagicMock(),
-        nlu_model_path="./models/intent_models.zip",
+        nlu_model_path="./nlu_models/intent_models.zip",
     )
     assert svc.nlu_ready is True
-    assert svc.nlu_model_path == (repo_root / "models" / "intent_models.zip").resolve()
+    assert svc.nlu_model_path == (repo_root / "nlu_models" / "intent_models.zip").resolve()
 
 
 def test_init_raises_on_explicit_missing_model_path_or_require_flag(tmp_path: Any) -> None:
@@ -611,3 +613,111 @@ def test_init_graceful_degradation_when_default_bundle_missing(tmp_path: Any) ->
     assert svc.intent_models is None
     with pytest.raises(RuntimeError, match="Clinical NLU intent models are not loaded"):
         svc.parse_utterance("Find a CT for patient 12345678")
+
+
+def test_nlu_relative_date_patterns_match_last_and_this_expressions() -> None:
+    from datetime import datetime
+    from pathlib import Path
+
+    from gosmart_clinical_nlu import load_training_dir, train_intent_models
+    from gosmart_clinical_nlu.intents.find_study import StudyQueryIntent
+    from gosmart_clinical_nlu.intents.get_report import ReportQueryIntent
+
+    repo_root = Path(__file__).resolve().parents[2]
+    corpus = load_training_dir(repo_root / "training")
+    models = train_intent_models(corpus)
+    svc = SearchService(
+        embedding_service=MagicMock(),
+        client=MagicMock(),
+        intent_models=models,
+    )
+
+    ref = datetime(2026, 11, 25, 12, 0, 0)  # Wednesday
+    cases = [
+        ("Get the CT report for patient 12345678 from last week", "get_report", "20261118"),
+        ("Get the CT report for patient 12345678 from this week", "get_report", "20261125"),
+        ("Show me the MRI report for mrn 98765432 from last month", "get_report", "20261025"),
+        ("Show me the MRI report for mrn 98765432 from this month", "get_report", "20261125"),
+        ("Print the report for patient 12345678 from last year", "get_report", "20251125"),
+        ("Print the report for patient 12345678 from this year", "get_report", "20261125"),
+        ("Open the CT report for patient 12345678 from last monday", "get_report", "20261123"),
+        ("Open the CT report for patient 12345678 from this monday", "get_report", "20261130"),
+        ("Get the report for patient 12345678 from last saturday", "get_report", "20261121"),
+        ("Get the report for patient 12345678 from this sunday", "get_report", "20261129"),
+        ("Find MRI scans for mrn 98765432 from last week", "find_study", "20261118"),
+        ("Find MRI scans for mrn 98765432 from this week", "find_study", "20261125"),
+        ("List CT studies for patient 12345678 from this month", "find_study", "20261125"),
+        ("Find ultrasounds for mrn 98765432 from this year", "find_study", "20261125"),
+        ("List CT studies for patient 12345678 from last sunday", "find_study", "20261122"),
+        ("Find MRI studies for patient 12345678 from this saturday", "find_study", "20261128"),
+    ]
+    for utterance, expected_intent, expected_date in cases:
+        res = svc.parse_utterance(utterance, ref_date=ref)
+        assert res.status == "matched", f"Unexpected status for {utterance!r}: {res}"
+        assert res.intent == expected_intent, f"Unexpected intent for {utterance!r}: {res}"
+        assert isinstance(res.data, (ReportQueryIntent, StudyQueryIntent))
+        assert res.data.study_date == expected_date, f"Unexpected study_date for {utterance!r}: {res.data}"
+
+
+def test_normalize_accession_number() -> None:
+    from gosmart_graphite.nlu import normalize_accession_number
+
+    assert normalize_accession_number("accession 123456789") == "123456789"
+    assert normalize_accession_number("Accession Number ACC-123456") == "ACC-123456"
+    assert normalize_accession_number("acc no. 2026-001234") == "2026-001234"
+    assert normalize_accession_number("accession #987654321") == "987654321"
+    assert normalize_accession_number("accession: ACC_2026_01") == "ACC_2026_01"
+    assert normalize_accession_number("acc# 123456789") == "123456789"
+    assert normalize_accession_number("accession from") is None
+    assert normalize_accession_number("accession ") is None
+    assert normalize_accession_number("accession 12345678901234567") is None
+
+
+def test_nlu_accession_number_and_patient_id_disambiguation() -> None:
+    from pathlib import Path
+
+    from gosmart_clinical_nlu import load_training_dir, train_intent_models
+
+    from gosmart_graphite.nlu import (
+        GraphiteReportQueryIntent,
+        GraphiteStudyQueryIntent,
+        register_graphite_intents,
+    )
+
+    register_graphite_intents()
+    repo_root = Path(__file__).resolve().parents[2]
+    corpus = load_training_dir(repo_root / "training")
+    models = train_intent_models(corpus)
+    svc = SearchService(
+        embedding_service=MagicMock(),
+        client=MagicMock(),
+        intent_models=models,
+    )
+
+    accession_cases = [
+        ("Find accession 123456789", "find_study", "123456789", None),
+        ("Get accession 123456789", "find_study", "123456789", None),
+        ("Find accession number ACC-123456", "find_study", "ACC-123456", None),
+        ("Get accession 2026-001234", "find_study", "2026-001234", None),
+        ("Find accession 2026-11-001234", "find_study", "2026-11-001234", None),
+        ("Look up accession #987654321", "find_study", "987654321", None),
+        ("Get the radiology report for accession 123456789", "get_report", "123456789", None),
+        ("Show me the report for accession no. ACC12345", "get_report", "ACC12345", None),
+        ("Get the radiology report for 123456789", "get_report", None, "123456789"),
+        ("Find a CT for 123456789", "find_study", None, "123456789"),
+        ("Get the radiology report for patient 12345678 accession 987654321", "get_report", "987654321", "12345678"),
+    ]
+    for utterance, expected_intent, expected_acc, expected_pid in accession_cases:
+        res = svc.parse_utterance(utterance)
+        assert res.status == "matched", f"Unexpected status for {utterance!r}: {res}"
+        assert res.intent == expected_intent, f"Unexpected intent for {utterance!r}: {res}"
+        assert isinstance(res.data, (GraphiteReportQueryIntent, GraphiteStudyQueryIntent))
+        assert res.data.accession_number == expected_acc, f"Unexpected accession for {utterance!r}: {res.data}"
+        assert res.data.patient_id == expected_pid, f"Unexpected patient_id for {utterance!r}: {res.data}"
+        if utterance in ("Find accession 123456789", "Get accession 123456789"):
+            assert res.data.modality is None
+            assert res.data.study_date is None
+
+    for ood in ("Hello world", "What is the weather?"):
+        res = svc.parse_utterance(ood)
+        assert res.status == "low_confidence", f"Expected low_confidence for {ood!r}: {res}"

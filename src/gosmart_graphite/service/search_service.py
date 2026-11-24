@@ -13,13 +13,14 @@ from gosmart_clinical_nlu import parse_utterance as _nlu_parse_utterance
 from neo4j.exceptions import ClientError, CypherSyntaxError
 from pydantic import BaseModel
 
-from gosmart_graphite.core.config import _PROJECT_ROOT, get_settings
+from gosmart_graphite.core.config import PROJECT_ROOT, get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.embedding import EMBEDDING_VECTOR_INDEX_NAME
 from gosmart_graphite.model.fhir import EncounterNode, FHIRPatientNode, ImagingStudyNode
 from gosmart_graphite.model.graph import PatientNode, StudyNode
 from gosmart_graphite.model.search import SearchIncludeLabel, SearchResult
+from gosmart_graphite.nlu import register_graphite_intents
 from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG, EmbeddingService
 from gosmart_graphite.service.group_service import (
     DEFAULT_MY_GROUP_MAX_DEPTH,
@@ -31,7 +32,8 @@ from gosmart_graphite.service.group_service import (
 logger = get_logger("gosmart_gs.search_service")
 
 DEFAULT_SEARCH_LIMIT: int = 20
-DEFAULT_NLU_MODEL_PATH: str = "./models/intent_models.zip"
+DEFAULT_NLU_MODEL_PATH: str = "./nlu_models/intent_models.zip"
+# HNSW stands for Hierarchical Navigable Small World, an algorithm for approximate nearest-neighbor vector search.
 _HNSW_OVERSAMPLE_FACTOR: int = 10
 _HNSW_MIN_CANDIDATES: int = 100
 _HNSW_MAX_CANDIDATES: int = 2000
@@ -50,7 +52,7 @@ def _resolve_nlu_model_path(model_path: Union[str, Path]) -> Path:
     cwd_candidate = raw.resolve()
     if cwd_candidate.is_file():
         return cwd_candidate
-    project_candidate = (_PROJECT_ROOT / raw).resolve()
+    project_candidate = (PROJECT_ROOT / raw).resolve()
     if project_candidate.is_file():
         return project_candidate
     return cwd_candidate
@@ -64,6 +66,7 @@ def _load_cached_intent_models(resolved_path: Path) -> IntentModels:
         cached = _NLU_MODEL_CACHE.get(cache_key)
         if cached is not None:
             return cached
+        register_graphite_intents()
         models = load_intent_models(resolved_path)
         _NLU_MODEL_CACHE[cache_key] = models
         return models
@@ -664,12 +667,13 @@ class SearchService:
                 raise FileNotFoundError(
                     f"Clinical NLU model bundle not found at '{resolved}'. "
                     "Train the bundle with: uv run gosmart-clinical-nlu train "
-                    "--training-dir training --out models/intent_models.zip"
+                    "--training-dir training --out nlu_models/intent_models.zip"
                 )
             logger.warning(
                 "nlu_model_bundle_missing",
                 nlu_model_path=str(resolved),
-                hint="Run 'uv run gosmart-clinical-nlu train --training-dir training --out models/intent_models.zip'",
+                hint="Run 'uv run gosmart-clinical-nlu train --training-dir training "
+                "--out nlu_models/intent_models.zip'",
             )
             return None
 
@@ -704,13 +708,13 @@ class SearchService:
             raise RuntimeError(
                 f"Clinical NLU intent models are not loaded (expected bundle at '{self.nlu_model_path}'). "
                 "Train the bundle with: uv run gosmart-clinical-nlu train "
-                "--training-dir training --out models/intent_models.zip"
+                "--training-dir training --out nlu_models/intent_models.zip"
             )
         return _nlu_parse_utterance(utterance.strip(), self.intent_models, ref_date=ref_date)
 
+    @staticmethod
     def _prepare_search_context(
-        self,
-        query: str,
+            query: str,
         group_id: Optional[str],
         *,
         limit: int,

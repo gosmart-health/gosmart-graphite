@@ -7,9 +7,9 @@ from typing import Optional
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_ROOT_ENV_FILE = _PROJECT_ROOT / ".env"
-_TESTS_ENV_FILE = _PROJECT_ROOT / "tests" / ".env"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_ROOT_ENV_FILE = PROJECT_ROOT / ".env"
+_TESTS_ENV_FILE = PROJECT_ROOT / "tests" / ".env"
 
 
 def _resolve_env_files() -> tuple[Path, ...]:
@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     # NOTE: To read SecretStr from environment variables, use .get_secret_value() method,
     # e.g. os.environ.get("GOSMART_GS_DB_PASSWORD").get_secret_value()
     DB_PASSWORD: SecretStr = Field(
-        default="password",
+        default=SecretStr("password"),
         validation_alias=AliasChoices(
             "GOSMART_GS_DB_PASSWORD",
             "NEO4J_PASSWORD",
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
 
     # Clinical NLU Settings (gosmart-clinical-nlu)
     NLU_MODEL_PATH: str = Field(
-        default="./models/intent_models.zip",
+        default="./nlu_models/intent_models.zip",
         description="Path to the bundled gosmart-clinical-nlu intent models ZIP archive",
     )
 
@@ -235,7 +235,7 @@ class Settings(BaseSettings):
 
     # Authentication & JWT Security Settings
     JWT_SECRET_KEY: SecretStr = Field(
-        default="gosmart-graphite-dev-jwt-secret-key-change-in-production-min32chars",
+        default=SecretStr("gosmart-graphite-dev-jwt-secret-key-change-in-production-min32chars"),
         description="Secret key for signing and verifying JWT tokens",
     )
     JWT_ALGORITHM: str = Field(default="HS256", description="JWT signing algorithm (e.g. HS256, RS256)")

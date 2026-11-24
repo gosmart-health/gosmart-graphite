@@ -40,7 +40,7 @@ COPY training/ ./training/
 
 # Install root project into virtual environment and build the clinical NLU intent models bundle
 RUN uv sync --frozen --no-dev \
-    && uv run gosmart-clinical-nlu train --training-dir training --out models/intent_models.zip
+    && uv run gosmart-clinical-nlu train --training-dir training --out nlu_models/intent_models.zip
 
 # ------------------------------------------------------------------------------
 # Stage 2: Runtime Runner

@@ -1,18 +1,45 @@
 import os
 import sys
+from pathlib import Path
+from typing import Protocol, cast
 from unittest.mock import patch
 
 from gosmart_graphite.core.config import _ROOT_ENV_FILE, _TESTS_ENV_FILE, Settings, _resolve_env_files
 
 
+class SettingsFactory(Protocol):
+    def __call__(self, *, _env_file: tuple[Path, ...] | None) -> Settings: ...
+
+
+settings_with_env_file = cast(SettingsFactory, cast(object, Settings))
+
+
 def test_fhir_settings_defaults():
     # Pass empty _env_file or clean env to verify defaults
     with patch.dict(os.environ, {}, clear=True):
-        settings = Settings(_env_file=None)
+        settings = settings_with_env_file(_env_file=None)
         assert settings.FHIR_BASE_URL == ""
         assert settings.FHIR_POLL_SEC == 120
         assert settings.FHIR_ACCESSION_SYSTEM == ""
         assert settings.FHIR_PATIENT_ID_SYSTEM == "urn:oid:2.16.840.1.113883.4.3.25"
+
+
+def test_secret_settings_defaults():
+    with patch.dict(os.environ, {}, clear=True):
+        settings = settings_with_env_file(_env_file=None)
+        assert settings.DB_PASSWORD.get_secret_value() == "password"
+        assert (
+            settings.JWT_SECRET_KEY.get_secret_value()
+            == "gosmart-graphite-dev-jwt-secret-key-change-in-production-min32chars"
+        )
+
+
+def test_secret_settings_env_override():
+    env = {"GOSMART_GS_DB_PASSWORD": "test-db-secret", "GOSMART_GS_JWT_SECRET_KEY": "test-jwt-secret"}
+    with patch.dict(os.environ, env, clear=True):
+        settings = settings_with_env_file(_env_file=None)
+        assert settings.DB_PASSWORD.get_secret_value() == "test-db-secret"
+        assert settings.JWT_SECRET_KEY.get_secret_value() == "test-jwt-secret"
 
 
 def test_fhir_settings_env_override():
@@ -23,7 +50,7 @@ def test_fhir_settings_env_override():
         "GOSMART_GS_FHIR_PATIENT_ID_SYSTEM": "http://hospital.org/mrn",
     }
     with patch.dict(os.environ, custom_env, clear=True):
-        settings = Settings(_env_file=None)
+        settings = settings_with_env_file(_env_file=None)
         assert settings.FHIR_BASE_URL == "https://fhir.example.com/r4"
         assert settings.FHIR_POLL_SEC == 300
         assert settings.FHIR_ACCESSION_SYSTEM == "http://hospital.org/accession"
@@ -32,7 +59,7 @@ def test_fhir_settings_env_override():
 
 def test_llm_settings_legacy_vars_removed_and_encryption_key_default():
     with patch.dict(os.environ, {}, clear=True):
-        settings = Settings(_env_file=None)
+        settings = settings_with_env_file(_env_file=None)
         assert not hasattr(settings, "VECTOR_EMBED_PROVIDER")
         assert not hasattr(settings, "VECTOR_EMBED_MODEL")
         assert not hasattr(settings, "VECTOR_EMBED_SERVER_URL")
@@ -47,7 +74,7 @@ def test_llm_config_encryption_key_env_override():
         "GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY": "test-passphrase-for-llm-keys",
     }
     with patch.dict(os.environ, custom_env, clear=True):
-        settings = Settings(_env_file=None)
+        settings = settings_with_env_file(_env_file=None)
         assert settings.LLM_CONFIG_ENCRYPTION_KEY is not None
         assert settings.LLM_CONFIG_ENCRYPTION_KEY.get_secret_value() == "test-passphrase-for-llm-keys"
 
@@ -73,14 +100,14 @@ def test_tests_env_overrides_root_env(tmp_path):
     tests_env.write_text("GOSMART_GS_PORT=9999\n", encoding="utf-8")
 
     with patch.dict(os.environ, {}, clear=True):
-        settings = Settings(_env_file=(root_env, tests_env))
+        settings = settings_with_env_file(_env_file=(root_env, tests_env))
         assert settings.APP_NAME == "RootApp"
         assert settings.PORT == 9999
 
 
 def test_dev_mode_and_db_connect_retry_defaults():
     with patch.dict(os.environ, {}, clear=True):
-        settings = Settings(_env_file=None)
+        settings = settings_with_env_file(_env_file=None)
         assert settings.DEV_MODE is False
         assert settings.DB_CONNECT_RETRY_TIMEOUT_SEC == 600
         assert settings.DB_CONNECT_RETRY_INITIAL_DELAY_SEC == 2.0
@@ -95,7 +122,7 @@ def test_dev_mode_and_db_connect_retry_env_override():
         "GOSMART_GS_DB_CONNECT_RETRY_MAX_DELAY_SEC": "45.0",
     }
     with patch.dict(os.environ, custom_env, clear=True):
-        settings = Settings(_env_file=None)
+        settings = settings_with_env_file(_env_file=None)
         assert settings.DEV_MODE is True
         assert settings.DB_CONNECT_RETRY_TIMEOUT_SEC == 1200
         assert settings.DB_CONNECT_RETRY_INITIAL_DELAY_SEC == 1.5
@@ -104,9 +131,9 @@ def test_dev_mode_and_db_connect_retry_env_override():
 
 def test_nlu_model_path_default_and_env_override():
     with patch.dict(os.environ, {}, clear=True):
-        settings = Settings(_env_file=None)
-        assert settings.NLU_MODEL_PATH == "./models/intent_models.zip"
+        settings = settings_with_env_file(_env_file=None)
+        assert settings.NLU_MODEL_PATH == "./nlu_models/intent_models.zip"
 
     with patch.dict(os.environ, {"GOSMART_GS_NLU_MODEL_PATH": "/opt/models/custom.zip"}, clear=True):
-        settings = Settings(_env_file=None)
+        settings = settings_with_env_file(_env_file=None)
         assert settings.NLU_MODEL_PATH == "/opt/models/custom.zip"
