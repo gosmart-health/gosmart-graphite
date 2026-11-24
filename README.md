@@ -190,6 +190,8 @@ Settings are loaded from environment variables and `.env` via [`Settings`](src/g
 | `GOSMART_GS_FHIR_PATIENT_ID_SYSTEM` | `urn:oid:2.16.840.1.113883.4.3.25` | Identifier system URI for Patient ID / MRN |
 | **LLM Configuration Security** | | *(LLM providers, models, and endpoints are persisted dynamically in Neo4j as `LLM_Config` nodes; see `configure llm-config`)* |
 | `GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY` | *(none)* | Optional Fernet key or passphrase for encrypting stored `LLM_Config.api_key` values at rest in Neo4j |
+| **Clinical NLU** | | *(Intent models trained from `training/` via `uv run gosmart-clinical-nlu train --training-dir training --out nlu_models/intent_models.zip`)* |
+| `GOSMART_GS_NLU_MODEL_PATH` | `./nlu_models/intent_models.zip` | Path to the bundled `gosmart-clinical-nlu` intent models ZIP archive preloaded by `SearchService` |
 | **Storage** | | |
 | `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI (`file://`, `gs://`, `s3://`, `az://`, `\\unc\share`) |
 | **Server** | | |

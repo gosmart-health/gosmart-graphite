@@ -1,19 +1,26 @@
-"""Semantic vector similarity search service over decoupled Neo4j :Embedding nodes."""
+"""Semantic vector similarity search and clinical NLU utterance parsing service."""
 
 from __future__ import annotations
 
 import math
+import threading
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, FrozenSet, List, LiteralString, Optional, Sequence, Type, TypeVar, Union, cast
 
+from gosmart_clinical_nlu import IntentModels, ParsedUtterance, load_intent_models
+from gosmart_clinical_nlu import parse_utterance as _nlu_parse_utterance
 from neo4j.exceptions import ClientError, CypherSyntaxError
 from pydantic import BaseModel
 
+from gosmart_graphite.core.config import PROJECT_ROOT, get_settings
 from gosmart_graphite.core.logging import get_logger
 from gosmart_graphite.db.neo4j import Neo4jClient, neo4j_client
 from gosmart_graphite.model.embedding import EMBEDDING_VECTOR_INDEX_NAME
 from gosmart_graphite.model.fhir import EncounterNode, FHIRPatientNode, ImagingStudyNode
 from gosmart_graphite.model.graph import PatientNode, StudyNode
 from gosmart_graphite.model.search import SearchIncludeLabel, SearchResult
+from gosmart_graphite.nlu import register_graphite_intents
 from gosmart_graphite.service.embedding_service import DEFAULT_EMBEDDING_TAG, EmbeddingService
 from gosmart_graphite.service.group_service import (
     DEFAULT_MY_GROUP_MAX_DEPTH,
@@ -25,11 +32,44 @@ from gosmart_graphite.service.group_service import (
 logger = get_logger("gosmart_gs.search_service")
 
 DEFAULT_SEARCH_LIMIT: int = 20
+DEFAULT_NLU_MODEL_PATH: str = "./nlu_models/intent_models.zip"
+# HNSW stands for Hierarchical Navigable Small World, an algorithm for approximate nearest-neighbor vector search.
 _HNSW_OVERSAMPLE_FACTOR: int = 10
 _HNSW_MIN_CANDIDATES: int = 100
 _HNSW_MAX_CANDIDATES: int = 2000
 
 _TModel = TypeVar("_TModel", bound=BaseModel)
+
+_NLU_MODEL_CACHE_LOCK = threading.Lock()
+_NLU_MODEL_CACHE: Dict[tuple[str, int, int], IntentModels] = {}
+
+
+def _resolve_nlu_model_path(model_path: Union[str, Path]) -> Path:
+    """Resolve an NLU model bundle path against CWD first, then project root for relative paths."""
+    raw = Path(model_path).expanduser()
+    if raw.is_absolute():
+        return raw
+    cwd_candidate = raw.resolve()
+    if cwd_candidate.is_file():
+        return cwd_candidate
+    project_candidate = (PROJECT_ROOT / raw).resolve()
+    if project_candidate.is_file():
+        return project_candidate
+    return cwd_candidate
+
+
+def _load_cached_intent_models(resolved_path: Path) -> IntentModels:
+    """Load an immutable IntentModels bundle with mtime/size-keyed thread-safe caching."""
+    stat = resolved_path.stat()
+    cache_key = (str(resolved_path), stat.st_mtime_ns, stat.st_size)
+    with _NLU_MODEL_CACHE_LOCK:
+        cached = _NLU_MODEL_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+        register_graphite_intents()
+        models = load_intent_models(resolved_path)
+        _NLU_MODEL_CACHE[cache_key] = models
+        return models
 
 
 def _escape_cypher_identifier(identifier: str) -> str:
@@ -581,22 +621,99 @@ def _hydrate_results(
 
 
 class SearchService:
-    """Performs semantic vector similarity search over Neo4j :Embedding nodes."""
+    """Performs semantic vector similarity search and clinical NLU utterance parsing."""
 
     def __init__(
         self,
         embedding_service: Optional[EmbeddingService] = None,
         client: Optional[Neo4jClient] = None,
         index_name: str = EMBEDDING_VECTOR_INDEX_NAME,
+        *,
+        nlu_model_path: Optional[Union[str, Path]] = None,
+        intent_models: Optional[IntentModels] = None,
+        require_nlu_model: bool = False,
     ) -> None:
         _escape_cypher_identifier(index_name)
         self.client = client or neo4j_client
         self.embedding_service = embedding_service or EmbeddingService()
         self.index_name = index_name.strip()
         self._use_cypher25_search: bool = True
+        self.nlu_model_path: Optional[Path] = None
+        self.intent_models: Optional[IntentModels] = self._init_nlu_models(
+            nlu_model_path=nlu_model_path,
+            intent_models=intent_models,
+            require_nlu_model=require_nlu_model,
+        )
 
-    def _prepare_search_context(
+    def _init_nlu_models(
         self,
+        *,
+        nlu_model_path: Optional[Union[str, Path]],
+        intent_models: Optional[IntentModels],
+        require_nlu_model: bool,
+    ) -> Optional[IntentModels]:
+        if intent_models is not None:
+            return intent_models
+
+        explicit_path = nlu_model_path is not None
+        configured_path: Union[str, Path] = (
+            nlu_model_path if nlu_model_path is not None else get_settings().NLU_MODEL_PATH
+        )
+        resolved = _resolve_nlu_model_path(configured_path)
+        self.nlu_model_path = resolved
+
+        if not resolved.is_file():
+            if explicit_path or require_nlu_model:
+                raise FileNotFoundError(
+                    f"Clinical NLU model bundle not found at '{resolved}'. "
+                    "Train the bundle with: uv run gosmart-clinical-nlu train "
+                    "--training-dir training --out nlu_models/intent_models.zip"
+                )
+            logger.warning(
+                "nlu_model_bundle_missing",
+                nlu_model_path=str(resolved),
+                hint="Run 'uv run gosmart-clinical-nlu train --training-dir training "
+                "--out nlu_models/intent_models.zip'",
+            )
+            return None
+
+        models = _load_cached_intent_models(resolved)
+        logger.info(
+            "nlu_models_loaded",
+            nlu_model_path=str(resolved),
+            intents=list(models.names),
+            spacy_version=models.spacy_version,
+        )
+        return models
+
+    @property
+    def nlu_ready(self) -> bool:
+        """Return True when the clinical NLU intent models are loaded and ready to parse utterances."""
+        return self.intent_models is not None
+
+    def parse_utterance(
+        self,
+        utterance: str,
+        *,
+        ref_date: Optional[datetime] = None,
+    ) -> ParsedUtterance:
+        """Parse a clinical query utterance into its matched intent, confidence scores, and slots.
+
+        Proxies :func:`gosmart_clinical_nlu.parse_utterance` against the preloaded
+        :class:`IntentModels` bundle initialized during :meth:`__init__`.
+        """
+        if not isinstance(utterance, str):
+            raise ValueError(f"utterance must be a string, got {type(utterance).__name__}")
+        if self.intent_models is None:
+            raise RuntimeError(
+                f"Clinical NLU intent models are not loaded (expected bundle at '{self.nlu_model_path}'). "
+                "Train the bundle with: uv run gosmart-clinical-nlu train "
+                "--training-dir training --out nlu_models/intent_models.zip"
+            )
+        return _nlu_parse_utterance(utterance.strip(), self.intent_models, ref_date=ref_date)
+
+    @staticmethod
+    def _prepare_search_context(
         query: str,
         group_id: Optional[str],
         *,
@@ -908,7 +1025,10 @@ class SearchService:
 search_service = SearchService()
 
 __all__ = [
+    "DEFAULT_NLU_MODEL_PATH",
     "DEFAULT_SEARCH_LIMIT",
+    "IntentModels",
+    "ParsedUtterance",
     "SearchService",
     "search_service",
 ]

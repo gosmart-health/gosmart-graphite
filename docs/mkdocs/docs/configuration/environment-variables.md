@@ -36,6 +36,14 @@ LLM providers, models, and endpoints are persisted **dynamically** in Neo4j as
 |:---------|:--------|:------------|
 | `GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY` | *(none)* | Optional Fernet key or passphrase for encrypting stored `LLM_Config.api_key` values at rest in Neo4j |
 
+## Clinical NLU
+
+Intent models are trained deterministically from `training/` via `uv run gosmart-clinical-nlu train --training-dir training --out nlu_models/intent_models.zip` (or `./devop-scripts/nlu-train.sh`).
+
+| Variable | Default | Description |
+|:---------|:--------|:------------|
+| `GOSMART_GS_NLU_MODEL_PATH` | `./nlu_models/intent_models.zip` | Path to the bundled `gosmart-clinical-nlu` intent models ZIP archive preloaded by `SearchService` |
+
 ## Storage
 
 | Variable | Default | Description |

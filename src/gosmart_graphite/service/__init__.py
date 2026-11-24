@@ -35,7 +35,9 @@ from gosmart_graphite.service.llm_config_service import LLMConfigService, llm_co
 from gosmart_graphite.service.media_service import MediaService, media_service
 from gosmart_graphite.service.pynetdicom_service import PyNetDicomService, pynetdicom_service
 from gosmart_graphite.service.search_service import (
+    DEFAULT_NLU_MODEL_PATH,
     DEFAULT_SEARCH_LIMIT,
+    ParsedUtterance,
     SearchService,
     search_service,
 )
@@ -47,6 +49,7 @@ embedding_service = vector_service
 __all__ = [
     "DEFAULT_EMBEDDING_TAG",
     "DEFAULT_MY_GROUP_MAX_DEPTH",
+    "DEFAULT_NLU_MODEL_PATH",
     "DEFAULT_SEARCH_LIMIT",
     "LOST_AND_FOUND_GROUP_CODE",
     "LOST_AND_FOUND_GROUP_NAME",
@@ -67,6 +70,7 @@ __all__ = [
     "llm_config_service",
     "MediaService",
     "media_service",
+    "ParsedUtterance",
     "PyNetDicomService",
     "pynetdicom_service",
     "SearchService",

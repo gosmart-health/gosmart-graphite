@@ -16,7 +16,7 @@ site_description: >-
 site_author: GoSmart Health
 # TODO(web-server team): align with the product-specific slug served by the
 # reverse proxy, e.g. https://docs.gosmart.health/graphite/
-site_url: https://docs.gosmart.health/graphite/
+site_url: https://docs.gosmart.health/docs/graphite
 
 repo_name: gosmart-health/gosmart-graphite
 repo_url: https://github.com/gosmart-health/gosmart-graphite

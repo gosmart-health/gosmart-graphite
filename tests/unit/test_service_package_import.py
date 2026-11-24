@@ -32,7 +32,7 @@ def test_service_package_imports_cleanly() -> None:
         "import gosmart_graphite.service\n"
         "from gosmart_graphite.service import EncRelevantResources, FhirService\n"
         "from gosmart_graphite.service import EmbeddingService, SimilarityMetric, llm_config_service\n"
-        "from gosmart_graphite.service import SearchService, search_service\n"
+        "from gosmart_graphite.service import DEFAULT_NLU_MODEL_PATH, ParsedUtterance, SearchService, search_service\n"
         "from gosmart_graphite.model import SearchIncludeLabel, SearchResult\n"
     )
 

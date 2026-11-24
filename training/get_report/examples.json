@@ -1,0 +1,21 @@
+{
+  "positive": [
+    "Get the radiology report for patient 12345678",
+    "Read impression on CT for 12345678",
+    "Show me the report for mrn 98765432",
+    "Open the MRI report for patient 12345678 from yesterday",
+    "Print the report for mrn 98765432 from last week",
+    "Show me the CT report for patient 12345678 from this week",
+    "Get the radiology report for accession 123456789",
+    "Show me the report for accession number ACC-123456",
+    "Read the report for acc 987654321"
+  ],
+  "negative": [
+    "Hello",
+    "Good morning",
+    "How are you doing?",
+    "What is the weather today?",
+    "Tell me a joke",
+    "Thank you for your help"
+  ]
+}
