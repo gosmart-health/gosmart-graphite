@@ -714,7 +714,7 @@ class SearchService:
 
     @staticmethod
     def _prepare_search_context(
-            query: str,
+        query: str,
         group_id: Optional[str],
         *,
         limit: int,
