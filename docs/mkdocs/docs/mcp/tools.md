@@ -50,11 +50,11 @@ to hold the **PLATFORM_ADMIN** role (marked :material-shield-lock: **admin**).
 | `delete_llm_configuration` :material-shield-lock: **admin** | Soft-delete (or hard-delete) a config node. | `config_id`, `hard` |
 | `restore_llm_configuration` :material-shield-lock: **admin** | Restore a previously soft-deleted config node. | `config_id` |
 
-> [!NOTE]
-> Fields suffixed `_json` accept JSON-encoded arrays/objects (for example
-> `roles_json='["SCP"]'`) because MCP tool parameters are flat strings.
-> `test_id`-prefixed parameters scope operations to test data and keep
-> production records untouched.
+!!! note
+    Fields suffixed `_json` accept JSON-encoded arrays/objects (for example
+    `roles_json='["SCP"]'`) because MCP tool parameters are flat strings.
+    `test_id`-prefixed parameters scope operations to test data and keep
+    production records untouched.
 
 See [Utterance Examples](utterance-examples.md) for how to phrase these as
 natural-language requests.

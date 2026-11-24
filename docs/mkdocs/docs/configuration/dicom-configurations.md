@@ -71,10 +71,22 @@ Configurations drive SCP instances at runtime:
 Service class and transfer-syntax enforcement applies during every association
 negotiation: unconfigured services or syntaxes are rejected.
 
-## Deletion & restoration
+## REST API endpoints
 
-`DELETE /api/v1/configurations/dicom/{config_id}` soft-deletes the node
-(`?hard=true` for a hard delete) and drains in-flight associations gracefully;
-`POST .../restore` reactivates it. Equivalent MCP tools exist — see
-[Tool Catalog](../mcp/tools.md) and the general
-[`NOT_` semantics](index.md#immutability-soft-deletion-not_-semantics).
+| Method & Endpoint | Description |
+|:------------------|:------------|
+| `GET /api/v1/configurations/dicom` | Query active DICOM configurations (filters: `role`, `is_promiscuous`, `is_local`, `include_tests`, `test_id`). |
+| `POST /api/v1/configurations/dicom` | Register a new `DICOMConfiguration` node and dynamically launch an SCP if `roles` includes `SCP`. |
+| `GET /api/v1/configurations/dicom/{config_id}` | Retrieve a single DICOM configuration. |
+| `PUT /api/v1/configurations/dicom/{config_id}` | Update properties; drains in-flight association threads while launching the updated SCP instance. |
+| `DELETE /api/v1/configurations/dicom/{config_id}` | Soft-delete (or hard-delete with `?hard=true`); drains in-flight associations gracefully. |
+| `POST /api/v1/configurations/dicom/{config_id}/restore` | Restore a soft-deleted DICOM configuration and reactivate its SCP. |
+
+Equivalent MCP tools exist — see [Tool Catalog](../mcp/tools.md) and the
+general [`NOT_` semantics](index.md#immutability-soft-deletion-not_-semantics).
+
+## Conformance details
+
+For the full list of supported SOP Classes, Transfer Syntaxes, DIMSE C-FIND
+matching attributes, and association policies, see the
+[DICOM Conformance Statement](dicom-conformance-statement.md).

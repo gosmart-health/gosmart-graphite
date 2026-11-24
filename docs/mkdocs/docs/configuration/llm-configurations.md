@@ -70,3 +70,16 @@ The sanitized starter template (`devop-scripts/llm_config.template.json`):
   `GOSMART_GS_LLM_CONFIG_ENCRYPTION_KEY` — see
   [Environment Variables](environment-variables.md#llm-configuration-security).
 - Listing endpoints and MCP tools always return the `api_key` **masked**.
+
+## REST API endpoints
+
+| Method & Endpoint | Description |
+|:------------------|:------------|
+| `GET /api/v1/configurations/llm` | List active group-scoped `LLM_Config` nodes (`api_key` masked; filterable by `tag`, `provider`, `group_id`). |
+| `POST /api/v1/configurations/llm` | Register or overwrite a purpose-tagged `LLM_Config` (archives prior version via `NOT_HAS_LLM_CONFIG`) and assign it to a sponsoring `Group` (defaults to `'GoSmart Health'`; admin only). |
+| `GET /api/v1/configurations/llm/{config_id}` | Retrieve a single `LLM_Config` (`api_key` masked). |
+| `PUT /api/v1/configurations/llm/{config_id}` | Update an `LLM_Config` (admin only). |
+| `POST /api/v1/configurations/llm/{config_id}/assign` | Assign an existing active config to a sponsoring `Group` (admin only). |
+| `DELETE /api/v1/configurations/llm/{config_id}/groups/{group_id}` | Soft-dissociate a `Group` via `NOT_HAS_LLM_CONFIG` (admin only). |
+| `DELETE /api/v1/configurations/llm/{config_id}` | Soft-delete (or hard-delete with `?hard=true`) an `LLM_Config` (admin only). |
+| `POST /api/v1/configurations/llm/{config_id}/restore` | Restore a soft-deleted `LLM_Config` (admin only). |

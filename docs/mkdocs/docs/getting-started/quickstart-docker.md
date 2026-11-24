@@ -1,7 +1,7 @@
 # Quickstart (Docker)
 
-Docker provides the fastest path to a full stack running both the **Graph
-Server** and **Neo4j**.
+Docker provides the fastest path to a full stack running both **Gosmart.Health
+GRAPHITE** and **Neo4j**.
 
 ## Prerequisites
 
@@ -12,10 +12,10 @@ Server** and **Neo4j**.
   cp .env.example .env
   ```
 
-## Launch the full stack
+## Option A: Full-Stack Launch (Recommended)
 
 From the repository root, the bundled `docker/docker-compose.yml` orchestrates
-both services:
+both **Gosmart.Health GRAPHITE** and **Neo4j**:
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d --build
@@ -23,10 +23,10 @@ docker compose -f docker/docker-compose.yml up -d --build
 
 ### Services started
 
-| Service          | Container name     | Ports                               | Description                                 |
-|:-----------------|:-------------------|:------------------------------------|:--------------------------------------------|
-| **Graph Server** | `gosmart-graphite` | `8086` (HTTP), `11112` (DICOM SCP)  | FastAPI REST API, MCP endpoints, DICOM SCP  |
-| **Neo4j**        | `gosmart-neo4j`    | `7474` (Browser), `7687` (Bolt)     | Graph database with health check            |
+| Service | Container name | Ports | Description |
+|:--------|:---------------|:------|:------------|
+| **Graph Server** | `gosmart-graphite` | `8086` (HTTP), `11112` (DICOM SCP) | FastAPI REST API, MCP endpoints, DICOM SCP |
+| **Neo4j** | `gosmart-neo4j` | `7474` (Browser), `7687` (Bolt) | Graph database with health check |
 
 ### Service endpoints after launch
 
@@ -37,33 +37,97 @@ docker compose -f docker/docker-compose.yml up -d --build
 | Health check | [http://localhost:8086/api/v1/health](http://localhost:8086/api/v1/health) |
 | MCP StreamableHTTP | [http://localhost:8086/mcp](http://localhost:8086/mcp) |
 | MCP SSE | [http://localhost:8086/sse](http://localhost:8086/sse) |
-| Neo4j Browser | [http://localhost:7474](http://localhost:7474) (default credentials `neo4j`/`neo4j`) |
-| DICOM SCP | `GOSMART_GS@localhost:11112` |
+| Neo4j Browser | [http://localhost:7474](http://localhost:7474) |
+| DICOM SCP | `GOSMART_GS@localhost:11112` (configured in `docker/docker-compose.yml`) |
 
-Named volumes for persistent data:
+### Persistent named volumes
 
 - `neo4j_data` — Neo4j database files
 - `neo4j_logs` — Neo4j log files
 - `dicom_storage` — Persisted DICOM files (instances received via `C-STORE`)
+- `server_logs` — Application log files with auto-rotation
 
-## Prepare the storage root
-
-By default the server stores DICOM files under `/tmp/gosmart_dicom_storage`.
-Make sure the directory exists and is writable by the Docker user (typically
-the user who launches the `docker compose` commands):
+### Stop or reset the stack
 
 ```bash
-mkdir -p /tmp/gosmart_dicom_storage
+# Stop containers while preserving persistent volumes
+docker compose -f docker/docker-compose.yml down
+
+# Stop containers and remove all persistent volumes
+docker compose -f docker/docker-compose.yml down -v
 ```
 
-## Check the database
+### Overriding environment variables
 
-Open [http://localhost:7474](http://localhost:7474) in your browser to launch
-the Neo4j Browser UI and use `neo4j` as both the username and password on first
-connect. Docker manages the database volume, so data survives container
-restarts.
+`docker/docker-compose.yml` provides local development defaults. To override
+variables, either:
+
+1. Edit the `environment:` section in `docker/docker-compose.yml`, or
+2. Pass an external `.env` file with `--env-file`:
+
+   ```bash
+   docker compose -f docker/docker-compose.yml --env-file .env up -d
+   ```
+
+!!! tip "Internal Compose Networking"
+    Inside Docker Compose, the Graph Server reaches Neo4j over the Compose
+    network at `bolt://neo4j:7687`.
+
+## Option B: Build Standalone Image
+
+Build the Docker image independently:
+
+```bash
+docker build -t gosmart-graphite -f docker/Dockerfile .
+```
+
+Run standalone against an external Neo4j instance:
+
+```bash
+docker run -d \
+  --name gosmart-graphite \
+  -p 8086:8086 \
+  -p 11112:11112 \
+  -e GOSMART_GS_DB_CONNECTION_URI=bolt://host.docker.internal:7687 \
+  -e GOSMART_GS_DB_PASSWORD=your_password \
+  -e GOSMART_GS_INITIAL_ADMIN_PASSWORD=MySecurePassword123! \
+  gosmart-graphite
+```
+
+### Dockerfile architecture
+
+`docker/Dockerfile` uses a **multi-stage build** for a small image footprint and
+hardened execution:
+
+| Stage | Base image | Purpose |
+|:------|:-----------|:--------|
+| **Builder** | `python:3.14-slim` | Installs `uv`, compiles C-extensions, and syncs locked production dependencies |
+| **Runner** | `python:3.14-slim` | Minimal runtime with `curl` for health checks, running as `appuser` (UID/GID `10001`) |
+
+Key design choices:
+
+- **Layer caching** — `pyproject.toml` and `uv.lock` are copied first so
+  dependency installs remain cached when only source files change.
+- **Unprivileged user** — The runtime container executes as `appuser:appuser`
+  (`10001:10001`), never `root`.
+- **Health check** — Built-in `HEALTHCHECK` polls `GET /api/v1/health` every 30
+  seconds.
+- **Exposed ports** — `8086` (HTTP API) and `11112` (DICOM SCP).
+
+## Option C: Neo4j-Only Docker (Local Development)
+
+When running the FastAPI server natively with `uv` (see
+[Installation](installation.md)), you can run Neo4j alone in Docker:
+
+```bash
+docker compose -f neo4j-local-docker/docker-compose.yaml up -d
+```
+
+See [`neo4j-local-docker/README.md`](https://github.com/gosmart-health/gosmart-graphite/blob/main/neo4j-local-docker/README.md)
+for details.
 
 ## Next steps
 
 - Verify the install and ingest your first study: [First Steps](first-steps.md)
+- Superuser bootstrapping & containerized password reset: [Bootstrapping & Administration](../configuration/administration.md)
 - Connect an AI agent via MCP: [MCP Overview](../mcp/index.md)

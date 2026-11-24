@@ -82,7 +82,9 @@ Interactive API documentation is then available at:
 ## 5. (Optional) Reset data between test cycles
 
 To wipe the entire database and reset the system to defaults, run the following
-Cypher query in [Neo4j Browser](http://localhost:7474):
+Cypher query in [Neo4j Browser](http://localhost:7474). Once the server starts,
+you can also register remote AEs using the VS Code REST Client scripts in
+`tests/rest-client/`:
 
 ```cypher
 MATCH (n)
@@ -96,11 +98,13 @@ users, run the cleanup utility:
 uv run devop-scripts/cleanup-data.py
 ```
 
-> [!NOTE]
-> Test-created data is retained after a run and only cleared before the next
-> test, so you can inspect post-run state manually.
+!!! note
+    Test-created data is retained after a run and only cleared before the next
+    test, so you can inspect post-run state manually.
 
 ## Next steps
 
 - Verify the install and ingest your first study: [First Steps](first-steps.md)
 - Or boot everything with containers: [Quickstart (Docker)](quickstart-docker.md)
+- Replicate the full multi-service test stack: [Testing & Ecosystem](testing-ecosystem.md)
+- Superuser bootstrapping & disaster recovery: [Bootstrapping & Administration](../configuration/administration.md)

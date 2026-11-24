@@ -35,32 +35,56 @@ environment variable.
 
 ### Obtaining an API key
 
-Option A — administrative CLI (out-of-band):
+#### Option A: Via administrative CLI (out-of-band)
 
 ```bash
-uv run python -m gosmart_graphite.cli.admin create-api-key --email admin@gosmart.health --name "Local Agent Key"
+uv run python -m gosmart_graphite.cli.admin create-api-key \
+    --email admin@gosmart.health \
+    --name "Local Agent Key"
 
-# With custom scopes and expiration
-uv run python -m gosmart_graphite.cli.admin create-api-key --email admin@gosmart.health \
-    --name "AntiGravity Agent Key" --scopes "mcp:full,graph:read" --expires-days 90
+# With custom scopes and 90-day expiration
+uv run python -m gosmart_graphite.cli.admin create-api-key \
+    --email admin@gosmart.health \
+    --name "AntiGravity Agent Key" \
+    --scopes "mcp:full,graph:read" \
+    --expires-days 90
 ```
 
-Option B — REST API: log in to `POST /api/v1/auth/login`, then
-`POST /api/v1/auth/api-keys` with `Authorization: Bearer <ACCESS_TOKEN>` and a
-JSON body `{"user_id": "...", "name": "Cursor Agent Key", "scopes": ["*"]}`.
-Save the returned `raw_api_key` — it is shown only once.
+#### Option B: Via REST API
 
-> [!IMPORTANT]
-> Configuration-changing tools (`create_*`, `update_*`, `delete_*`,
-> `upsert_*`, assign/dissociate, `bootstrap_system_defaults`,
-> `update_system_info`) require the caller to hold the **PLATFORM_ADMIN**
-> role; otherwise the tool returns a permission error.
+1. Log in as an administrator to obtain an access token and user `id`:
+
+   ```bash
+   curl -X POST "http://localhost:8086/api/v1/auth/login" \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "YourAdminPassword123!"}'
+   ```
+
+2. Generate the API key and save the returned `raw_api_key` (shown only once):
+
+   ```bash
+   curl -X POST "http://localhost:8086/api/v1/auth/api-keys" \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer <ACCESS_TOKEN>" \
+     -d '{
+       "user_id": "<USER_ID>",
+       "name": "Cursor Agent Key",
+       "scopes": ["*"]
+     }'
+   ```
+
+!!! important "Role Requirement for Mutating Tools"
+    Configuration-changing tools (`create_*`, `update_*`, `delete_*`,
+    `upsert_*`, assign/dissociate, `bootstrap_system_defaults`,
+    `update_system_info`) require the caller to hold the **PLATFORM_ADMIN**
+    role; otherwise the tool returns a permission error.
 
 ## Client setup
 
 ### Cursor
 
-`~/.cursor/mcp.json` (or workspace-level `.cursor/mcp.json`):
+- User home directory: `~/.cursor/mcp.json` *(macOS/Linux: `$HOME/.cursor/mcp.json`, Windows: `%USERPROFILE%\.cursor\mcp.json`)*
+- Or workspace-level: `.cursor/mcp.json`
 
 ```json
 {
@@ -122,8 +146,8 @@ SSE variant:
 
 ### AntiGravity
 
-`~/.gemini/antigravity/mcp_config.json` (fallbacks: `~/.gemini/config/mcp_config.json`,
-`~/.gemini/antigravity-cli/mcp/mcp_config.json`):
+- Global configuration: `~/.gemini/antigravity/mcp_config.json` *(macOS/Linux: `$HOME/.gemini/antigravity/mcp_config.json`, Windows: `%USERPROFILE%\.gemini\antigravity\mcp_config.json`)*
+- Fallbacks: `~/.gemini/config/mcp_config.json`, `~/.gemini/antigravity-cli/mcp/mcp_config.json`
 
 ```json
 {

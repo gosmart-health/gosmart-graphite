@@ -46,20 +46,31 @@ Intent models are trained deterministically from `training/` via `uv run gosmart
 
 ## Storage
 
+`gosmart-graphite` provides a unified, storage-agnostic `MediaService` that
+abstracts file operations across local disk, Windows UNC shares, and cloud
+object stores.
+
 | Variable | Default | Description |
 |:---------|:--------|:------------|
 | `GOSMART_GS_STORAGE_ROOT_URI` | `file:///tmp/gosmart_dicom_storage` | Storage root URI (`file://`, `gs://`, `s3://`, `az://`, UNC share) |
+| `GOSMART_GS_DICOM_STAGING_DIR` | `<tmp>/gosmart_graphite/staging` | Local temporary staging directory for incoming DICOM `C-STORE` capture before actor ingestion |
 
 Supported URI schemes:
 
 | Backend | Scheme | Example |
 |:--------|:-------|:--------|
-| Google Cloud Storage | `gs://` | `gs://bucket/imaging/MR.01.dcm` |
-| Amazon S3 | `s3://` | `s3://bucket/imaging/MR.01.dcm` |
+| Google Cloud Storage | `gs://` (or `gcs://`) | `gs://bucket/imaging/MR.01.dcm` |
+| Amazon S3 | `s3://` (or `s3a://`) | `s3://bucket/imaging/MR.01.dcm` |
 | Azure Blob Storage | `az://` (or `azure://`, `abfs://`) | `az://dicom-container/mr_studies/MR.01.dcm` |
 | Local File | `file://` (or absolute path) | `file:///data/storage/MR.01.dcm` |
-| Windows UNC | `\\` | `\\hospital-nas\imaging_share\MR.01.dcm` |
+| Windows UNC | Backslash (`\\` or `\`) | `\\hospital-nas\imaging_share\MR.01.dcm` |
 
+!!! note "Asynchronous & Actor Execution"
+    Core `MediaService` operations (`read`, `write`, `exists`, `delete`,
+    `stat`, `list_files`, `copy`, `move`, `read_dicom`, `write_dicom`) are
+    `async`. For Pykka worker threads (such as `pykka.ThreadingActor`) or
+    synchronous scripts, `run_sync()` and synchronous wrappers (`read_sync`,
+    `write_sync`, etc.) prevent event-loop deadlocks.
 
 ## Server
 

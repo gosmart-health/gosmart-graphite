@@ -8,7 +8,8 @@ There are two supported ways to run GRAPHITE:
 | **Local development with `uv`** | Day-to-day development against an existing Neo4j | [Installation](installation.md) |
 
 Either way, finish with [First Steps](first-steps.md) to verify the server,
-generate your first study, and meet the CLI.
+generate your first study, and meet the CLI — then see the
+[Cypher Query Guide](cypher-query-guide.md) to explore the Neo4j graph directly.
 
 ## Prerequisites
 
@@ -40,6 +41,8 @@ The API is then available at [http://localhost:8086](http://localhost:8086)
 with interactive docs at [/docs](http://localhost:8086/docs) (Swagger UI) and
 [/redoc](http://localhost:8086/redoc) (ReDoc).
 
-> [!TIP]
-> Prefer containers? Jump straight to the [Docker quickstart](quickstart-docker.md)
-> which boots both GRAPHITE and Neo4j with one command.
+!!! tip
+    Prefer containers? Jump straight to the [Docker quickstart](quickstart-docker.md)
+    which boots both GRAPHITE and Neo4j with one command, or see
+    [Testing & Ecosystem](testing-ecosystem.md) to replicate the full
+    multi-service GoSmart stack locally.

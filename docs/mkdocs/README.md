@@ -46,15 +46,14 @@ docs/mkdocs/
 ├── README.md               # This file
 └── docs/                   # Markdown source (the "docs_dir")
     ├── index.md            # Introduction
-    ├── getting-started/    # Installation, Docker quickstart, first steps
-    ├── configuration/      # Environment variables, DICOM/FHIR/LLM configs
+    ├── getting-started/    # Installation, Docker quickstart, first steps, Cypher guide, testing ecosystem
+    ├── configuration/      # Environment variables, administration, DICOM/FHIR/LLM configs, conformance statement
     ├── mcp/                # MCP setup, tool catalog, utterance examples
     └── about/              # License, release notes
 ```
 
-Internal engineering documents (`docs/design/`, `docs/design-notes-informal/`,
-and the DICOM conformance statement) are **not** part of this site; they stay
-in-repo for contributors.
+Internal engineering documents (`docs/design/` and `docs/design-notes-informal/`)
+are **not** part of this site; they stay in-repo for contributors.
 
 ## Future: API Reference
 

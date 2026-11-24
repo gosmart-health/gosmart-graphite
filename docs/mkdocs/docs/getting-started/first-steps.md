@@ -46,8 +46,7 @@ uv run gosmart-graphite query "MATCH (p:Patient) RETURN p.patient_id LIMIT 10"
 ```
 
 For query patterns (including FHIR-side queries and the `NOT_` soft-deletion
-semantics), see the **Cypher Query Guide** in the repository
-(`docs/user_facing/cypher_query_guide.md`) and the
+semantics), see the [Cypher Query Guide](cypher-query-guide.md) and the
 [Configuration overview](../configuration/index.md).
 
 ## 4. Talk to a remote DICOM node
@@ -80,9 +79,13 @@ uv run python -m gosmart_graphite.cli.admin create-api-key --email admin@gosmart
     --name "Agent Key" --scopes "mcp:full,graph:read"
 ```
 
-> [!CAUTION]
-> Host-level access (shell, env files, raw Neo4j ports) grants out-of-band
-> administrative power. Restrict it to infrastructure administrators.
+!!! caution "Host-Level Access Control"
+    Host-level access (shell, env files, raw Neo4j ports) grants out-of-band
+    administrative power. Restrict it to infrastructure administrators.
+
+For superuser bootstrapping details and containerized password recovery via
+`GOSMART_GS_FORCE_ADMIN_PASSWORD_RESET`, see
+[Bootstrapping & Administration](../configuration/administration.md).
 
 ## 6. Drive the server with an AI agent
 
@@ -96,3 +99,23 @@ Send the latest study of PT-CLI-001 to PACS REMOTE_PACS at 192.168.1.50 port 104
 ```
 
 See [Utterance Examples](../mcp/utterance-examples.md) for a full catalog.
+
+## 7. CLI Quick Reference
+
+Both `gosmart-graphite` and the shorter alias `gosmart-gs` invoke the same
+Typer CLI:
+
+```bash
+# Start the FastAPI server directly
+uv run gosmart-graphite start --host 0.0.0.0 --port 8086 --reload
+
+# Run standalone MCP server (SSE, StreamableHTTP, or STDIO)
+uv run gosmart-graphite mcp --transport sse --port 8001
+uv run gosmart-graphite mcp --transport streamable-http --port 8001
+uv run gosmart-graphite mcp --transport stdio
+
+# Register or overwrite group-scoped configurations in Neo4j
+uv run gosmart-graphite configure dicom-config --file devop-scripts/dicom_config.template.json
+uv run gosmart-graphite configure fhir-config --file devop-scripts/fhir_config.template.json
+uv run gosmart-graphite configure llm-config --file devop-scripts/llm_config.template.json --assign "GoSmart Health"
+```

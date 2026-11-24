@@ -4,9 +4,9 @@ Once an agent is [connected](index.md), you can operate GRAPHITE in natural
 language. This page catalogues ready-made utterances and shows how the agent
 resolves them to [MCP tools](tools.md).
 
-> [!TIP]
-> Be explicit with identifiers — patient IDs, Study Instance UIDs, AE titles,
-> and config IDs produce far better tool calls than pronouns.
+!!! tip
+    Be explicit with identifiers — patient IDs, Study Instance UIDs, AE titles,
+    and config IDs produce far better tool calls than pronouns.
 
 ## Quick reference
 

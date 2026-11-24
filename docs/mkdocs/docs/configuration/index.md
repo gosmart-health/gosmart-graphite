@@ -47,9 +47,22 @@ flowchart TD
 Per-page details:
 
 - [Environment Variables](environment-variables.md)
+- [Bootstrapping & Administration](administration.md)
 - [DICOM Configurations](dicom-configurations.md)
+- [DICOM Conformance Statement](dicom-conformance-statement.md)
 - [FHIR Configuration](fhir-configuration.md)
 - [LLM Configurations](llm-configurations.md)
+
+### REST API authentication
+
+Protected configuration and system endpoints accept either:
+
+- **API Key** — `X-API-Key: gs_live_...` or `Authorization: Bearer gs_live_...`
+- **JWT Access Token** — `Authorization: Bearer <access_token>` obtained via
+  `POST /api/v1/auth/login` or `/api/v1/auth/oauth/google`
+
+See [Bootstrapping & Administration](administration.md#3-out-of-band-api-key-generation)
+to create API keys from the CLI.
 
 ## Immutability & soft deletion (`NOT_` semantics)
 
@@ -66,3 +79,6 @@ Consequently:
   (`restore` endpoints / `restore_*` MCP tools).
 - Audit metadata (`Action`, `ActedBy`, `ActedAt`, `CreatedAt`) is stamped on
   every mutation.
+
+See the [Cypher Query Guide](../getting-started/cypher-query-guide.md) for
+querying conventions and `NOT_` relationship behavior in Neo4j.
