@@ -18,22 +18,22 @@ at:
 
 - **Online Documentation:** [https://gosmart.health/docs/graphite](https://gosmart.health/docs/graphite)
 
-### Read the Documentation Locally (MkDocs)
+### Read the Documentation Locally (Zensical)
 
 You can also browse the complete documentation site directly from this
-repository using MkDocs:
+repository using [Zensical](https://zensical.org/):
 
 ```bash
 uv sync --group docs
-cd docs/mkdocs
-uv run --group docs mkdocs serve        # live preview at http://127.0.0.1:8000 (or run ./preview.sh)
+cd docs/zensical
+uv run --group docs zensical serve        # live preview at http://127.0.0.1:8000 (or run ./preview.sh)
 ```
 
-To produce a static production build into `docs/mkdocs/site/`:
+To produce a static production build into `docs/zensical/site/`:
 
 ```bash
-cd docs/mkdocs
-uv run --group docs mkdocs build --strict --clean
+cd docs/zensical
+uv run --group docs zensical build --strict --clean
 ```
 
 ---
@@ -87,7 +87,7 @@ Once running, interactive API docs are available at
 For full setup instructions, environment variables, administration, and MCP
 client configuration, see
 [https://gosmart.health/docs/graphite](https://gosmart.health/docs/graphite)
-(or run `mkdocs serve` locally as shown above).
+(or run `zensical serve` locally as shown above).
 
 ---
 
@@ -106,7 +106,7 @@ uv run ruff format --check .
 
 ### In-Repo Engineering & Ops Resources
 
-- [MkDocs Documentation Guide](./docs/mkdocs/README.md)
+- [Zensical Documentation Guide](./docs/zensical/README.md)
 - [Design Controls & Regulatory Specifications](./docs/design/README.md)
 - [DevOps Scripts Guide](./devop-scripts/README.md)
 - [Local Neo4j Docker Guide](./neo4j-local-docker/README.md)
